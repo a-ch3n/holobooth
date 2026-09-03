@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>HoloBooth</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="css/kiosk.css">
+</head>
+<body>
+
+<div id="app">
+
+  <!-- ============================================ ATTRACT -->
+  <section class="screen" data-screen="attract">
+    <div class="attract-bg"></div>
+    <div class="attract-inner">
+      <div class="logo">HOLO<span>BOOTH</span></div>
+      <h1 id="attract-headline">PICK YOUR CARD. STRIKE A POSE.</h1>
+      <p class="sub" id="attract-sub">Collect all 23 frames this season</p>
+
+      <div class="drop-strip" id="drop-strip" hidden>
+        <span class="drop-dot"></span>
+        <span id="drop-text">Limited drop live now</span>
+      </div>
+
+      <button class="btn btn-xl" data-go="pick">START — TAP HERE</button>
+
+      <div class="recent" id="recent-pulls"></div>
+    </div>
+    <div class="corner-tap" id="admin-tap" title="operator"></div>
+  </section>
+
+  <!-- ============================================ PICK FRAME -->
+  <section class="screen" data-screen="pick" hidden>
+    <header class="bar">
+      <button class="btn btn-ghost" data-go="attract">← Back</button>
+      <h2>Choose your Pal</h2>
+      <div class="season" id="season-label"></div>
+    </header>
+    <nav class="tabs" id="pack-tabs"></nav>
+    <div class="frame-grid" id="frame-grid"></div>
+    <footer class="bar bar-bottom">
+      <div class="picked" id="picked-label">Nothing selected</div>
+      <button class="btn btn-lg" id="to-product" disabled>Continue →</button>
+    </footer>
+  </section>
+
+  <!-- ============================================ PERSONALIZE -->
+  <section class="screen" data-screen="personalize" hidden>
+    <header class="bar">
+      <button class="btn btn-ghost" data-go="pick">← Frames</button>
+      <h2>Make it theirs</h2>
+      <div></div>
+    </header>
+
+    <div class="pz">
+      <div class="pz-preview">
+        <canvas id="pz-canvas" width="500" height="700"></canvas>
+      </div>
+
+      <div class="pz-form">
+        <label class="fld">
+          <span>Name on the card</span>
+          <output id="fld-name" class="fld-box" data-empty="Tap to type">&nbsp;</output>
+        </label>
+
+        <div class="kb" id="kb"></div>
+
+        <label class="fld">
+          <span>Age</span>
+          <output id="fld-age" class="fld-box fld-age" data-empty="—">&nbsp;</output>
+        </label>
+        <div class="pad" id="pad"></div>
+
+        <div class="fld">
+          <span>Pick a buddy</span>
+          <div class="buddies" id="buddies"></div>
+        </div>
+      </div>
+    </div>
+
+    <footer class="bar bar-bottom">
+      <div class="picked" id="pz-summary">Type a name to start</div>
+      <button class="btn btn-lg" id="pz-done" disabled>Looks good →</button>
+    </footer>
+  </section>
+
+  <!-- ============================================ PRODUCT -->
+  <section class="screen" data-screen="product" hidden>
+    <header class="bar">
+      <button class="btn btn-ghost" data-go="pick">← Frames</button>
+      <h2>What do you want?</h2>
+      <div></div>
+    </header>
+    <div class="products" id="products"></div>
+  </section>
+
+  <!-- ============================================ PAY -->
+  <section class="screen" data-screen="pay" hidden>
+    <div class="center">
+      <div class="pay-card">
+        <div class="pay-amount" id="pay-amount">$0.00</div>
+        <div class="pay-product" id="pay-product"></div>
+        <div class="reader" id="reader-visual">
+          <div class="reader-glow"></div>
+          <div class="reader-icon">▭</div>
+        </div>
+        <div class="pay-status" id="pay-status">Getting the reader ready…</div>
+        <img class="qr" id="pay-qr" hidden alt="Scan to pay">
+        <button class="btn btn-ghost" id="pay-cancel">Cancel</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================ CAPTURE -->
+  <section class="screen screen-dark" data-screen="capture" hidden>
+    <div class="stage">
+      <video id="preview" autoplay muted playsinline></video>
+      <div class="frame-overlay" id="frame-overlay"></div>
+      <div class="countdown" id="countdown"></div>
+      <div class="shot-pips" id="shot-pips"></div>
+      <div class="cam-status" id="cam-status"></div>
+    </div>
+    <div class="flash" id="flash"></div>
+  </section>
+
+  <!-- ============================================ DECORATE -->
+  <section class="screen" data-screen="decorate" hidden>
+    <header class="bar">
+      <h2>Make your card</h2>
+      <div class="dec-hint" id="dec-hint">Drag stickers to move · pinch to size · twist to turn</div>
+    </header>
+
+    <div class="dec">
+      <div class="dec-stage">
+        <canvas id="dec-canvas" width="500" height="700"></canvas>
+      </div>
+
+      <div class="dec-panel">
+        <nav class="tabs tabs-sm" id="dec-tabs">
+          <button class="tab on" data-dtab="photo">Photo</button>
+          <button class="tab" data-dtab="stickers">Stickers</button>
+          <button class="tab" data-dtab="frame">Frame</button>
+          <button class="tab" data-dtab="name">Name</button>
+        </nav>
+
+        <div class="dec-pane" data-dpane="photo">
+          <p class="pane-help">Tap the shot you want on the card.</p>
+          <div class="shot-grid" id="shot-grid"></div>
+        </div>
+
+        <div class="dec-pane" data-dpane="stickers" hidden>
+          <p class="pane-help">Tap to add. Tap a sticker below to take it off.</p>
+          <div class="placed-tray" id="placed-tray"></div>
+          <div class="sticker-group">Buddies</div>
+          <div class="sticker-grid" id="sticker-buddies"></div>
+          <div class="sticker-group">Sparkles</div>
+          <div class="sticker-grid" id="sticker-decos"></div>
+        </div>
+
+        <div class="dec-pane" data-dpane="frame" hidden>
+          <p class="pane-help">Change the style, or take a chance on a mystery one.</p>
+          <div class="swatches" id="frame-swatches"></div>
+        </div>
+
+        <div class="dec-pane" data-dpane="name" hidden>
+          <p class="pane-help">Name your card. Leave it blank to keep the style's own name.</p>
+          <output id="dec-name" class="fld-box" data-empty="Tap to type">&nbsp;</output>
+          <div class="kb" id="dec-kb"></div>
+        </div>
+      </div>
+    </div>
+
+    <footer class="bar bar-bottom">
+      <button class="btn btn-ghost" id="dec-clear">Clear stickers</button>
+      <button class="btn btn-lg" id="dec-done">Done →</button>
+    </footer>
+  </section>
+
+  <!-- ============================================ FRAME REVEAL -->
+  <section class="screen screen-dark" data-screen="framereveal" hidden>
+    <div class="fr-wrap">
+      <div class="fr-title">OPENING YOUR FRAME</div>
+      <div class="fr-window">
+        <div class="fr-strip" id="fr-strip"></div>
+        <div class="fr-spot"></div>
+      </div>
+      <div class="fr-name" id="fr-name">&nbsp;</div>
+    </div>
+  </section>
+
+  <!-- ============================================ REVEAL -->
+  <section class="screen" data-screen="reveal" hidden>
+    <div class="reveal-wrap">
+      <div class="reveal-left">
+        <div class="rarity-burst" id="rarity-burst"></div>
+        <canvas id="card-canvas" width="750" height="1050"></canvas>
+      </div>
+      <div class="reveal-right">
+        <div class="pull-rarity" id="pull-rarity"></div>
+        <h2 id="pull-name"></h2>
+        <div class="serial" id="pull-serial"></div>
+        <p class="mint-note" id="mint-note"></p>
+
+        <div class="dl" id="dl-block" hidden>
+          <img id="dl-qr" alt="Download QR">
+          <div>
+            <strong>Scan to keep it</strong>
+            <span id="dl-url"></span>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button class="btn btn-lg" id="btn-print">Print it</button>
+          <button class="btn btn-ghost" id="btn-retake" hidden>Retake</button>
+          <button class="btn btn-ghost" id="btn-done">Done</button>
+        </div>
+        <div class="print-status" id="print-status"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================ THANKS -->
+  <section class="screen" data-screen="thanks" hidden>
+    <div class="center">
+      <div class="thanks">
+        <div class="big">✦</div>
+        <h1>Take your card from the tray</h1>
+        <p id="thanks-sub"></p>
+        <button class="btn btn-lg" data-go="attract">Done</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================ OPERATOR -->
+  <section class="screen" data-screen="admin" hidden>
+    <header class="bar">
+      <h2>Operator</h2>
+      <button class="btn btn-ghost" data-go="attract">Close</button>
+    </header>
+    <div class="admin-grid" id="admin-body"></div>
+  </section>
+
+  <div class="toast" id="toast" hidden></div>
+</div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

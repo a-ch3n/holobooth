@@ -1,0 +1,50 @@
+{
+  "name": "holobooth",
+  "productName": "HoloBooth",
+  "version": "0.1.0",
+  "description": "Trading-card photobooth kiosk. HDMI camera capture, collectible card frames, card-present payments, instant print.",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "HOLOBOOTH_DEV=1 electron .",
+    "server": "node server/index.js",
+    "render": "node tools/render-all.mjs",
+    "gallery": "node tools/build-gallery.mjs",
+    "dist": "electron-builder",
+    "web": "node tools/serve.mjs",
+    "doctor": "node tools/doctor.mjs",
+    "test": "node tools/smoke-test.mjs",
+    "pack:new": "node tools/new-pack.mjs",
+    "pack:check": "node tools/validate-pack.mjs",
+    "pack:render": "node tools/render-pack.mjs",
+    "board": "node tools/make-prop-board.mjs"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "gifenc": "^1.0.3",
+    "qrcode": "^1.5.3",
+    "stripe": "^14.25.0"
+  },
+  "devDependencies": {
+    "@napi-rs/canvas": "^0.1.100",
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.holobooth.kiosk",
+    "files": [
+      "electron/**",
+      "src/**",
+      "server/**",
+      "config/**",
+      "packs/**"
+    ],
+    "mac": {
+      "category": "public.app-category.entertainment"
+    },
+    "win": {
+      "target": "nsis"
+    }
+  }
+}

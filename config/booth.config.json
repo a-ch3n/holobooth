@@ -1,0 +1,253 @@
+{
+  "booth": {
+    "id": "BOOTH-001",
+    "displayName": "HoloBooth",
+    "venue": "Mobile / Event",
+    "locale": "en-US",
+    "currency": "usd",
+    "kiosk": true,
+    "idleAttractAfterMs": 45000,
+    "sessionTimeoutMs": 240000
+  },
+  "camera": {
+    "//": "HDMI capture cards present themselves as UVC webcams. Put distinctive substrings of your device label here, highest priority first. Run `Settings > Camera` in-app to see the live device list.",
+    "preferredLabels": [
+      "Cam Link",
+      "Elgato",
+      "HDMI",
+      "USB Video",
+      "UVC",
+      "Capture"
+    ],
+    "excludeLabels": [
+      "FaceTime",
+      "Integrated",
+      "Built-in"
+    ],
+    "constraints": {
+      "width": 1920,
+      "height": 1080,
+      "frameRate": 60
+    },
+    "mirrorPreview": true,
+    "cropToPortrait": true,
+    "warmupMs": 1200
+  },
+  "capture": {
+    "countdownSeconds": 5,
+    "shotsPerSession": 4,
+    "gapBetweenShotsMs": 1800,
+    "burst": {
+      "enabled": true,
+      "frames": 12,
+      "intervalMs": 90
+    },
+    "flashScreen": true,
+    "reviewSeconds": 25,
+    "allowRetake": true,
+    "maxRetakes": 1,
+    "chooseBestShot": true
+  },
+  "pricing": {
+    "//": "Amounts are in the currency's minor unit (cents).",
+    "products": [
+      {
+        "id": "single_card",
+        "name": "1 Pal Card",
+        "blurb": "One printed creature card + digital copy",
+        "amount": 700,
+        "prints": {
+          "card": 1,
+          "strip": 0
+        },
+        "digital": true,
+        "gif": true,
+        "rarityBoost": 1.0
+      },
+      {
+        "id": "card_plus_strip",
+        "name": "Pal + Photo Strip",
+        "blurb": "Creature card, classic 2x6 strip, GIF + downloads",
+        "amount": 1200,
+        "prints": {
+          "card": 1,
+          "strip": 1
+        },
+        "digital": true,
+        "gif": true,
+        "rarityBoost": 1.15,
+        "featured": true
+      },
+      {
+        "id": "booster_pack",
+        "name": "Booster Pack \u2014 3 Pals",
+        "blurb": "Three cards, guaranteed at least one Rare or better",
+        "amount": 2000,
+        "prints": {
+          "card": 3,
+          "strip": 1
+        },
+        "digital": true,
+        "gif": true,
+        "rarityBoost": 1.6,
+        "guaranteeAtLeast": "rare"
+      },
+      {
+        "id": "digital_only",
+        "name": "Digital Only",
+        "blurb": "No print \u2014 instant phone download + GIF",
+        "amount": 400,
+        "prints": {
+          "card": 0,
+          "strip": 0
+        },
+        "digital": true,
+        "gif": true,
+        "rarityBoost": 1.0
+      }
+    ],
+    "tipEnabled": false,
+    "taxRateBps": 0
+  },
+  "payments": {
+    "//": "provider: 'stripe-terminal' | 'stripe-qr' | 'mock'. Use 'mock' for development with no hardware.",
+    "provider": "mock",
+    "serverUrl": "http://127.0.0.1:4242",
+    "stripe": {
+      "publishableKey": "pk_test_REPLACE_ME",
+      "locationId": "tml_REPLACE_ME",
+      "readerLabel": null,
+      "simulated": true
+    },
+    "qr": {
+      "checkoutBaseUrl": "https://pay.yourbooth.com/c",
+      "pollIntervalMs": 1500,
+      "timeoutMs": 180000
+    },
+    "receipt": {
+      "email": false,
+      "sms": false,
+      "print": false
+    }
+  },
+  "printing": {
+    "enabled": true,
+    "//": "Leave printerName null to use the OS default. dpi should match your dye-sub (DNP/Citizen = 300, Canon SELPHY = 300).",
+    "cardPrinterName": null,
+    "stripPrinterName": null,
+    "dpi": 300,
+    "card": {
+      "widthIn": 2.5,
+      "heightIn": 3.5,
+      "bleedIn": 0.06
+    },
+    "strip": {
+      "widthIn": 2.0,
+      "heightIn": 6.0,
+      "bleedIn": 0.06
+    },
+    "//sheet": "Most dye-subs print 4x6. 'sheet' gangs card prints onto a 4x6 so you cut/perforate after.",
+    "sheet": {
+      "enabled": true,
+      "widthIn": 6.0,
+      "heightIn": 4.0,
+      "cutMarks": true
+    },
+    "silent": true,
+    "copiesMax": 4,
+    "lpOptions": [],
+    "dryRun": false,
+    "//lpOptions": "Extra CUPS -o flags for your driver, e.g. [\"StpQuality=Photo\", \"ColorModel=RGB\"]. Run `lpoptions -p NAME -l` to see what your printer accepts.",
+    "board": {
+      "//": "Oversized photo-prop board. Not printed by the booth \u2014 exported as a PDF you send to a print shop or run on a wide-format printer.",
+      "enabled": true,
+      "widthIn": 24,
+      "heightIn": 33.6,
+      "dpi": 150,
+      "substrate": "5mm foam board, trims from a standard 24x36 sheet"
+    }
+  },
+  "delivery": {
+    "uploadEnabled": true,
+    "uploadUrl": "http://127.0.0.1:4242/media",
+    "downloadBaseUrl": "http://127.0.0.1:4242/d",
+    "qrOnScreenSeconds": 40,
+    "retentionDays": 30,
+    "gif": {
+      "width": 480,
+      "fps": 12,
+      "loop": 0,
+      "boomerang": true
+    }
+  },
+  "collection": {
+    "enabled": true,
+    "seasonId": "PPB-2026",
+    "seasonName": "Pocket Pals \u2014 Base Set",
+    "dexUrl": "http://127.0.0.1:4242/dex",
+    "identifyBy": "phone",
+    "printCollectorIdOnCard": true
+  },
+  "attract": {
+    "headline": "CHOOSE YOUR PAL. STRIKE A POSE.",
+    "sub": "Catch all {{count}} cards in the Base Set",
+    "showRecentPulls": true,
+    "showDropTimer": true
+  },
+  "admin": {
+    "//": "Tap the bottom-left corner this many times to open the operator panel.",
+    "secretTapCount": 5,
+    "pin": "1234"
+  },
+  "pi": {
+    "//": "Raspberry Pi build only. The desktop Electron build ignores this block.",
+    "port": 4180,
+    "dataDir": "/var/lib/holobooth",
+    "gpio": {
+      "enabled": true,
+      "//": "BCM pin numbers. Wire each button between the pin and GND \u2014 internal pull-ups are used, so no resistors.",
+      "start": 17,
+      "shutter": 27,
+      "cancel": 22,
+      "coin": 23,
+      "bounceSeconds": 0.08
+    },
+    "display": {
+      "rotate": 0,
+      "hideCursor": true
+    }
+  },
+  "assetPacks": {
+    "//": "Cards built from artwork supplied under licence. Each entry is a folder under packs/. Run `node tools/validate-pack.mjs packs/<id>` before an event.",
+    "enabled": true,
+    "dir": "packs",
+    "load": [
+      "example-studio"
+    ],
+    "//approvalMode": "true stamps every card SAMPLE - FOR APPROVAL. Use it for the licensor review round, and make sure it is false before you sell anything.",
+    "approvalMode": false
+  },
+  "cards": {
+    "//": "Card stock for the drawn creature frames. 'gold' = metallic foil (default), 'classic' = flat saturated yellow board, 'silver' = MAX cards, 'type' = the card's own energy colour.",
+    "stock": "gold"
+  },
+  "stickers": {
+    "//": "Decoration layer on the photo. maxPerCard keeps a card readable and the print master fast.",
+    "enabled": true,
+    "maxPerCard": 12,
+    "defaultScale": 0.26
+  },
+  "picker": {
+    "//": "Which style groups appear in the picker, and in what order. Remove or reorder freely; anything not listed still exists but is hidden. Group ids: strips, party, cutie, promo, basics, evolved, max, fullart, shiny, secret, and assetpack:<pack-id>.",
+    "show": [
+      "strips",
+      "promo",
+      "basics",
+      "evolved",
+      "max",
+      "fullart",
+      "shiny",
+      "secret"
+    ]
+  }
+}

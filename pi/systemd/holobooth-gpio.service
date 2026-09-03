@@ -1,0 +1,19 @@
+[Unit]
+Description=HoloBooth GPIO buttons
+After=holobooth-kiosk.service
+Wants=holobooth-kiosk.service
+
+[Service]
+Type=simple
+User=%i
+SupplementaryGroups=gpio
+WorkingDirectory=/opt/holobooth
+Environment=HOLOBOOTH_API=http://127.0.0.1:4180/api/gpio
+ExecStart=/usr/bin/python3 /opt/holobooth/pi/gpio-button.py
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
