@@ -472,3 +472,4 @@ Honest list of what needs real work before an event:
 - **Pi coin acceptor.** The GPIO watcher reports `coin` pulses and the bridge
   delivers them, but nothing counts credits against a price yet.
 # holobooth
+# holobooth
