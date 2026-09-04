@@ -81,7 +81,7 @@ const packSections = PACKS.slice().sort((a, b) => a.order - b.order).map(p => {
         </div>
         <figcaption>
           <b><img class="pip" src="${pips[f.energyType]}" alt="${e.name} type" width="16" height="16">${esc(f.name)}</b>
-          <span class="mono dim">${f.collectorNumber}${f.strip ? ' · 2×6 strip' : (f.party || f.cutie) ? ' · personalised' : ` · ${f.hp} HP`}${f.evolvesFrom ? ` · from ${esc(f.evolvesFrom)}` : ''}</span>
+          <span class="mono dim">${f.collectorNumber}${f.strip ? ' · 2×6 strip' : (f.party || f.cutie) ? ' · personalised' : ` · ${f.hp} HP`}</span>
           ${lim ? `<span class="tag ${live ? 'tag-live' : 'tag-gone'}">${live ? `${lim.mintLimit} only · ends ${lim.end}` : `returns ${lim.start}`}</span>` : ''}
         </figcaption>
       </figure>`;

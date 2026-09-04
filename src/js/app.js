@@ -11,7 +11,8 @@
  *     every failure path still hands them their digital copy.
  */
 
-import { pickerGroups, allFrames, frameById, frameAspect, frameBox, RARITIES, SET, energy } from './frames/packs.mjs';
+import { pickerGroups, allFrames, frameById, frameAspect, frameBox, RARITIES, RARITY_ORDER, SET, energy } from './frames/packs.mjs';
+import { rarityOdds } from './frames/rarity.mjs';
 import { COMPANIONS, companionById, companionCanvas } from './frames/companions.mjs';
 import { loadPack, packFrames } from './frames/assetpack.mjs';
 import { stickerCatalog, stickerCanvas, newPlacement, stickerAt, DECOS } from './frames/stickers.mjs';
@@ -58,6 +59,16 @@ const $ = sel => document.querySelector(sel);
 const $$ = sel => [...document.querySelectorAll(sel)];
 const money = cents => `$${(cents / 100).toFixed(2)}`;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+const formatPct = pct => (pct > 0 && pct < 1 ? pct.toFixed(1) : Math.round(pct)) + '%';
+const isToughRarity = id => RARITY_ORDER.indexOf(id) >= RARITY_ORDER.indexOf('rare');
+
+/** Odds markup shared by the product screen and the reveal's tap-to-open cover. */
+function oddsBreakdownHtml(odds) {
+  return odds.map(o => `
+    <span class="odds-pill${isToughRarity(o.rarity) ? ' tough' : ''}" style="--c:${o.rarityColor}">
+      <i></i>${o.rarityLabel} <b>${formatPct(o.pct)}</b>
+    </span>`).join('');
+}
 
 /* ---------------------------------------------------------- navigation */
 
@@ -103,7 +114,10 @@ async function boot() {
   window.booth.input?.subscribe(ev => {
     resetIdle();
     if (ev.action === 'start' && S.screen === 'attract') go('pick');
-    else if (ev.action === 'shutter' && S.screen === 'reveal') doPrint();
+    else if (ev.action === 'shutter' && S.screen === 'reveal') {
+      const cover = $('#pack-cover');
+      if (!cover.hidden) cover.click(); else doPrint();
+    }
     else if (ev.action === 'cancel') abandon();
   });
   document.addEventListener('pointerdown', resetIdle);
@@ -338,7 +352,10 @@ function renderGrid(packId) {
       companion: (f.template === 'party' || f.template === 'kawaii') ? companionThumb(f.energyType) : null,
       card: mintCard({ frame: f, frameId: f.id, seasonId: S.cfg.collection.seasonId, mint: 1, forcedRarity: f.rarityFloor || 'rare' }),
       stock: S.cfg.cards?.stock || null,
-      personalization: ['party', 'kawaii', 'assetPack'].includes(f.template) ? { name: 'Their Name', age: 7 } : null,
+      // Every template now prints whatever name it's given (falling back to
+      // "Friend" only when nothing was typed), so the browsing preview shows
+      // an obvious placeholder rather than that generic fallback.
+      personalization: { name: 'Their Name', age: 7 },
       foil: true,
     });
 
@@ -528,7 +545,14 @@ function personalizationPayload() {
 
 ON_ENTER.product = () => {
   const frame = lookupFrame(S.frameId);
-  $('#products').innerHTML = S.cfg.pricing.products.map(p => `
+  $('#products').innerHTML = S.cfg.pricing.products.map(p => {
+    const odds = rarityOdds({
+      boost: p.rarityBoost || 1,
+      floor: frame?.rarityFloor || null,
+      guarantee: p.guaranteeAtLeast || null,
+    });
+    const toughPct = odds.filter(o => isToughRarity(o.rarity)).reduce((a, o) => a + o.pct, 0);
+    return `
     <div class="product ${p.featured ? 'featured' : ''}" data-product="${p.id}">
       ${p.featured ? '<span class="tag">MOST POPULAR</span>' : ''}
       <h3>${p.name}</h3>
@@ -536,7 +560,10 @@ ON_ENTER.product = () => {
       <div class="price">${money(p.amount)}</div>
       ${p.guaranteeAtLeast ? `<div class="odds">Guaranteed ${RARITIES[p.guaranteeAtLeast].label} or better</div>`
         : p.rarityBoost > 1 ? `<div class="odds">${Math.round((p.rarityBoost - 1) * 100)}% better pull odds</div>` : ''}
-    </div>`).join('');
+      <div class="odds-breakdown">${oddsBreakdownHtml(odds)}</div>
+      <div class="odds-tough">Rare or better: ${formatPct(toughPct)}</div>
+    </div>`;
+  }).join('');
 
   $$('.product').forEach(el => el.addEventListener('click', () => {
     S.product = S.cfg.pricing.products.find(p => p.id === el.dataset.product);
@@ -681,11 +708,16 @@ ON_ENTER.decorate = () => {
   if (!decBuilt) buildDecorateUI();
   buildShotGrid();
   buildSwatches();
-  S.previewCard = mintCard({
-    frame: lookupFrame(S.frameId), frameId: S.frameId,
-    seasonId: S.cfg.collection.seasonId, mint: 1,
-    product: S.product,
-  });
+  // Only roll a fresh pull when this is actually a new card (first visit, or
+  // the customer picked a different frame). Re-entering decorate — say, after
+  // a retake — must not silently reroll a rarity the customer already saw.
+  if (!S.previewCard || S.previewCard.frameId !== S.frameId) {
+    S.previewCard = mintCard({
+      frame: lookupFrame(S.frameId), frameId: S.frameId,
+      seasonId: S.cfg.collection.seasonId, mint: 1,
+      product: S.product,
+    });
+  }
   drawDecorate();
 };
 
@@ -1009,7 +1041,9 @@ ON_ENTER.framereveal = async () => {
       frame: f, frameId: f.id, W: canvases[i].width, H: canvases[i].height,
       ...photoArgs(f),
       companion: ['party', 'kawaii'].includes(f.template) ? companionThumb(f.energyType) : null,
-      personalization: ['party', 'kawaii', 'assetPack'].includes(f.template) ? personalizationPayload() : null,
+      // Whatever name they've already typed (on the Name tab) should follow
+      // them through the mystery pull too, not just party/kawaii cards.
+      personalization: personalizationPayload(),
       card: mintCard({ frame: f, frameId: f.id, mint: 1, forcedRarity: f.rarityFloor || 'rare' }),
       stock: S.cfg.cards?.stock || null,
     });
@@ -1056,6 +1090,9 @@ async function buildOutputs() {
     frame: frameDef, frameId: S.frameId, seasonId, mint,
     boothId: S.cfg.booth.id, boothName: S.cfg.booth.displayName,
     product: S.product,
+    // The rarity was already rolled (and shown) back in decorate() — lock the
+    // final print/print-record to that same result rather than rolling again.
+    forcedRarity: S.previewCard?.rarity || null,
   });
 
   const dpi = S.cfg.printing.dpi || 300;
@@ -1147,6 +1184,30 @@ ON_ENTER.reveal = () => {
   $('#btn-print').disabled = !(S.product.prints.card || S.product.prints.strip);
   $('#print-status').textContent = '';
   $('#dl-block').hidden = !S.downloadUrl;
+
+  // The odds were true before the pull happened, so show them again right
+  // here — then make finding out what it actually was its own moment.
+  const odds = rarityOdds({
+    boost: S.product.rarityBoost || 1,
+    floor: pfr.rarityFloor || null,
+    guarantee: S.product.guaranteeAtLeast || null,
+  });
+  $('#odds-recap').innerHTML = oddsBreakdownHtml(odds);
+
+  $('#reveal-result').hidden = true;
+  const cover = $('#pack-cover');
+  cover.hidden = false;
+  cover.classList.remove('opening');
+  cover.disabled = false;
+  cover.onclick = () => {
+    if (cover.classList.contains('opening')) return;
+    cover.classList.add('opening');
+    cover.disabled = true;
+    setTimeout(() => {
+      cover.hidden = true;
+      $('#reveal-result').hidden = false;
+    }, 460);
+  };
 };
 
 async function retake() {

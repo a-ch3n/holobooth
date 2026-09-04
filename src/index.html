@@ -165,7 +165,7 @@
         </div>
 
         <div class="dec-pane" data-dpane="name" hidden>
-          <p class="pane-help">Name your card. Leave it blank to keep the style's own name.</p>
+          <p class="pane-help">Name your card. Leave it blank and we'll print "Friend" instead.</p>
           <output id="dec-name" class="fld-box" data-empty="Tap to type">&nbsp;</output>
           <div class="kb" id="dec-kb"></div>
         </div>
@@ -196,27 +196,37 @@
       <div class="reveal-left">
         <div class="rarity-burst" id="rarity-burst"></div>
         <canvas id="card-canvas" width="750" height="1050"></canvas>
+        <button class="pack-cover" id="pack-cover">
+          <span class="pack-cover-glow"></span>
+          <span class="pack-cover-mark">✦</span>
+          <span class="pack-cover-cta">TAP TO OPEN</span>
+        </button>
       </div>
       <div class="reveal-right">
-        <div class="pull-rarity" id="pull-rarity"></div>
-        <h2 id="pull-name"></h2>
-        <div class="serial" id="pull-serial"></div>
-        <p class="mint-note" id="mint-note"></p>
+        <p class="pane-help">The odds for this pull:</p>
+        <div class="odds-breakdown" id="odds-recap"></div>
 
-        <div class="dl" id="dl-block" hidden>
-          <img id="dl-qr" alt="Download QR">
-          <div>
-            <strong>Scan to keep it</strong>
-            <span id="dl-url"></span>
+        <div id="reveal-result" hidden>
+          <div class="pull-rarity" id="pull-rarity"></div>
+          <h2 id="pull-name"></h2>
+          <div class="serial" id="pull-serial"></div>
+          <p class="mint-note" id="mint-note"></p>
+
+          <div class="dl" id="dl-block" hidden>
+            <img id="dl-qr" alt="Download QR">
+            <div>
+              <strong>Scan to keep it</strong>
+              <span id="dl-url"></span>
+            </div>
           </div>
-        </div>
 
-        <div class="actions">
-          <button class="btn btn-lg" id="btn-print">Print it</button>
-          <button class="btn btn-ghost" id="btn-retake" hidden>Retake</button>
-          <button class="btn btn-ghost" id="btn-done">Done</button>
+          <div class="actions">
+            <button class="btn btn-lg" id="btn-print">Print it</button>
+            <button class="btn btn-ghost" id="btn-retake" hidden>Retake</button>
+            <button class="btn btn-ghost" id="btn-done">Done</button>
+          </div>
+          <div class="print-status" id="print-status"></div>
         </div>
-        <div class="print-status" id="print-status"></div>
       </div>
     </div>
   </section>

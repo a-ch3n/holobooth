@@ -167,6 +167,21 @@ body.debug { cursor: auto; }
 .product .price { font-size: 40px; font-weight: 900; margin-top: 14px; letter-spacing: -.02em; }
 .product .odds { margin-top: 12px; font-size: 13px; color: var(--accent); font-weight: 700; }
 
+/* Per-rarity odds, shared by the product screen and the reveal's odds recap.
+   Rare-or-better is called out in its own line so the difficulty is legible
+   at a glance, not just buried in five equal-weight numbers. */
+.odds-breakdown { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.odds-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--bg-2); border: 1px solid var(--line); border-radius: 999px;
+  padding: 6px 12px; font-size: 13px; color: var(--ink-dim);
+}
+.odds-pill i { width: 9px; height: 9px; border-radius: 50%; background: var(--c, var(--ink-dim)); flex: 0 0 auto; }
+.odds-pill b { color: var(--ink); font-weight: 800; }
+.odds-pill.tough { border-color: var(--accent-2); background: rgba(124,92,255,.12); }
+.odds-pill.tough b { color: #d9d0ff; }
+.odds-tough { margin-top: 10px; font-size: 13px; font-weight: 800; color: #ffb3b3; letter-spacing: .02em; }
+
 /* ----------------------------------------------------------------- pay */
 .pay-card {
   background: var(--panel); border: 1px solid var(--line); border-radius: 28px;
@@ -238,6 +253,30 @@ body.debug { cursor: auto; }
   text-transform: uppercase; padding: 8px 16px; border-radius: 999px;
   border: 2px solid currentColor; margin-bottom: 14px;
 }
+
+/* The pack-opening moment: the finished card sits underneath, fully rolled,
+   but stays covered until the customer taps — the rarity is decided already,
+   the surprise isn't. */
+.pack-cover {
+  position: absolute; inset: 0; z-index: 2;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px;
+  border: 0; border-radius: 18px; cursor: pointer; color: #fff; padding: 0;
+  background: radial-gradient(circle at 50% 38%, rgba(124,92,255,.4), rgba(9,10,15,.94) 72%);
+  animation: packPulse 2.2s ease-in-out infinite;
+}
+.pack-cover-glow {
+  position: absolute; inset: -25%; border-radius: 50%; pointer-events: none;
+  background: radial-gradient(circle, rgba(255,215,110,.32), transparent 62%);
+  animation: breathe 1.8s ease-in-out infinite;
+}
+.pack-cover-mark { font-size: 60px; filter: drop-shadow(0 6px 20px rgba(255,215,110,.4)); }
+.pack-cover-cta {
+  font: 800 16px "Nunito", sans-serif; letter-spacing: .14em;
+  padding: 16px 30px; border-radius: 999px; background: var(--accent); color: #12141a;
+}
+.pack-cover.opening { animation: packOpen .46s ease forwards; pointer-events: none; }
+@keyframes packOpen { to { opacity: 0; transform: scale(1.35); } }
+@keyframes packPulse { 50% { transform: scale(1.015); } }
 .reveal-right h2 { font-size: 46px; margin: 0 0 6px; font-weight: 900; letter-spacing: -.02em; }
 .serial { font: 700 18px ui-monospace, "SF Mono", Menlo, monospace; color: var(--ink-dim); }
 .mint-note { color: var(--accent); font-weight: 700; }

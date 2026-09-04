@@ -238,15 +238,13 @@
     "defaultScale": 0.26
   },
   "picker": {
-    "//": "Which style groups appear in the picker, and in what order. Remove or reorder freely; anything not listed still exists but is hidden. Group ids: strips, party, cutie, promo, basics, evolved, max, fullart, shiny, secret, and assetpack:<pack-id>.",
+    "//": "Which style groups appear in the picker, and in what order. Remove or reorder freely; anything not listed still exists but is hidden. Group ids: strips, party, cutie, promo, basics, max, fullart, secret, and assetpack:<pack-id>.",
     "show": [
       "strips",
       "promo",
       "basics",
-      "evolved",
       "max",
       "fullart",
-      "shiny",
       "secret"
     ]
   }

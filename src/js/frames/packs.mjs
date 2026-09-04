@@ -31,10 +31,7 @@ export const RARITY_ORDER = ['common', 'uncommon', 'rare', 'ultra', 'secret'];
 
 /* ============================================================= creatures */
 
-/**
- * One entry per creature. `evolvesTo` generates the Stage 1 card automatically,
- * inheriting the type and bumping HP and damage.
- */
+/** One entry per creature. */
 const CREATURES = [
   {
     id: 'emberling', name: 'Emberling', type: 'ember', hp: 70, retreat: 1,
@@ -43,15 +40,6 @@ const CREATURES = [
       { cost: ['ember'], name: 'Warm Smile', dmg: 20, text: 'The photographer says “aww”.' },
       { cost: ['ember', 'plain'], name: 'Flash Blast', dmg: 50, text: 'Discard 1 blink from your bench.' },
     ],
-    evolvesTo: {
-      name: 'Blazepup', hp: 130, retreat: 2,
-      ability: { name: 'Ring Light', text: 'Every Pal in this photo gets +10 HP while Blazepup is in frame.' },
-      attacks: [
-        { cost: ['ember', 'ember'], name: 'Sunflare Pose', dmg: 80, text: 'Your hair looks incredible. It just does.' },
-        { cost: ['ember', 'ember', 'plain'], name: 'Golden Hour', dmg: 130, text: 'This attack cannot be blocked by bad lighting.' },
-      ],
-      flavor: 'It has never taken a bad photo. Not once. It is unbearable about this.',
-    },
   },
   {
     id: 'splashling', name: 'Splashling', type: 'wave', hp: 60, retreat: 1,
@@ -60,14 +48,6 @@ const CREATURES = [
       { cost: ['wave'], name: 'Splash Pose', dmg: 10, text: 'Flip a coin. If heads, look effortlessly cool.' },
       { cost: ['wave', 'wave'], name: 'Tidal Calm', dmg: 40, text: 'Heal 30 from every Pal in frame.' },
     ],
-    evolvesTo: {
-      name: 'Tidepaw', hp: 120, retreat: 2,
-      attacks: [
-        { cost: ['wave', 'plain'], name: 'Undertow', dmg: 60, text: 'The pose behind you is now Soaked.' },
-        { cost: ['wave', 'wave', 'wave'], name: 'Deep Blue', dmg: 120, text: 'Everyone goes quiet for a second. Perfect shot.' },
-      ],
-      flavor: 'Calm on the surface. Absolutely feral about group photos.',
-    },
   },
   {
     id: 'sproutle', name: 'Sproutle', type: 'leaf', hp: 70, retreat: 1,
@@ -76,15 +56,6 @@ const CREATURES = [
       { cost: ['leaf'], name: 'Sprout', dmg: 20, text: 'Become slightly more photogenic.' },
       { cost: ['leaf', 'plain'], name: 'Bloom Burst', dmg: 50, text: 'Put a flower on every Pal in the photo.' },
     ],
-    evolvesTo: {
-      name: 'Bloomkin', hp: 130, retreat: 3,
-      ability: { name: 'Soft Focus', text: 'Prevent all damage done to Bloomkin by unflattering angles.' },
-      attacks: [
-        { cost: ['leaf', 'leaf'], name: 'Petal Drift', dmg: 70, text: 'Fills the frame with petals. Costs nothing. Worth everything.' },
-        { cost: ['leaf', 'leaf', 'plain'], name: 'Full Bloom', dmg: 120, text: 'Heal 50 from yourself. You have earned it.' },
-      ],
-      flavor: 'Slow to open up. Impossible to forget once it does.',
-    },
   },
   {
     id: 'zaplet', name: 'Zaplet', type: 'volt', hp: 60, retreat: 1,
@@ -93,14 +64,6 @@ const CREATURES = [
       { cost: ['volt'], name: 'Static Hair', dmg: 20, text: 'Your hair is now part of the composition.' },
       { cost: ['volt', 'plain'], name: 'Shutter Snap', dmg: 50, text: 'Take the photo one beat early. On purpose.' },
     ],
-    evolvesTo: {
-      name: 'Voltmane', hp: 140, retreat: 2,
-      attacks: [
-        { cost: ['volt', 'volt'], name: 'Overcharge', dmg: 90, text: 'Discard 1 Volt energy. Everyone jumps.' },
-        { cost: ['volt', 'volt', 'volt'], name: 'Megavolt Pose', dmg: 160, text: 'This attack does 20 damage to the shutter button.' },
-      ],
-      flavor: 'The countdown hits one and it is already airborne.',
-    },
   },
   {
     id: 'chillbun', name: 'Chillbun', type: 'frost', hp: 80, retreat: 2,
@@ -118,15 +81,6 @@ const CREATURES = [
       { cost: ['stone'], name: 'Hold Still', dmg: 20, text: 'Pebblit does not move. Pebblit has never moved.' },
       { cost: ['stone', 'plain'], name: 'Rock Solid', dmg: 50, text: 'Reduce all shake damage by 30.' },
     ],
-    evolvesTo: {
-      name: 'Boulderox', hp: 160, retreat: 4,
-      ability: { name: 'Immovable', text: 'Boulderox cannot be moved to the back row of a group photo.' },
-      attacks: [
-        { cost: ['stone', 'stone'], name: 'Landslide', dmg: 80, text: 'Everyone leans. The whole frame tilts.' },
-        { cost: ['stone', 'stone', 'plain'], name: 'Monument', dmg: 130, text: 'This photo will be on a fridge for eleven years.' },
-      ],
-      flavor: 'Centre of every group shot since the day it hatched.',
-    },
   },
   {
     id: 'gustwing', name: 'Gustwing', type: 'gale', hp: 70, retreat: 1,
@@ -186,15 +140,6 @@ const CREATURES = [
       { cost: ['wyrm'], name: 'Tiny Roar', dmg: 30, text: 'Startles exactly one person in the group.' },
       { cost: ['wyrm', 'plain'], name: 'Wingspan', dmg: 60, text: 'Takes up the whole frame. Unapologetic.' },
     ],
-    evolvesTo: {
-      name: 'Wyrmarch', hp: 170, retreat: 3,
-      ability: { name: 'Hoard', text: 'Wyrmarch keeps one copy of every card printed at this booth.' },
-      attacks: [
-        { cost: ['wyrm', 'wyrm'], name: 'Gold Rush', dmg: 100, text: 'Draw one Secret Rare. You will not get it. But you drew it.' },
-        { cost: ['wyrm', 'wyrm', 'plain'], name: 'Apex Pose', dmg: 180, text: 'The strip prints in silence. Everyone knows.' },
-      ],
-      flavor: 'Sleeps on a pile of photo strips. Will not explain how it got them.',
-    },
   },
   {
     id: 'fluffkin', name: 'Fluffkin', type: 'plain', hp: 60, retreat: 1,
@@ -208,13 +153,9 @@ const CREATURES = [
 
 /* -------------------------------------------------------- chase variants */
 
-const MAX_CARDS   = ['blazepup', 'tidepaw', 'voltmane', 'wyrmarch', 'glimmerpuff'];
-const FULL_ART    = ['chillbun', 'duskwisp', 'mindmoth', 'bloomkin'];
-const RAINBOW     = ['blazepup', 'wyrmarch', 'glimmerpuff'];
-const SHINY       = ['emberling', 'sproutle', 'zaplet', 'fluffkin'];
-
-/** Shiny recolours a Pal onto a neighbouring type's palette and stars it. */
-const SHINY_PALETTE = { emberling: 'psy', sproutle: 'frost', zaplet: 'radiant', fluffkin: 'wyrm' };
+const MAX_CARDS   = ['emberling', 'splashling', 'zaplet', 'dracolet', 'glimmerpuff'];
+const FULL_ART    = ['chillbun', 'duskwisp', 'mindmoth', 'sproutle'];
+const RAINBOW     = ['emberling', 'dracolet', 'glimmerpuff'];
 
 /* ---------------------------------------------------------- limited drops */
 
@@ -336,11 +277,10 @@ function push(frame) {
 }
 
 function makeCard({
-  key, name, typeId, stage, evolvesFrom, hp, retreat, attacks, ability, flavor,
+  key, name, typeId, stage, hp, retreat, attacks, ability, flavor,
   variant = 'standard', rarityFloor = null, extra = {},
 }) {
   const e = energy(typeId);
-  const paletteType = variant === 'shiny' ? (SHINY_PALETTE[key] || typeId) : typeId;
   return {
     id: variant === 'standard' ? `pp-${key}` : `pp-${key}-${variant}`,
     name: variant === 'max' ? `${name} MAX` : name,
@@ -348,13 +288,12 @@ function makeCard({
     variant,
     energyType: typeId,
     stage,
-    evolvesFrom: evolvesFrom || null,
     hp: variant === 'max' ? Math.round(hp * 1.9 / 10) * 10 : hp,
     stock: variant === 'max' ? 'silver' : 'gold',
     template: variant === 'max' ? 'creatureMax'
       : (variant === 'fullart' || variant === 'rainbow') ? 'creatureFullArt'
       : 'creature',
-    theme: themeFor(paletteType, variant),
+    theme: themeFor(typeId, variant),
     rarityFloor,
     content: {
       ability: ability || null,
@@ -370,13 +309,12 @@ function makeCard({
       maxRule: variant === 'max'
         ? 'When your MAX Pal is knocked out, your opponent keeps two of your photos.'
         : null,
-      shiny: variant === 'shiny',
     },
     ...extra,
   };
 }
 
-/* --- basics + evolutions ------------------------------------------------ */
+/* --- basics -------------------------------------------------------------- */
 
 const byName = {};
 
@@ -385,23 +323,10 @@ for (const c of CREATURES) {
     key: c.id, name: c.name, typeId: c.type, stage: 'Basic',
     hp: c.hp, retreat: c.retreat, attacks: c.attacks, ability: c.ability, flavor: c.flavor,
     rarityFloor: c.ability ? 'uncommon' : null,
-    extra: { packId: 'basics', evolvesTo: c.evolvesTo?.name || null },
+    extra: { packId: 'basics' },
   });
   byName[c.id] = basic;
   push(basic);
-
-  if (c.evolvesTo) {
-    const ev = c.evolvesTo;
-    const key = ev.name.toLowerCase();
-    const card = makeCard({
-      key, name: ev.name, typeId: c.type, stage: 'Stage 1', evolvesFrom: c.name,
-      hp: ev.hp, retreat: ev.retreat, attacks: ev.attacks, ability: ev.ability, flavor: ev.flavor,
-      rarityFloor: 'rare',
-      extra: { packId: 'evolved' },
-    });
-    byName[key] = card;
-    push(card);
-  }
 }
 
 /* --- chase variants ----------------------------------------------------- */
@@ -409,16 +334,15 @@ for (const c of CREATURES) {
 const source = key => {
   const base = FRAMES.find(f => f.variant === 'standard' && f.id === `pp-${key}`);
   if (!base) throw new Error(`No base card for variant: ${key}`);
-  const crea = CREATURES.find(c => c.id === key);
-  const evo = CREATURES.map(c => c.evolvesTo).find(e => e && e.name.toLowerCase() === key);
-  return { base, def: crea || evo, key };
+  const def = CREATURES.find(c => c.id === key);
+  return { base, def, key };
 };
 
 for (const key of MAX_CARDS) {
   const { base, def } = source(key);
   push(makeCard({
     key, name: base.baseName, typeId: base.energyType, stage: 'MAX',
-    evolvesFrom: base.evolvesFrom, hp: base.hp,
+    hp: base.hp,
     retreat: base.content.footer.retreat, attacks: def.attacks,
     ability: def.ability, flavor: def.flavor,
     variant: 'max', rarityFloor: 'ultra',
@@ -430,23 +354,11 @@ for (const key of FULL_ART) {
   const { base, def } = source(key);
   push(makeCard({
     key, name: base.baseName, typeId: base.energyType, stage: base.stage,
-    evolvesFrom: base.evolvesFrom, hp: base.hp,
+    hp: base.hp,
     retreat: base.content.footer.retreat, attacks: def.attacks,
     ability: def.ability, flavor: def.flavor,
     variant: 'fullart', rarityFloor: 'ultra',
     extra: { packId: 'fullart' },
-  }));
-}
-
-for (const key of SHINY) {
-  const { base, def } = source(key);
-  push(makeCard({
-    key, name: base.baseName, typeId: base.energyType, stage: base.stage,
-    evolvesFrom: base.evolvesFrom, hp: base.hp,
-    retreat: base.content.footer.retreat, attacks: def.attacks,
-    ability: def.ability, flavor: def.flavor,
-    variant: 'shiny', rarityFloor: 'rare',
-    extra: { packId: 'shiny' },
   }));
 }
 
@@ -458,7 +370,7 @@ for (const key of RAINBOW) {
   const { base, def } = source(key);
   push(makeCard({
     key, name: base.baseName, typeId: base.energyType, stage: base.stage,
-    evolvesFrom: base.evolvesFrom, hp: base.hp,
+    hp: base.hp,
     retreat: base.content.footer.retreat, attacks: def.attacks,
     ability: def.ability, flavor: def.flavor,
     variant: 'rainbow', rarityFloor: 'secret',
@@ -491,7 +403,6 @@ PARTY_THEMES.forEach((pt, i) => {
     packId: 'party',
     energyType: pt.type,
     stage: 'Party',
-    evolvesFrom: null,
     hp: 100,
     stock: 'gold',
     template: 'party',
@@ -513,7 +424,6 @@ PARTY_THEMES.forEach((pt, i) => {
         retreat: 1,
       },
       maxRule: null,
-      shiny: false,
     },
   });
 });
@@ -530,7 +440,6 @@ CUTIE_THEMES.forEach((ct, i) => {
     packId: 'cutie',
     energyType: ct.type,
     stage: 'Cutie',
-    evolvesFrom: null,
     hp: 80,
     stock: 'gold',
     template: 'kawaii',
@@ -545,7 +454,6 @@ CUTIE_THEMES.forEach((ct, i) => {
       flavor: null,
       footer: {},
       maxRule: null,
-      shiny: false,
     },
   });
 });
@@ -562,7 +470,6 @@ STRIP_THEMES.forEach((st, i) => {
     packId: 'strips',
     energyType: st.type,
     stage: 'Strip',
-    evolvesFrom: null,
     hp: 0,
     stock: 'none',
     template: 'strip',
@@ -580,7 +487,6 @@ STRIP_THEMES.forEach((st, i) => {
       flavor: null,
       footer: {},
       maxRule: null,
-      shiny: false,
     },
   });
 });
@@ -604,10 +510,8 @@ const PACK_META = [
   { id: 'strips',  name: 'Photo Strips',   tagline: 'The classic four-frame strip, themed and stickerable', order: 3 },
   { id: 'promo',   name: 'Limited Promos', tagline: 'Hand-drawn guests. Here for a fortnight, then gone.', order: 5,  limited: true },
   { id: 'basics',  name: 'Basics',         tagline: 'One Pal for every energy type — where a collection starts', order: 10 },
-  { id: 'evolved', name: 'Evolved',        tagline: 'Stage 1 Pals with abilities and a bigger HP bar',          order: 20 },
   { id: 'max',     name: 'MAX Cards',      tagline: 'Oversized HP, silver frame, damage that ends the game',    order: 30 },
-  { id: 'fullart', name: 'Full Art',       tagline: 'Your photo, edge to edge, text floating on top',           order: 40 },
-  { id: 'shiny',   name: 'Shiny',          tagline: 'Same Pal, wrong colours — the collector’s tell',      order: 50 },
+  { id: 'fullart', name: 'Full Art',       tagline: 'Dark metallic frame, text floating below your photo',      order: 40 },
   { id: 'secret',  name: 'Secret Rare',    tagline: 'Rainbow foil, numbered past the end of the set',           order: 60 },
 ];
 

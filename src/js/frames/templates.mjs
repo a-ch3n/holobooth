@@ -198,7 +198,7 @@ function collectorRow(ctx, W, H, frame, meta, color, family, y) {
   ctx.restore();
 }
 
-/** Stage badge: "BASIC" / "STAGE 1 · Evolves from Emberling" */
+/** Stage badge: "BASIC" / "MAX" / "PROMO" etc. */
 function stageBadge(ctx, frame, x, y, W, H, t) {
   const bh = H * 0.024;
   const label = String(frame.stage || 'Basic').toUpperCase();
@@ -210,24 +210,6 @@ function stageBadge(ctx, frame, x, y, W, H, t) {
   ctx.fillStyle = t.plateText;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillText(label, x + bw / 2, y + bh * 0.54);
-
-  if (frame.evolvesFrom) {
-    // A small pre-evolution marker, the way a real evolution box carries a
-    // thumbnail of what the card came from.
-    const pr = bh * 0.46;
-    const px = x + bw + W * 0.016 + pr;
-    ctx.save();
-    ctx.beginPath(); ctx.arc(px, y + bh * 0.5, pr * 1.18, 0, TAU);
-    ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.fill();
-    ctx.strokeStyle = alpha(t.plateText, 0.35); ctx.lineWidth = W * 0.0022; ctx.stroke();
-    ctx.restore();
-    energyPip(ctx, frame.energyType, px, y + bh * 0.5, pr * 0.86);
-
-    ctx.textAlign = 'left';
-    ctx.font = font(600, bh * 0.6, t.fontBody);
-    ctx.fillStyle = alpha(t.plateText, 0.68);
-    ctx.fillText(`evolves from ${frame.evolvesFrom}`, px + pr * 1.6, y + bh * 0.54);
-  }
   ctx.restore();
   return bh;
 }
@@ -361,16 +343,20 @@ function typeFooter(ctx, footer, x, y, w, W, H, t, onDark = false) {
   return y + h;
 }
 
-/** Shiny marker — the little star that tells a collector to look twice. */
-function shinyMark(ctx, x, y, r, color) {
-  ctx.save();
-  ctx.fillStyle = color;
-  starPath(ctx, x, y, r, r * 0.4, 4, -Math.PI / 2);
-  ctx.fill();
-  ctx.globalAlpha = 0.7;
-  starPath(ctx, x + r * 1.2, y + r * 0.9, r * 0.45, r * 0.18, 4, -Math.PI / 2);
-  ctx.fill();
-  ctx.restore();
+/**
+ * The one art-window geometry every card template uses — Basic, MAX, Full
+ * Art, Secret Rare and Promo all place the photo here. The frame/foil around
+ * it is what changes with rarity; this rect never does, and photoWindow()
+ * always cover-fits whatever image comes in, so a different source aspect
+ * ratio changes the crop, never the box or the surrounding layout.
+ */
+function standardArtRect(W, H) {
+  const m = W * 0.058;
+  const x = m + W * 0.020;
+  const y = m + H * 0.084;
+  const w = W - x * 2;
+  const h = H * 0.352;
+  return { x, y, w, h };
 }
 
 /* ============================================================= CREATURE */
@@ -412,13 +398,11 @@ export function creature(ctx, o) {
   stageBadge(ctx, frame, ix, badgeY, W, H, t);
   const nameY = badgeY + H * 0.056;
   ctx.fillStyle = t.plateText;
-  fitText(ctx, meta.personal?.provided ? meta.personal.name : frame.name,
-    ix, nameY, iw * 0.56, W * 0.060, 800, t.fontDisplay);
+  fitText(ctx, meta.personal.name, ix, nameY, iw * 0.56, W * 0.060, 800, t.fontDisplay);
   hpBlock(ctx, frame, ix + iw, nameY, W, t);
-  if (c.shiny) shinyMark(ctx, ix + iw * 0.60, nameY - W * 0.030, W * 0.020, '#e8b923');
 
-  /* ---- art window */
-  const awY = nameY + H * 0.014, awH = H * 0.352;
+  /* ---- art window (same rect for every rarity/type) */
+  const { y: awY, h: awH } = standardArtRect(W, H);
   const win = artWell(ctx, ix, awY, iw, awH, W, t, stock);
   meta.artWindow = { ...win };
   photoWindow(ctx, photo, win.x, win.y, win.w, win.h, win.r, meta.focal);
@@ -483,13 +467,13 @@ export function creatureMax(ctx, o) {
   ctx.lineWidth = W * 0.004;
   roundRect(ctx, W * 0.012, H * 0.008, W - W * 0.024, H - H * 0.016, W * 0.042); ctx.stroke();
 
-  const m = W * 0.048;
+  const m = W * 0.058;
   const ix = m + W * 0.020, iw = W - ix * 2;
 
   /* ---- header */
   const nameY = m + H * 0.052;
   ctx.fillStyle = '#1a1d24';
-  const shownName = meta.personal?.provided ? meta.personal.name : frame.baseName;
+  const shownName = meta.personal.name;
   const used = fitText(ctx, shownName, ix, nameY, iw * 0.46, W * 0.062, 800, t.fontDisplay);
   ctx.save();
   ctx.font = font(800, used, t.fontDisplay);
@@ -509,11 +493,11 @@ export function creatureMax(ctx, o) {
   ctx.save();
   ctx.fillStyle = 'rgba(26,29,36,.55)';
   ctx.font = font(700, W * 0.020, t.fontBody);
-  ctx.fillText(frame.evolvesFrom ? `MAX · evolves from ${frame.evolvesFrom}` : 'MAX Pal', ix, nameY + H * 0.020);
+  ctx.fillText('MAX Pal', ix, nameY + H * 0.020);
   ctx.restore();
 
-  /* ---- art window, with a burst behind it */
-  const awY = nameY + H * 0.030, awH = H * 0.375;
+  /* ---- art window (same rect as every other card type), with a burst behind it */
+  const { y: awY, h: awH } = standardArtRect(W, H);
   ctx.save();
   roundRect(ctx, ix, awY, iw, awH, W * 0.016); ctx.clip();
   ctx.fillStyle = e.dark; ctx.fillRect(ix, awY, iw, awH);
@@ -527,6 +511,7 @@ export function creatureMax(ctx, o) {
   }
   ctx.restore();
   const pad = W * 0.014;
+  meta.artWindow = { x: ix + pad, y: awY + pad, w: iw - pad * 2, h: awH - pad * 2, r: W * 0.010 };
   photoWindow(ctx, photo, ix + pad, awY + pad, iw - pad * 2, awH - pad * 2, W * 0.010, meta.focal);
   drawCharacter(ctx, frame, character, ix + pad, awY + pad, iw - pad * 2, awH - pad * 2, W);
   if (meta.rarity) artBoxHolo(ctx, ix + pad, awY + pad, iw - pad * 2, awH - pad * 2, meta.rarity, meta.seed || 1);
@@ -584,23 +569,21 @@ export function creatureFullArt(ctx, o) {
   const e = energy(t.type);
   const secret = frame.variant === 'rainbow';
 
-  /* Photo runs edge to edge — the whole point of a full art. */
+  /* Full Art keeps its own moody dark stock and metallic edge, but the photo
+     sits in the same window every other card type uses (see standardArtRect)
+     rather than bleeding to the edges — so pulling a Full Art, Secret Rare or
+     Promo card never moves the picture relative to a Basic or MAX pull. */
   cardBase(ctx, W, H, '#0b0d13');
-  clipped(ctx, cc => roundRect(cc, 0, 0, W, H, W * 0.05), cc => {
-    if (photo) drawCover(cc, photo, 0, 0, W, H, { x: 0.5, y: 0.24 });
-    else { cc.fillStyle = e.dark; cc.fillRect(0, 0, W, H); }
-    // type wash + top/bottom scrims so text stays readable over any photo
-    cc.fillStyle = radGrad(cc, W * 0.5, H * 0.3, W * 0.15, W * 1.1,
-      [[0, alpha(e.light, 0.20)], [1, alpha(e.dark, 0.62)]]);
-    cc.fillRect(0, 0, W, H);
-    cc.fillStyle = linGrad(cc, 0, 0, 0, H * 0.24, [[0, 'rgba(6,8,12,.82)'], [1, 'rgba(6,8,12,0)']]);
-    cc.fillRect(0, 0, W, H * 0.24);
-    cc.fillStyle = linGrad(cc, 0, H * 0.42, 0, H, [[0, 'rgba(6,8,12,0)'], [0.42, 'rgba(6,8,12,.72)'], [1, 'rgba(6,8,12,.94)']]);
-    cc.fillRect(0, H * 0.42, W, H * 0.58);
-  });
+  ctx.save();
+  roundRect(ctx, 0, 0, W, H, W * 0.05);
+  ctx.clip();
+  ctx.fillStyle = radGrad(ctx, W * 0.5, H * 0.22, W * 0.1, W * 1.15,
+    [[0, alpha(e.light, 0.26)], [1, alpha(e.dark, 0.9)]]);
+  ctx.fillRect(0, 0, W, H);
+  grain(ctx, 0, 0, W, H, 0.03, 13);
+  ctx.restore();
 
   const m = W * 0.030;
-  drawCharacter(ctx, frame, character, m, H * 0.10, W - m * 2, H * 0.52, W);
 
   // metallic edge
   ctx.save();
@@ -614,32 +597,39 @@ export function creatureFullArt(ctx, o) {
 
   const ix = W * 0.078, iw = W - ix * 2;
 
-  /* ---- header over the scrim */
+  /* ---- header */
   const badgeY = H * 0.040;
   ctx.save();
   ctx.fillStyle = 'rgba(255,255,255,.85)';
   ctx.font = font(800, H * 0.016, t.fontBody);
   ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
-  ctx.fillText(
-    (frame.promo ? 'PROMO' : secret ? 'SECRET RARE' : 'FULL ART') +
-    (frame.evolvesFrom ? `  ·  evolves from ${frame.evolvesFrom}` : ''),
-    ix, badgeY + H * 0.012);
+  ctx.fillText(frame.promo ? 'PROMO' : secret ? 'SECRET RARE' : 'FULL ART', ix, badgeY + H * 0.012);
   ctx.restore();
 
   const nameY = badgeY + H * 0.060;
   ctx.save();
   ctx.shadowColor = 'rgba(0,0,0,.7)'; ctx.shadowBlur = W * 0.03;
   ctx.fillStyle = '#ffffff';
-  fitText(ctx, meta.personal?.provided ? meta.personal.name : frame.name,
-    ix, nameY, iw * 0.56, W * 0.062, 800, t.fontDisplay);
+  fitText(ctx, meta.personal.name, ix, nameY, iw * 0.56, W * 0.062, 800, t.fontDisplay);
   ctx.restore();
   hpBlock(ctx, frame, ix + iw, nameY, W, { ...t, plateText: '#ffffff' });
 
-  /* ---- text panel floating over the lower half */
-  const panelY = H * 0.552;
-  const panelH = H - panelY - H * 0.058;
+  /* ---- art window (same rect as every other card type) */
+  const { x: awX, y: awY, w: awW, h: awH } = standardArtRect(W, H);
+  const win = artWell(ctx, awX, awY, awW, awH, W, t, 'gold');
+  meta.artWindow = { ...win };
+  photoWindow(ctx, photo, win.x, win.y, win.w, win.h, win.r, meta.focal);
+  drawCharacter(ctx, frame, character, win.x, win.y, win.w, win.h, W);
+  if (meta.rarity) artBoxHolo(ctx, win.x, win.y, win.w, win.h, meta.rarity, meta.seed || 1);
+  inset(ctx, win.x, win.y, win.w, win.h, win.r, 0.85);
+
+  /* ---- text panel, floating below the art the same way it always floated
+          over the lower half of a full-bleed photo */
+  const panelY = awY + awH + H * 0.022;
+  const footerY = H - m - H * 0.090;
+  const panelH = footerY - panelY;
   ctx.save();
-  roundRect(ctx, ix - W * 0.022, panelY, iw + W * 0.044, panelH, W * 0.026);
+  roundRect(ctx, ix - W * 0.014, panelY, iw + W * 0.028, panelH, W * 0.020);
   ctx.fillStyle = 'rgba(10,13,19,.52)';
   ctx.fill();
   ctx.strokeStyle = 'rgba(255,255,255,.16)';
@@ -647,21 +637,21 @@ export function creatureFullArt(ctx, o) {
   ctx.stroke();
   ctx.restore();
 
-  const footerY = panelY + panelH - H * 0.040;
-  const bandTop = panelY + H * 0.020;
+  const bandTop = panelY + H * 0.018;
+  const bandBottom = footerY - H * 0.014;
   const blockH = measureBody(ctx, c, iw, W, H, t, { maxAttacks: 2 });
-  let by = bandTop + Math.max(0, (footerY - H * 0.014 - bandTop - blockH) * 0.30);
+  let by = bandTop + Math.max(0, (bandBottom - bandTop - blockH) * 0.30);
 
   by = abilityBox(ctx, c.ability, ix, by, iw, W, H, t, true);
   (c.attacks || []).slice(0, 2).forEach((atk, i) => {
-    if (by > footerY - H * 0.030) return;
+    if (by > bandBottom - H * 0.016) return;
     if (i) by += H * 0.006;
     by = attackRow(ctx, atk, ix, by, iw, W, H, t, { onDark: true });
   });
 
   typeFooter(ctx, c.footer, ix, footerY, iw, W, H, t, true);
-  collectorRow(ctx, W, H, frame, meta, 'rgba(255,255,255,.92)', t.fontBody, H - H * 0.034);
-  fineprint(ctx, W, H, frame, meta, H - H * 0.016, '#ffffff', t.fontBody);
+  collectorRow(ctx, W, H, frame, meta, 'rgba(255,255,255,.92)', t.fontBody, H - m - H * 0.026);
+  fineprint(ctx, W, H, frame, meta, H - m * 0.34, '#ffffff', t.fontBody);
 
   // Rainbow secrets get a prismatic film over everything but the photo's face.
   if (secret) {
@@ -726,7 +716,7 @@ export function kawaii(ctx, o) {
   /* ---- name + a heart-shaped HP tag */
   const nameY = H * 0.100;
   ctx.fillStyle = e.ink;
-  fitText(ctx, p.provided ? p.name : frame.name, ix, nameY, iw * 0.62, W * 0.062, 800, t.fontDisplay);
+  fitText(ctx, p.name, ix, nameY, iw * 0.62, W * 0.062, 800, t.fontDisplay);
 
   const hr = W * 0.050, hx = ix + iw - hr * 0.85, hy = nameY - hr * 0.40;
   withShadow(ctx, alpha(e.dark, 0.32), W * 0.022, 0, W * 0.006, cc => {
