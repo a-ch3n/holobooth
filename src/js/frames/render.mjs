@@ -247,7 +247,10 @@ export function renderCard(ctx, opts) {
     drawStickers(ctx, stickers, meta.artWindow, stickerImages);
   }
 
-  if (foil && card?.rarity) applyFoil(ctx, W, H, card.rarity, card.seed);
+  // The art window is excluded from the foil pass — see applyFoil() — so the
+  // customer's own photo (and anything stuck onto it) always stays clean;
+  // only the frame/background ever carries a rarity effect.
+  if (foil && card?.rarity) applyFoil(ctx, W, H, card.rarity, card.seed, meta.artWindow);
 
   if (watermark) drawWatermark(ctx, W, H, watermark);
   return meta;
