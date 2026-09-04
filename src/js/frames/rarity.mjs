@@ -113,17 +113,43 @@ export function rollPack(count, opts = {}) {
 
 /* ----------------------------------------------------------------- foil */
 
+/** Same path as roundRect(), but appended to whatever path is already open —
+ *  roundRect() always starts with beginPath(), which would wipe out a
+ *  previous sub-path instead of adding to it. */
+function roundRectSubpath(ctx, x, y, w, h, r) {
+  const rr = Math.min(r, w / 2, h / 2);
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
+}
+
 /**
  * Foil is drawn onto the print master. Real holographic sparkle needs
  * laminate film over the print (see README > Foil), but this layer is what
  * makes a plain dye-sub card still read as "I pulled something good".
+ *
+ * `artWindow`, when given, is punched out of the clip region *before* any
+ * pattern is drawn — not erased afterwards, which would just leave a
+ * transparent hole where the photo was. That keeps every foil treatment
+ * (and the sparkle scatter) strictly on the frame/background: the customer's
+ * own photo (and anything they've stuck onto it) is never tinted, swept,
+ * blurred or otherwise touched by rarity.
  */
-export function applyFoil(ctx, W, H, rarityId, seed = 1) {
+export function applyFoil(ctx, W, H, rarityId, seed = 1, artWindow = null) {
   const r = RARITIES[rarityId];
   if (!r) return;
   ctx.save();
-  roundRect(ctx, 0, 0, W, H, W * 0.05);
-  ctx.clip();
+  ctx.beginPath();
+  roundRectSubpath(ctx, 0, 0, W, H, W * 0.05);
+  if (artWindow) {
+    roundRectSubpath(ctx, artWindow.x, artWindow.y, artWindow.w, artWindow.h, artWindow.r || 0);
+    ctx.clip('evenodd');
+  } else {
+    ctx.clip();
+  }
 
   switch (r.foil) {
     case 'satin':
@@ -201,45 +227,6 @@ function rarityFrame(ctx, W, H, rarityId, color) {
       ctx.fill();
     });
   }
-  ctx.restore();
-}
-
-/**
- * The holofoil art box: a prismatic pattern laid *inside the art window only*,
- * which is the oldest and most recognisable tell that a card is a holo. Applied
- * under the frame so the border stays flat and the picture shimmers.
- */
-export function artBoxHolo(ctx, x, y, w, h, rarityId, seed = 1) {
-  const r = RARITIES[rarityId];
-  if (!r || r.foil === 'none' || r.foil === 'satin') return;
-  const strength = { holo: 0.26, rainbow: 0.34, gold: 0.30 }[r.foil] || 0.2;
-
-  ctx.save();
-  ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip();
-  ctx.globalCompositeOperation = 'overlay';
-
-  // Interference "starfield" — overlapping soft prismatic lozenges.
-  const rng = seededRng(seed ^ 0x5f3a);
-  for (let i = 0; i < 46; i++) {
-    const cx = x + rng() * w, cy = y + rng() * h;
-    const rr = (0.06 + rng() * 0.20) * Math.min(w, h);
-    const hue = r.foil === 'gold' ? 40 + rng() * 25 : rng() * 360;
-    ctx.globalAlpha = strength * (0.35 + rng() * 0.65);
-    ctx.fillStyle = radGrad(ctx, cx, cy, 0, rr,
-      [[0, `hsla(${hue},95%,72%,1)`], [0.6, `hsla(${(hue + 40) % 360},90%,64%,.45)`], [1, 'hsla(0,0%,100%,0)']]);
-    ctx.beginPath(); ctx.ellipse(cx, cy, rr, rr * 0.62, rng() * Math.PI, 0, TAU); ctx.fill();
-  }
-
-  // Directional sweep across the whole box ties the lozenges together.
-  ctx.globalAlpha = 1;
-  ctx.globalCompositeOperation = 'screen';
-  const g = ctx.createLinearGradient(x, y + h, x + w, y);
-  const stops = r.foil === 'gold'
-    ? [[0, 'rgba(255,226,150,.20)'], [0.5, 'rgba(255,250,225,.26)'], [1, 'rgba(198,150,40,.20)']]
-    : [[0, 'rgba(120,220,255,.16)'], [0.3, 'rgba(200,140,255,.16)'], [0.6, 'rgba(255,160,205,.14)'], [1, 'rgba(160,255,215,.16)']];
-  stops.forEach(([o, c]) => g.addColorStop(o, c));
-  ctx.fillStyle = g;
-  ctx.fillRect(x, y, w, h);
   ctx.restore();
 }
 

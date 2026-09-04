@@ -15,7 +15,6 @@ import {
   fitText, paragraph, measureParagraph, grain, drawCover, clipped, withShadow, font, starPath, TAU,
 } from './draw.mjs';
 import { energy, energyPip, energyGlyph, costRow, typeCell } from './energy.mjs';
-import { artBoxHolo } from './rarity.mjs';
 import { companionBadge } from './companions.mjs';
 import { drawAssetCard } from './assetpack.mjs';
 
@@ -407,8 +406,8 @@ export function creature(ctx, o) {
   meta.artWindow = { ...win };
   photoWindow(ctx, photo, win.x, win.y, win.w, win.h, win.r, meta.focal);
   drawCharacter(ctx, frame, character, win.x, win.y, win.w, win.h, W);
-  // Holofoil lives INSIDE the art box — the classic tell.
-  if (meta.rarity) artBoxHolo(ctx, win.x, win.y, win.w, win.h, meta.rarity, meta.seed || 1);
+  // The photo itself stays clean — rarity is applied to the frame later
+  // (applyFoil() clips the art window out of every foil pass), never here.
   inset(ctx, win.x, win.y, win.w, win.h, win.r, 0.85);
 
   creditLine(ctx, frame, meta, ix, awY + awH + H * 0.020, iw, W, t, alpha(t.textboxText, 0.55));
@@ -514,7 +513,6 @@ export function creatureMax(ctx, o) {
   meta.artWindow = { x: ix + pad, y: awY + pad, w: iw - pad * 2, h: awH - pad * 2, r: W * 0.010 };
   photoWindow(ctx, photo, ix + pad, awY + pad, iw - pad * 2, awH - pad * 2, W * 0.010, meta.focal);
   drawCharacter(ctx, frame, character, ix + pad, awY + pad, iw - pad * 2, awH - pad * 2, W);
-  if (meta.rarity) artBoxHolo(ctx, ix + pad, awY + pad, iw - pad * 2, awH - pad * 2, meta.rarity, meta.seed || 1);
   inset(ctx, ix + pad, awY + pad, iw - pad * 2, awH - pad * 2, W * 0.010, 0.85);
   ctx.save();
   ctx.strokeStyle = linGrad(ctx, ix, awY, ix + iw, awY + awH,
@@ -620,7 +618,6 @@ export function creatureFullArt(ctx, o) {
   meta.artWindow = { ...win };
   photoWindow(ctx, photo, win.x, win.y, win.w, win.h, win.r, meta.focal);
   drawCharacter(ctx, frame, character, win.x, win.y, win.w, win.h, W);
-  if (meta.rarity) artBoxHolo(ctx, win.x, win.y, win.w, win.h, meta.rarity, meta.seed || 1);
   inset(ctx, win.x, win.y, win.w, win.h, win.r, 0.85);
 
   /* ---- text panel, floating below the art the same way it always floated
@@ -945,9 +942,6 @@ export function party(ctx, o) {
   const win = artWell(ctx, ix, awY, iw, awH, W, t, 'gold');
   meta.artWindow = { ...win };
   photoWindow(ctx, photo, win.x, win.y, win.w, win.h, win.r, meta.focal);
-  if (meta.rarity === 'ultra' || meta.rarity === 'secret') {
-    artBoxHolo(ctx, win.x, win.y, win.w, win.h, meta.rarity, meta.seed || 1);
-  }
   inset(ctx, win.x, win.y, win.w, win.h, win.r, 0.8);
 
   /* ---- stats ribbon with an edition marker, the way a real card carries

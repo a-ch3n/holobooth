@@ -35,7 +35,7 @@ export const RARITY_ORDER = ['common', 'uncommon', 'rare', 'ultra', 'secret'];
 const CREATURES = [
   {
     id: 'emberling', name: 'Emberling', type: 'ember', hp: 70, retreat: 1,
-    flavor: 'Wags its tail near the ring light. Somehow always in focus.',
+    flavor: 'An Ember-type Pal whose fur radiates a gentle heat. The glow in its chest flares brighter whenever a camera points its way.',
     attacks: [
       { cost: ['ember'], name: 'Warm Smile', dmg: 20, text: 'The photographer says “aww”.' },
       { cost: ['ember', 'plain'], name: 'Flash Blast', dmg: 50, text: 'Discard 1 blink from your bench.' },
@@ -43,7 +43,7 @@ const CREATURES = [
   },
   {
     id: 'splashling', name: 'Splashling', type: 'wave', hp: 60, retreat: 1,
-    flavor: 'Fogs the lens on purpose and thinks it is hilarious.',
+    flavor: 'A Wave-type Pal that keeps a thin film of water across its skin. It mists the air around it whenever it gets excited.',
     attacks: [
       { cost: ['wave'], name: 'Splash Pose', dmg: 10, text: 'Flip a coin. If heads, look effortlessly cool.' },
       { cost: ['wave', 'wave'], name: 'Tidal Calm', dmg: 40, text: 'Heal 30 from every Pal in frame.' },
@@ -51,7 +51,7 @@ const CREATURES = [
   },
   {
     id: 'sproutle', name: 'Sproutle', type: 'leaf', hp: 70, retreat: 1,
-    flavor: 'Grows a flower crown for anyone standing next to it.',
+    flavor: 'A Leaf-type Pal that grows a fresh bud every morning. Anyone who stays close long enough finds a flower has quietly bloomed nearby.',
     attacks: [
       { cost: ['leaf'], name: 'Sprout', dmg: 20, text: 'Become slightly more photogenic.' },
       { cost: ['leaf', 'plain'], name: 'Bloom Burst', dmg: 50, text: 'Put a flower on every Pal in the photo.' },
@@ -59,7 +59,7 @@ const CREATURES = [
   },
   {
     id: 'zaplet', name: 'Zaplet', type: 'volt', hp: 60, retreat: 1,
-    flavor: 'Responsible for every photo where somebody is mid-blink.',
+    flavor: 'A Volt-type Pal that builds up static with every step. A small spark jumps between its ears whenever it senses a flash about to fire.',
     attacks: [
       { cost: ['volt'], name: 'Static Hair', dmg: 20, text: 'Your hair is now part of the composition.' },
       { cost: ['volt', 'plain'], name: 'Shutter Snap', dmg: 50, text: 'Take the photo one beat early. On purpose.' },
@@ -68,7 +68,7 @@ const CREATURES = [
   {
     id: 'chillbun', name: 'Chillbun', type: 'frost', hp: 80, retreat: 2,
     ability: { name: 'Cool Under Pressure', text: 'Chillbun cannot be affected by the countdown.' },
-    flavor: 'Has one expression. It is the correct expression.',
+    flavor: 'A Frost-type Pal whose body temperature never rises. Its expression has not changed since the day it hatched.',
     attacks: [
       { cost: ['frost'], name: 'Cool Stare', dmg: 30, text: 'The opposing pose is now Frozen.' },
       { cost: ['frost', 'frost'], name: 'Snowdrift', dmg: 70, text: 'Nobody moves for three seconds. Perfect.' },
@@ -76,7 +76,7 @@ const CREATURES = [
   },
   {
     id: 'pebblit', name: 'Pebblit', type: 'stone', hp: 90, retreat: 3,
-    flavor: 'Refuses to be cropped out. Physically refuses.',
+    flavor: 'A Stone-type Pal built like a boulder with legs. Nothing short of an earthquake moves it once a photo starts.',
     attacks: [
       { cost: ['stone'], name: 'Hold Still', dmg: 20, text: 'Pebblit does not move. Pebblit has never moved.' },
       { cost: ['stone', 'plain'], name: 'Rock Solid', dmg: 50, text: 'Reduce all shake damage by 30.' },
@@ -84,7 +84,7 @@ const CREATURES = [
   },
   {
     id: 'gustwing', name: 'Gustwing', type: 'gale', hp: 70, retreat: 1,
-    flavor: 'Provides the hair movement. Charges nothing. A professional.',
+    flavor: 'A Gale-type Pal that rides air currents most creatures cannot feel. It swoops into frame only at the very last second.',
     attacks: [
       { cost: ['gale'], name: 'Updraft', dmg: 20, text: 'Your hair does the thing it does in movies.' },
       { cost: ['gale', 'plain'], name: 'Slipstream', dmg: 60, text: 'Switch places with a Pal on your bench.' },
@@ -93,7 +93,7 @@ const CREATURES = [
   {
     id: 'duskwisp', name: 'Duskwisp', type: 'shade', hp: 70, retreat: 0,
     ability: { name: 'Half There', text: 'Duskwisp only appears in every other photo. Nobody knows why.' },
-    flavor: 'Shows up in the background of shots taken before it existed.',
+    flavor: 'A Shade-type Pal that exists in only half of every photo it appears in. Nobody has ever agreed on which half.',
     attacks: [
       { cost: ['shade'], name: 'Peekaboo', dmg: 30, text: 'Appear behind someone. They did not consent to this.' },
       { cost: ['shade', 'plain'], name: 'Long Exposure', dmg: 70, text: 'Leaves a streak across the frame. Deliberate. Probably.' },
@@ -102,7 +102,7 @@ const CREATURES = [
   {
     id: 'glimmerpuff', name: 'Glimmerpuff', type: 'radiant', hp: 80, retreat: 1,
     ability: { name: 'Sparkle Field', text: 'While Glimmerpuff is in frame, every card printed this session gains a sparkle.' },
-    flavor: 'Made entirely of the good part of a birthday.',
+    flavor: 'A Radiant-type Pal made of concentrated warmth. Its Sparkle Field is strongest at parties, when everyone looks their best.',
     attacks: [
       { cost: ['radiant'], name: 'Twinkle', dmg: 20, text: 'Everything in frame gets 8% cuter.' },
       { cost: ['radiant', 'radiant'], name: 'Starburst', dmg: 80, text: 'Heal 40 from every Pal you have ever printed.' },
@@ -110,7 +110,7 @@ const CREATURES = [
   },
   {
     id: 'bubblox', name: 'Bubblox', type: 'toxin', hp: 80, retreat: 2,
-    flavor: 'Its bubbles smell faintly of grape soda. This is not reassuring.',
+    flavor: 'A Toxin-type Pal that blows bubbles laced with a mild, grape-scented toxin. Harmless to people, mostly, though it explains the smell.',
     attacks: [
       { cost: ['toxin'], name: 'Fizz', dmg: 20, text: 'The opposing pose is now Sticky.' },
       { cost: ['toxin', 'plain'], name: 'Bubble Trap', dmg: 60, text: 'Nobody can leave the booth until the strip prints.' },
@@ -119,7 +119,7 @@ const CREATURES = [
   {
     id: 'cogsnap', name: 'Cogsnap', type: 'steel', hp: 100, retreat: 3,
     ability: { name: 'Autofocus', text: 'Cogsnap is never blurry. Cogsnap does not permit blur.' },
-    flavor: 'Ticks quietly during the countdown. Always on the beat.',
+    flavor: 'A Steel-type Pal with a lens for an eye and gears for a heart. It has never once produced a blurry photo.',
     attacks: [
       { cost: ['steel'], name: 'Lock On', dmg: 30, text: 'This attack cannot miss.' },
       { cost: ['steel', 'plain'], name: 'Shutter Slam', dmg: 70, text: 'Discard the blurry one. There is always a blurry one.' },
@@ -127,7 +127,7 @@ const CREATURES = [
   },
   {
     id: 'mindmoth', name: 'Mindmoth', type: 'psy', hp: 70, retreat: 1,
-    flavor: 'Already knows which shot you are going to pick.',
+    flavor: 'A Psy-type Pal that senses a pose before it happens, striking the exact expression everyone wanted first.',
     attacks: [
       { cost: ['psy'], name: 'Read the Room', dmg: 20, text: 'Choose the pose everyone was about to do anyway.' },
       { cost: ['psy', 'psy'], name: 'Déjà Vu', dmg: 80, text: 'Take this photo again. It was better the first time.' },
@@ -135,7 +135,7 @@ const CREATURES = [
   },
   {
     id: 'dracolet', name: 'Dracolet', type: 'wyrm', hp: 90, retreat: 2,
-    flavor: 'Too big for the booth. Gets in anyway.',
+    flavor: 'A Wyrm-type Pal far too large for any booth it climbs into. It has never once fit inside a single frame, and it does not seem to mind.',
     attacks: [
       { cost: ['wyrm'], name: 'Tiny Roar', dmg: 30, text: 'Startles exactly one person in the group.' },
       { cost: ['wyrm', 'plain'], name: 'Wingspan', dmg: 60, text: 'Takes up the whole frame. Unapologetic.' },
@@ -143,7 +143,7 @@ const CREATURES = [
   },
   {
     id: 'fluffkin', name: 'Fluffkin', type: 'plain', hp: 60, retreat: 1,
-    flavor: 'The first Pal anybody pulls. Nobody trades it away.',
+    flavor: 'A Plain-type Pal with no special powers, only an unmatched talent for squeezing into group photos at the very last second.',
     attacks: [
       { cost: ['plain'], name: 'Tag Along', dmg: 10, text: 'Squeeze into the shot at the last second.' },
       { cost: ['plain', 'plain'], name: 'Group Hug', dmg: 40, text: 'Heal 20 from every Pal in frame. Including the ones sulking.' },
@@ -167,7 +167,7 @@ const PROMOS = [
     availability: { start: '2026-08-24', end: '2026-09-07', mintLimit: 500 },
     rarityFloor: 'rare',
     ability: { name: 'Four Flash Salute', text: 'Boothra appears in all four shots of the strip, whether or not you invited it.' },
-    flavor: 'Lives in the booth. Predates the booth. Do not ask the booth about it.',
+    flavor: 'A Radiant-type Pal that has lived in the booth longer than anyone can remember. It appears in every shot on the strip, whether it was invited or not.',
     attacks: [
       { cost: ['radiant'], name: 'Say Cheese', dmg: 30, text: 'Everyone in frame smiles. It is not optional.' },
       { cost: ['radiant', 'plain'], name: 'Curtain Call', dmg: 90, text: 'The strip prints warm. It always prints warm.' },
@@ -180,7 +180,7 @@ const PROMOS = [
     availability: { start: '2026-10-01', end: '2026-11-01', mintLimit: 666 },
     rarityFloor: 'ultra',
     ability: { name: 'Third Wheel', text: 'Hallowisp is standing behind you in every photo taken in October.' },
-    flavor: 'It was not there when you posed. It is there now.',
+    flavor: 'A Shade-type Pal that only appears once the shutter has already closed. By the time you notice it in the photo, the moment it was there is long gone.',
     attacks: [
       { cost: ['shade'], name: 'Boo Drop', dmg: 40, text: 'The countdown skips a number.' },
       { cost: ['shade', 'shade'], name: 'Midnight Set', dmg: 110, text: 'All lights in the booth dim by one stop.' },
@@ -338,13 +338,28 @@ const source = key => {
   return { base, def, key };
 };
 
+/**
+ * MAX and Secret Rare prints don't just reuse the basic's Pokédex entry
+ * verbatim — a short line gets appended describing the same trait at
+ * whatever scale that variant implies, so a chase card's own record never
+ * reads as a copy-paste of the card it was pulled from (only Basics print
+ * this text on the card face today, but every variant still carries its own
+ * accurate entry). Full Art keeps the original entry untouched, the way an
+ * alternate-art print in a real set usually does.
+ */
+function variantFlavor(baseFlavor, variant) {
+  if (variant === 'max') return `${baseFlavor} This MAX-sized print makes it impossible to miss.`;
+  if (variant === 'rainbow') return `${baseFlavor} This rainbow-foil print is rare enough that most collectors only ever see one.`;
+  return baseFlavor;
+}
+
 for (const key of MAX_CARDS) {
   const { base, def } = source(key);
   push(makeCard({
     key, name: base.baseName, typeId: base.energyType, stage: 'MAX',
     hp: base.hp,
     retreat: base.content.footer.retreat, attacks: def.attacks,
-    ability: def.ability, flavor: def.flavor,
+    ability: def.ability, flavor: variantFlavor(def.flavor, 'max'),
     variant: 'max', rarityFloor: 'ultra',
     extra: { packId: 'max' },
   }));
@@ -372,7 +387,7 @@ for (const key of RAINBOW) {
     key, name: base.baseName, typeId: base.energyType, stage: base.stage,
     hp: base.hp,
     retreat: base.content.footer.retreat, attacks: def.attacks,
-    ability: def.ability, flavor: def.flavor,
+    ability: def.ability, flavor: variantFlavor(def.flavor, 'rainbow'),
     variant: 'rainbow', rarityFloor: 'secret',
     extra: { packId: 'secret', secret: true },
   }));
