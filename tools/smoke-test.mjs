@@ -65,8 +65,8 @@ console.log('\nrarity distribution (100k rolls, base odds)');
 
 /* ---------------------------------------------- 3. deterministic mint */
 {
-  const a = mintCard({ frameId: 'pp-voltmane', mint: 77 });
-  const b = mintCard({ frameId: 'pp-voltmane', mint: 77 });
+  const a = mintCard({ frameId: 'pp-emberling', mint: 77 });
+  const b = mintCard({ frameId: 'pp-emberling', mint: 77 });
   ok('same frame+mint reproduces the same card', a.rarity === b.rarity && a.serial === b.serial, a.serial);
   const c = mintCard({ frameId: 'pp-boothra-fullart', mint: 501 });
   ok('mint past the limit flags sold out', c.soldOut === true, `${c.serial}`);
@@ -82,8 +82,6 @@ console.log('\nrarity distribution (100k rolls, base odds)');
      secrets.length > 0 && secrets.every(f => f.setNumber > SET.size), `${secrets.length} secrets, set of ${SET.size}`);
   const typed = new Set(fs.map(f => f.energyType));
   ok('every energy type appears in the set', typed.size === ENERGY_IDS.length, `${typed.size}/${ENERGY_IDS.length}`);
-  ok('every evolution names the Pal it evolves from',
-     fs.filter(f => f.stage === 'Stage 1').every(f => !!f.evolvesFrom));
   // Attacks and the weakness footer belong to the battle-style layouts. Cutie
   // cards deliberately carry chips and a caption instead, so scope the check
   // to the templates that actually render those rows.
@@ -97,7 +95,7 @@ console.log('\nrarity distribution (100k rolls, base odds)');
   ok('every cutie card has stat chips and a caption',
      cutie.length > 0 && cutie.every(f => (f.content.chips || []).length && f.content.caption),
      `${cutie.length} cards`);
-  ok('MAX cards hit harder than their base card', ['blazepup', 'voltmane', 'wyrmarch'].every(k => {
+  ok('MAX cards hit harder than their base card', ['emberling', 'zaplet', 'dracolet'].every(k => {
     const base = frameById(`pp-${k}`), max = frameById(`pp-${k}-max`);
     return max.hp > base.hp && max.content.attacks[0].dmg > base.content.attacks[0].dmg;
   }));
@@ -123,7 +121,7 @@ console.log('\nrarity distribution (100k rolls, base odds)');
   ok('all frames render at 300dpi print size', rendered === allFrames().length, `${rendered}/${allFrames().length}`);
 
   // one full session's worth of output, saved for eyeballing
-  const card = mintCard({ frameId: 'pp-blazepup-rainbow', mint: 42, product: { rarityBoost: 1.6 } });
+  const card = mintCard({ frameId: 'pp-emberling-rainbow', mint: 42, product: { rarityBoost: 1.6 } });
   const cv = createCanvas(W, H);
   renderCard(cv.getContext('2d'), { frameId: card.frameId, W, H, photo, card });
   writeFileSync(join(out, 'card-print-master.png'), cv.toBuffer('image/png'));

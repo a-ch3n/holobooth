@@ -82,15 +82,26 @@ function possessive(name) {
   return /s$/i.test(name) ? `${name}'` : `${name}'s`;
 }
 
+/** Hard cap on a customer-typed name, independent of whatever the on-screen
+ *  keyboard already limits to — so a name arriving from any other input path
+ *  (an asset-pack value, a future API) can never overflow a card's layout. */
+const MAX_NAME_LENGTH = 24;
+
 /**
  * Fill in everything the party template needs from the little the customer
  * actually typed. They enter a name and an age on a touchscreen; everything
  * else — the headline, the thank-you line, even the HP — is derived, because
  * asking a parent at a party to fill in eight fields is how you lose the queue.
+ *
+ * Every card template reads `name` here rather than its own species/frame
+ * name, so a customer's typed name always wins — and when nobody typed one,
+ * every template shows the same sensible fallback instead of each falling
+ * back to its own frame name.
  */
 export function buildPersonal(input = {}, companionSpec = null) {
-  const provided = !!String(input.name || '').trim();
-  const name = String(input.name || '').trim() || 'Friend';
+  const trimmed = String(input.name || '').trim();
+  const provided = !!trimmed;
+  const name = (trimmed || 'Friend').slice(0, MAX_NAME_LENGTH);
   const ageRaw = input.age;
   const age = ageRaw === '' || ageRaw == null ? null : Number(ageRaw);
   const hasAge = Number.isFinite(age);

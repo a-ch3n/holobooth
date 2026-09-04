@@ -40,17 +40,15 @@ node tools/build-gallery.mjs                  # self-contained HTML set gallery
 
 ## The set
 
-**Pocket Pals — Base Set** (`PP-BASE`): 33 cards in the set, plus 3 secret rares
-numbered past the end of it and 2 limited promos. 38 cards total.
+**Pocket Pals — Base Set** (`PP-BASE`): 23 cards in the set, plus 3 secret rares
+numbered past the end of it and 2 limited promos. 28 cards total.
 
 | Class | Count | What it is |
 |---|---|---|
 | Basics | 14 | One Pal per energy type — where a collection starts |
-| Evolved | 6 | Stage 1 Pals with abilities and bigger HP |
 | MAX Cards | 5 | Silver two-tone frame, ~1.9× HP, ~1.6× damage. The chase card. |
-| Full Art | 4 | Photo edge to edge, text floating on a translucent panel |
-| Shiny | 4 | Same Pal, wrong palette, marked with a star |
-| Secret Rare | 3 | Full art + rainbow foil, numbered `034/033` and up |
+| Full Art | 4 | Dark metallic frame, text floating below the photo window |
+| Secret Rare | 3 | Full art + rainbow foil, numbered `024/023` and up |
 | Limited Promos | 2 | Hand-drawn guest characters, availability windows, mint caps |
 | Party Cards | 6 | **Personalised** — name, age and a chosen buddy go on the card |
 | Cutie Club | 6 | **Personalised**, pastel — scalloped sticker edge, heart HP tag, mascot peeking out |
@@ -125,7 +123,7 @@ automatically number above the set size.
 in order:
 
 ```json
-"picker": { "show": ["strips", "promo", "basics", "evolved", "max", "fullart", "shiny", "secret"] }
+"picker": { "show": ["strips", "promo", "basics", "max", "fullart", "secret"] }
 ```
 
 Hiding a group never deletes it — Party Cards, Cutie Club and any asset packs
@@ -271,18 +269,12 @@ Append to `CREATURES` in `src/js/frames/packs.mjs`:
     { cost: ['plain'], name: 'Cozy Up', dmg: 20, text: 'Everyone leans in.' },
     { cost: ['plain', 'plain'], name: 'Marshmallow', dmg: 50, text: 'Heal 20 from every Pal in frame.' },
   ],
-  evolvesTo: {                       // optional — generates the Stage 1 card
-    name: 'Cocoabear', hp: 130, retreat: 2,
-    ability: { name: 'Second Cup', text: 'Nobody leaves the booth on the first take.' },
-    attacks: [ /* … */ ],
-    flavor: 'Refuses to hurry a photo.',
-  },
 }
 ```
 
 Colours, the weakness footer, the collector number and the picker tile all come
-from `type`. To give it chase variants, add its key to `MAX_CARDS`, `FULL_ART`,
-`SHINY` or `RAINBOW` at the top of the same file.
+from `type`. To give it chase variants, add its key to `MAX_CARDS`, `FULL_ART`
+or `RAINBOW` at the top of the same file.
 
 **A limited promo** goes in `PROMOS` and adds:
 
@@ -326,8 +318,8 @@ creature frames:
 | `type` | The card's own energy colour as the border |
 | `silver` | Used automatically by MAX cards |
 
-MAX cards always use `silver` and full arts have no border, so this setting
-affects Basics, Evolved, Shiny and Party cards.
+MAX cards always use `silver` and full arts have no card-stock border of their
+own, so this setting affects Basics cards.
 
 **On real foil:** what's drawn here is a *printed simulation* — it reads
 correctly at arm's length and photographs well, but it doesn't move in the

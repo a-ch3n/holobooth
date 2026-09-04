@@ -63,6 +63,43 @@ export function atLeast(id, min) {
   return RARITY_ORDER.indexOf(id) >= RARITY_ORDER.indexOf(min) ? id : min;
 }
 
+/** Whichever of two rarities (either may be absent) sits higher in RARITY_ORDER. */
+function higherRarity(a, b) {
+  if (!a) return b || null;
+  if (!b) return a;
+  return RARITY_ORDER.indexOf(a) >= RARITY_ORDER.indexOf(b) ? a : b;
+}
+
+/**
+ * The exact probability of pulling each rarity for a given boost/floor/
+ * guarantee — read by the odds UI so what the customer is shown can never
+ * drift from what rollRarity() actually does with the same inputs.
+ *
+ * atLeast(atLeast(picked, floor), guarantee) bumps anything below either
+ * threshold up to it; applying two "at least" floors in sequence is the same
+ * as applying one floor at whichever threshold is higher, so the probability
+ * mass of every tier below that floor collapses onto the floor tier itself.
+ */
+export function rarityOdds({ boost = 1, floor = null, guarantee = null } = {}) {
+  const entries = RARITY_ORDER.map(id => RARITIES[id]);
+  const weights = entries.map((r, i) => {
+    const tierUp = i / (entries.length - 1);
+    return r.weight * Math.pow(boost, tierUp * 3);
+  });
+  const total = weights.reduce((a, b) => a + b, 0);
+  const pct = weights.map(w => (w / total) * 100);
+
+  const effFloor = higherRarity(floor, guarantee);
+  const floorIdx = effFloor ? RARITY_ORDER.indexOf(effFloor) : -1;
+  if (floorIdx > 0) {
+    const bumped = pct.slice(0, floorIdx).reduce((a, b) => a + b, 0);
+    for (let i = 0; i < floorIdx; i++) pct[i] = 0;
+    pct[floorIdx] += bumped;
+  }
+
+  return RARITY_ORDER.map((id, i) => ({ ...rarityMeta(id), pct: pct[i] }));
+}
+
 /** Booster packs: roll N cards, then upgrade one if the guarantee wasn't met. */
 export function rollPack(count, opts = {}) {
   const rolls = Array.from({ length: count }, () => rollRarity(opts));
@@ -83,7 +120,7 @@ export function rollPack(count, opts = {}) {
  */
 export function applyFoil(ctx, W, H, rarityId, seed = 1) {
   const r = RARITIES[rarityId];
-  if (!r || r.foil === 'none') return;
+  if (!r) return;
   ctx.save();
   roundRect(ctx, 0, 0, W, H, W * 0.05);
   ctx.clip();
@@ -121,14 +158,49 @@ export function applyFoil(ctx, W, H, rarityId, seed = 1) {
       sparkles(ctx, W, H, 46, seed, 0.7);
       break;
     }
+    // 'none' (Common): no foil pattern, but the rarity ring below still draws
+    // — the frame itself has to communicate "common" as much as "legendary".
   }
 
-  // rarity-tinted edge glow, so the treatment reads even at arm's length
+  rarityFrame(ctx, W, H, rarityId, r.color);
+  ctx.restore();
+}
+
+/**
+ * The rarity ring — a border treatment layered over the card's own frame
+ * design, independent of it, so rarity always reads at arm's length even for
+ * templates that skip foil (or, at Common, have none). Thickness, layer count
+ * and corner marks all scale with tier, so "impressive frame" tracks rarity
+ * exactly rather than being eyeballed per foil type.
+ */
+function rarityFrame(ctx, W, H, rarityId, color) {
+  const tier = Math.max(0, RARITY_ORDER.indexOf(rarityId));
+  const span = Math.max(1, RARITY_ORDER.length - 1);
+  const tierFrac = tier / span;
+
+  ctx.save();
   ctx.globalCompositeOperation = 'screen';
-  ctx.strokeStyle = alpha(r.color, 0.5);
-  ctx.lineWidth = W * 0.012;
-  roundRect(ctx, W * 0.006, H * 0.004, W - W * 0.012, H - H * 0.008, W * 0.05);
-  ctx.stroke();
+  const rings = 1 + Math.round(tierFrac * 2); // common: 1 hairline → top tier: 3 nested rings
+  for (let p = 0; p < rings; p++) {
+    const g = p * W * 0.010;
+    ctx.strokeStyle = alpha(color, 0.5 - p * 0.14);
+    ctx.lineWidth = W * (0.008 + tierFrac * 0.018);
+    roundRect(ctx, W * 0.006 + g, H * 0.004 + g, W - (W * 0.012 + g * 2), H - (H * 0.008 + g * 2), W * 0.05);
+    ctx.stroke();
+  }
+
+  // The two rarest tiers earn corner flourishes — the unmistakable "this one
+  // is different" tell, on top of everything the foil pattern already did.
+  if (tierFrac >= 0.7) {
+    const cr = W * (0.014 + tierFrac * 0.010);
+    const pad = W * 0.032;
+    ctx.fillStyle = color;
+    ctx.globalAlpha = 0.9;
+    [[pad, pad], [W - pad, pad], [pad, H - pad], [W - pad, H - pad]].forEach(([x, y]) => {
+      starPath(ctx, x, y, cr, cr * 0.4, 4);
+      ctx.fill();
+    });
+  }
   ctx.restore();
 }
 
