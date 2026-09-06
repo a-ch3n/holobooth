@@ -243,6 +243,9 @@ const STRIP_THEMES = [
   { key: 'blush',    name: 'Blush',    type: 'radiant', dark: false, confetti: true,  header: 'SWEET' },
   { key: 'mint',     name: 'Mint',     type: 'leaf',    dark: false, confetti: false, header: 'FRESH' },
   { key: 'cream',    name: 'Cream',    type: 'volt',    dark: false, confetti: true,  header: 'SUNNY' },
+  { key: 'frost',    name: 'Frost',    type: 'frost',   dark: false, confetti: false, header: 'CHILL' },
+  { key: 'ocean',    name: 'Ocean',    type: 'wave',    dark: true,  confetti: false, header: 'DEEP BLUE' },
+  { key: 'noir',     name: 'Noir',     type: 'shade',   dark: true,  confetti: false, header: 'AFTER DARK' },
 ];
 
 /* =============================================================== builder */
