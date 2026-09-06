@@ -70,6 +70,27 @@ function oddsBreakdownHtml(odds) {
     </span>`).join('');
 }
 
+/* ------------------------------------------------------ name generator */
+
+/**
+ * "Surprise me" is a local, offline generator — no network call, no API key,
+ * so it works identically at a venue with no signal as it does anywhere
+ * else, and never adds latency or a point of failure to the kiosk flow.
+ * Every prefix/suffix pair is kept to 14 characters or under (the tightest
+ * of the two name fields' own limits), so a generated name is guaranteed to
+ * fit without truncating wherever it lands.
+ */
+const NAME_GEN_PREFIX = ['Blaze', 'Nova', 'Echo', 'Storm', 'Frost', 'Comet', 'Ember', 'Rogue', 'Turbo', 'Lucky', 'Cosmic', 'Wild', 'Neon', 'Ghost', 'Shadow', 'Golden', 'Mystic', 'Silver'];
+const NAME_GEN_SUFFIX = ['Fox', 'Wolf', 'Spark', 'Nova', 'Comet', 'Blaze', 'Storm', 'Star', 'Fang', 'Flare', 'Wisp', 'Shade', 'Bolt', 'Ranger', 'Drift', 'Ghost', 'Phoenix', 'Tiger', 'Falcon', 'Glow'];
+
+function generateCharacterName() {
+  const prefix = NAME_GEN_PREFIX[Math.floor(Math.random() * NAME_GEN_PREFIX.length)];
+  let suffix;
+  do { suffix = NAME_GEN_SUFFIX[Math.floor(Math.random() * NAME_GEN_SUFFIX.length)]; }
+  while (suffix === prefix);
+  return `${prefix} ${suffix}`;
+}
+
 /* ---------------------------------------------------------- navigation */
 
 function go(name) {
@@ -355,7 +376,7 @@ function renderGrid(packId) {
       // Every template now prints whatever name it's given (falling back to
       // "Friend" only when nothing was typed), so the browsing preview shows
       // an obvious placeholder rather than that generic fallback.
-      personalization: { name: 'Their Name', age: 7 },
+      personalization: { name: 'Name', age: 7 },
       foil: true,
     });
 
@@ -447,6 +468,11 @@ function buildPersonalizeUI() {
     get: () => S.personal.name,
     set: v => { S.personal.name = v; },
     onChange: refreshPersonalize,
+  });
+
+  $('#pz-gen-name').addEventListener('click', () => {
+    S.personal.name = generateCharacterName();
+    refreshPersonalize();
   });
 
   const pad = $('#pad');
@@ -766,17 +792,24 @@ function buildDecorateUI() {
     go('reveal');
   });
 
+  const refreshDecName = () => {
+    const el = $('#dec-name');
+    el.textContent = S.personal.name || '';
+    el.classList.toggle('is-empty', !S.personal.name);
+    buildSwatches();
+    drawDecorate();
+  };
+
   buildKeyboard($('#dec-kb'), {
     max: 18,
     get: () => S.personal.name,
     set: v => { S.personal.name = v; },
-    onChange: () => {
-      const el = $('#dec-name');
-      el.textContent = S.personal.name || '';
-      el.classList.toggle('is-empty', !S.personal.name);
-      buildSwatches();
-      drawDecorate();
-    },
+    onChange: refreshDecName,
+  });
+
+  $('#dec-gen-name').addEventListener('click', () => {
+    S.personal.name = generateCharacterName();
+    refreshDecName();
   });
 
   attachStickerGestures($('#dec-canvas'));

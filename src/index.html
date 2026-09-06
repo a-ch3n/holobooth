@@ -64,6 +64,7 @@
           <span>Name on the card</span>
           <output id="fld-name" class="fld-box" data-empty="Tap to type">&nbsp;</output>
         </label>
+        <button class="btn btn-ghost btn-sm" id="pz-gen-name" type="button">🎲 Surprise me</button>
 
         <div class="kb" id="kb"></div>
 
@@ -165,8 +166,9 @@
         </div>
 
         <div class="dec-pane" data-dpane="name" hidden>
-          <p class="pane-help">Name your card. Leave it blank and we'll print "Friend" instead.</p>
+          <p class="pane-help">Type your own name, or tap Surprise me for a generated one. Leave both blank and we'll print "Friend" instead.</p>
           <output id="dec-name" class="fld-box" data-empty="Tap to type">&nbsp;</output>
+          <button class="btn btn-ghost btn-sm" id="dec-gen-name" type="button">🎲 Surprise me</button>
           <div class="kb" id="dec-kb"></div>
         </div>
       </div>

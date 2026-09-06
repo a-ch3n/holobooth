@@ -189,7 +189,7 @@
     "printCollectorIdOnCard": true
   },
   "attract": {
-    "headline": "CHOOSE YOUR CREATURE. STRIKE A POSE.",
+    "headline": "CHOOSE YOUR CREATURE.",
     "sub": "Catch all {{count}} cards in the Base Set",
     "showRecentPulls": true,
     "showDropTimer": true

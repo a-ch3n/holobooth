@@ -55,6 +55,7 @@ body.debug { cursor: auto; }
 .btn:disabled { opacity: .35; box-shadow: none; }
 .btn-lg { font-size: 22px; padding: 22px 42px; }
 .btn-xl { font-size: 30px; padding: 30px 68px; letter-spacing: .04em; }
+.btn-sm { font-size: 15px; padding: 10px 20px; min-height: 40px; }
 .btn-ghost {
   background: transparent; color: var(--ink-dim);
   border: 2px solid var(--line); box-shadow: none;
