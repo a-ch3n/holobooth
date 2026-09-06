@@ -387,6 +387,25 @@ flow against Stripe's simulated reader before hardware arrives.
 
 ---
 
+## AI names
+
+The "Surprise me" button next to the name field (personalize screen, and the
+decorate screen's Name tab) asks `server/index.js` for a real AI-generated
+character name. The kiosk never holds the key — same reasoning as Stripe:
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-... npm run server
+```
+
+Without a key configured (or if the request errors, times out, or the server
+isn't running at all), the button silently falls back to a local, offline
+word-list generator instead — the feature never blocks the flow, it just gets
+less varied. Set `ai.enabled: false` in `booth.config.json` to skip the AI
+call entirely and always use the offline generator. `ai.timeoutMs` (default
+6000) controls how long the kiosk waits before giving up and falling back.
+
+---
+
 ## Printing
 
 Dye-subs are unforgiving about page geometry — if the page size doesn't match the

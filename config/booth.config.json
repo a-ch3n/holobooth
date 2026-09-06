@@ -109,6 +109,12 @@
     "tipEnabled": false,
     "taxRateBps": 0
   },
+  "ai": {
+    "//": "Real AI names for the 'Surprise me' button, via server/index.js (ANTHROPIC_API_KEY). Set enabled:false to always use the offline generator. If the server has no key configured, or doesn't answer within timeoutMs, the kiosk silently falls back to it anyway.",
+    "enabled": true,
+    "serverUrl": "http://127.0.0.1:4242",
+    "timeoutMs": 6000
+  },
   "payments": {
     "//": "provider: 'stripe-terminal' | 'stripe-qr' | 'mock'. Use 'mock' for development with no hardware.",
     "provider": "mock",
