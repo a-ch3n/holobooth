@@ -350,6 +350,17 @@ body.debug { cursor: auto; }
 }
 .fld-age { max-width: 200px; text-align: center; }
 
+/* Name suggestions — matches while typing, filed under the name field so it
+   never shifts anything below it once it appears/disappears. */
+.name-suggest { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.name-suggest .sugg {
+  background: var(--panel); border: 1px solid var(--line); color: var(--ink);
+  border-radius: 999px; padding: 8px 16px; font: 700 15px "Nunito", sans-serif;
+  cursor: pointer; transition: border-color .12s, transform .12s;
+}
+.name-suggest .sugg:active { transform: scale(.95); border-color: var(--accent); }
+.name-suggest .sugg b { color: var(--accent); }
+
 .kb { display: grid; gap: 8px; margin-bottom: 20px; }
 .kb-row { display: flex; gap: 8px; justify-content: center; }
 .key {
