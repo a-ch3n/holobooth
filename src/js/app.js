@@ -146,6 +146,37 @@ async function surpriseName(btn, theme) {
   }
 }
 
+/* -------------------------------------------------------- name suggest */
+
+/**
+ * Type-ahead suggestions for the name field, drawn from this set's own
+ * original creatures and promos rather than any outside character list —
+ * same reasoning as declining to source stickers from Pokémon-clipart sites
+ * earlier: this booth doesn't put someone else's trademarked names on a
+ * paid product. Built once, since the catalogue doesn't change at runtime.
+ */
+const SUGGESTED_NAMES = allFrames()
+  .filter(f => f.packId === 'basics' || f.promo)
+  .map(f => f.baseName)
+  .sort((a, b) => a.localeCompare(b));
+
+/** Show up to 5 names starting with what's typed so far; hide entirely once
+ *  the field is empty or already matches a suggestion exactly. */
+function renderNameSuggestions(host, query, onPick) {
+  const q = query.trim().toLowerCase();
+  const matches = q && !SUGGESTED_NAMES.some(n => n.toLowerCase() === q)
+    ? SUGGESTED_NAMES.filter(n => n.toLowerCase().startsWith(q)).slice(0, 5)
+    : [];
+  host.hidden = matches.length === 0;
+  host.innerHTML = matches.map(n =>
+    `<span class="sugg" data-name="${n}"><b>${n.slice(0, q.length)}</b>${n.slice(q.length)}</span>`
+  ).join('');
+  host.onclick = e => {
+    const name = e.target.closest('.sugg')?.dataset.name;
+    if (name) onPick(name);
+  };
+}
+
 /* ---------------------------------------------------------- navigation */
 
 function go(name) {
@@ -585,6 +616,10 @@ function refreshPersonalize() {
   const nameEl = $('#fld-name'), ageEl = $('#fld-age');
   nameEl.textContent = S.personal.name || '';
   nameEl.classList.toggle('is-empty', !S.personal.name);
+  renderNameSuggestions($('#pz-name-suggest'), S.personal.name, name => {
+    S.personal.name = name;
+    refreshPersonalize();
+  });
   ageEl.textContent = S.personal.age || '';
   ageEl.classList.toggle('is-empty', !S.personal.age);
 
@@ -852,6 +887,10 @@ function buildDecorateUI() {
     const el = $('#dec-name');
     el.textContent = S.personal.name || '';
     el.classList.toggle('is-empty', !S.personal.name);
+    renderNameSuggestions($('#dec-name-suggest'), S.personal.name, name => {
+      S.personal.name = name;
+      refreshDecName();
+    });
     buildSwatches();
     drawDecorate();
   };
