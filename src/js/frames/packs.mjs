@@ -1,5 +1,5 @@
 /**
- * packs.mjs — POCKET PALS, Base Set.
+ * packs.mjs — POCKET CREATURES, Base Set.
  *
  * One creature-collector set, generated from a compact creature table rather
  * than hand-authored per card. Adding a creature is four lines; the builder
@@ -46,7 +46,7 @@ const CREATURES = [
     flavor: 'It keeps a thin film of water across its skin and mists the air whenever it gets excited.',
     attacks: [
       { cost: ['wave'], name: 'Splash Pose', dmg: 10, text: 'Flip a coin. If heads, look effortlessly cool.' },
-      { cost: ['wave', 'wave'], name: 'Tidal Calm', dmg: 40, text: 'Heal 30 from every Pal in frame.' },
+      { cost: ['wave', 'wave'], name: 'Tidal Calm', dmg: 40, text: 'Heal 30 from every Creature in frame.' },
     ],
   },
   {
@@ -54,7 +54,7 @@ const CREATURES = [
     flavor: 'It grows a fresh bud every morning, and flowers quietly bloom on anyone who stays close.',
     attacks: [
       { cost: ['leaf'], name: 'Sprout', dmg: 20, text: 'Become slightly more photogenic.' },
-      { cost: ['leaf', 'plain'], name: 'Bloom Burst', dmg: 50, text: 'Put a flower on every Pal in the photo.' },
+      { cost: ['leaf', 'plain'], name: 'Bloom Burst', dmg: 50, text: 'Put a flower on every Creature in the photo.' },
     ],
   },
   {
@@ -87,7 +87,7 @@ const CREATURES = [
     flavor: 'It rides air currents most creatures cannot feel, circling just out of frame until the last second.',
     attacks: [
       { cost: ['gale'], name: 'Updraft', dmg: 20, text: 'Your hair does the thing it does in movies.' },
-      { cost: ['gale', 'plain'], name: 'Slipstream', dmg: 60, text: 'Switch places with a Pal on your bench.' },
+      { cost: ['gale', 'plain'], name: 'Slipstream', dmg: 60, text: 'Switch places with a Creature on your bench.' },
     ],
   },
   {
@@ -105,7 +105,7 @@ const CREATURES = [
     flavor: 'Made of concentrated warmth. Its Sparkle Field grows strongest at parties.',
     attacks: [
       { cost: ['radiant'], name: 'Twinkle', dmg: 20, text: 'Everything in frame gets 8% cuter.' },
-      { cost: ['radiant', 'radiant'], name: 'Starburst', dmg: 80, text: 'Heal 40 from every Pal you have ever printed.' },
+      { cost: ['radiant', 'radiant'], name: 'Starburst', dmg: 80, text: 'Heal 40 from every Creature you have ever printed.' },
     ],
   },
   {
@@ -146,7 +146,7 @@ const CREATURES = [
     flavor: 'Has no special powers, only an unmatched talent for squeezing into group photos at the last second.',
     attacks: [
       { cost: ['plain'], name: 'Tag Along', dmg: 10, text: 'Squeeze into the shot at the last second.' },
-      { cost: ['plain', 'plain'], name: 'Group Hug', dmg: 40, text: 'Heal 20 from every Pal in frame. Including the ones sulking.' },
+      { cost: ['plain', 'plain'], name: 'Group Hug', dmg: 40, text: 'Heal 20 from every Creature in frame. Including the ones sulking.' },
     ],
   },
 ];
@@ -307,7 +307,7 @@ function makeCard({
         retreat: variant === 'max' ? retreat + 1 : retreat,
       },
       maxRule: variant === 'max'
-        ? 'When your MAX Pal is knocked out, your opponent keeps two of your photos.'
+        ? 'When your MAX Creature is knocked out, your opponent keeps two of your photos.'
         : null,
     },
     ...extra,
@@ -318,11 +318,12 @@ function makeCard({
 
 const byName = {};
 
-/** The Pokédex-style header every entry opens with — "NAME, the Type Pal."
- *  — built from the card's own name/type rather than typed per-entry, so a
- *  renamed or retyped creature can never leave a stale header behind. */
+/** The Pokédex-style header every entry opens with — "NAME, the Type
+ *  Creature." — built from the card's own name/type rather than typed
+ *  per-entry, so a renamed or retyped creature can never leave a stale
+ *  header behind. */
 function pokedexEntry(name, typeId, body) {
-  return `${name.toUpperCase()}, the ${energy(typeId).name} Pal. ${body}`;
+  return `${name.toUpperCase()}, the ${energy(typeId).name} Creature. ${body}`;
 }
 
 for (const c of CREATURES) {
@@ -533,7 +534,7 @@ const PACK_META = [
   { id: 'cutie',   name: 'Cutie Club',     tagline: 'Pastel, scalloped and soft — with a buddy peeking out', order: 2 },
   { id: 'strips',  name: 'Photo Strips',   tagline: 'The classic four-frame strip, themed and stickerable', order: 3 },
   { id: 'promo',   name: 'Limited Promos', tagline: 'Hand-drawn guests. Here for a fortnight, then gone.', order: 5,  limited: true },
-  { id: 'basics',  name: 'Basics',         tagline: 'One Pal for every energy type — where a collection starts', order: 10 },
+  { id: 'basics',  name: 'Basics',         tagline: 'One Creature for every energy type — where a collection starts', order: 10 },
   { id: 'max',     name: 'MAX Cards',      tagline: 'Oversized HP, silver frame, damage that ends the game',    order: 30 },
   { id: 'fullart', name: 'Full Art',       tagline: 'Dark metallic frame, text floating below your photo',      order: 40 },
   { id: 'secret',  name: 'Secret Rare',    tagline: 'Rainbow foil, numbered past the end of the set',           order: 60 },
@@ -541,7 +542,7 @@ const PACK_META = [
 
 export const SET = {
   id: 'PP-BASE',
-  name: 'Pocket Pals — Base Set',
+  name: 'Pocket Creatures — Base Set',
   size: SET_SIZE,
   total: FRAMES.length,
   types: ENERGY_IDS.length,
