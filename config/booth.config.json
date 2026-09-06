@@ -53,7 +53,7 @@
     "products": [
       {
         "id": "single_card",
-        "name": "1 Pal Card",
+        "name": "1 Creature Card",
         "blurb": "One printed creature card + digital copy",
         "amount": 700,
         "prints": {
@@ -66,7 +66,7 @@
       },
       {
         "id": "card_plus_strip",
-        "name": "Pal + Photo Strip",
+        "name": "Creature + Photo Strip",
         "blurb": "Creature card, classic 2x6 strip, GIF + downloads",
         "amount": 1200,
         "prints": {
@@ -80,7 +80,7 @@
       },
       {
         "id": "booster_pack",
-        "name": "Booster Pack \u2014 3 Pals",
+        "name": "Booster Pack \u2014 3 Creatures",
         "blurb": "Three cards, guaranteed at least one Rare or better",
         "amount": 2000,
         "prints": {
@@ -183,13 +183,13 @@
   "collection": {
     "enabled": true,
     "seasonId": "PPB-2026",
-    "seasonName": "Pocket Pals \u2014 Base Set",
+    "seasonName": "Pocket Creatures \u2014 Base Set",
     "dexUrl": "http://127.0.0.1:4242/dex",
     "identifyBy": "phone",
     "printCollectorIdOnCard": true
   },
   "attract": {
-    "headline": "CHOOSE YOUR PAL. STRIKE A POSE.",
+    "headline": "CHOOSE YOUR CREATURE. STRIKE A POSE.",
     "sub": "Catch all {{count}} cards in the Base Set",
     "showRecentPulls": true,
     "showDropTimer": true

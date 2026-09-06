@@ -1,8 +1,8 @@
-# HoloBooth — Pocket Pals
+# HoloBooth — Pocket Creatures
 
 A photobooth that prints **collectible creature cards**.
 
-The customer picks a Pal, strikes a pose, pays by tap, and walks away with a
+The customer picks a Creature, strikes a pose, pays by tap, and walks away with a
 printed trading card: their photo in the art window, a type-coloured frame, HP
 and attacks, a weakness/resistance footer, a collector number, and a rarity tier
 with a foil treatment they can see from across the room.
@@ -40,12 +40,12 @@ node tools/build-gallery.mjs                  # self-contained HTML set gallery
 
 ## The set
 
-**Pocket Pals — Base Set** (`PP-BASE`): 23 cards in the set, plus 3 secret rares
+**Pocket Creatures — Base Set** (`PP-BASE`): 23 cards in the set, plus 3 secret rares
 numbered past the end of it and 2 limited promos. 28 cards total.
 
 | Class | Count | What it is |
 |---|---|---|
-| Basics | 14 | One Pal per energy type — where a collection starts |
+| Basics | 14 | One Creature per energy type — where a collection starts |
 | MAX Cards | 5 | Silver two-tone frame, ~1.9× HP, ~1.6× damage. The chase card. |
 | Full Art | 4 | Dark metallic frame, text floating below the photo window |
 | Secret Rare | 3 | Full art + rainbow foil, numbered `024/023` and up |
@@ -257,7 +257,7 @@ same name, age and mascot as the cards from that event.
 
 ---
 
-## Adding a Pal
+## Adding a Creature
 
 Append to `CREATURES` in `src/js/frames/packs.mjs`:
 
@@ -267,7 +267,7 @@ Append to `CREATURES` in `src/js/frames/packs.mjs`:
   flavor: 'Warms up the booth by three degrees just by being in it.',
   attacks: [
     { cost: ['plain'], name: 'Cozy Up', dmg: 20, text: 'Everyone leans in.' },
-    { cost: ['plain', 'plain'], name: 'Marshmallow', dmg: 50, text: 'Heal 20 from every Pal in frame.' },
+    { cost: ['plain', 'plain'], name: 'Marshmallow', dmg: 50, text: 'Heal 20 from every Creature in frame.' },
   ],
 }
 ```

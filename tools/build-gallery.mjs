@@ -104,7 +104,7 @@ const ladder = RARITY_ORDER.map(id => {
     </figure>`;
 }).join('');
 
-const html = `<title>Pocket Pals Base Set</title>
+const html = `<title>Pocket Creatures Base Set</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Public+Sans:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap">
@@ -247,10 +247,10 @@ footer .wrap{display:flex; justify-content:space-between; gap:20px; flex-wrap:wr
 <header class="top">
   <div class="wrap">
     <div class="eyebrow"><s></s> ${esc(SET.id)} · base set · ${frames.length} cards</div>
-    <h1>Every Pal a customer can <em>pull</em> from the booth.</h1>
+    <h1>Every Creature a customer can <em>pull</em> from the booth.</h1>
     <p class="lede">
       One creature-card set built for a photobooth: fourteen energy types,
-      evolution lines, MAX cards, full arts and rainbow secrets numbered past
+      MAX cards, full arts and rainbow secrets numbered past
       the end of the set. Every card is rendered by the same engine that draws
       the picker on the touchscreen and the 300&nbsp;dpi master that goes to the
       printer, so nothing can look one way on screen and another in your hand.
@@ -272,7 +272,7 @@ footer .wrap{display:flex; justify-content:space-between; gap:20px; flex-wrap:wr
     <section class="types-sec">
       <h2>Fourteen energy types</h2>
       <p style="color:var(--ink-2);max-width:62ch;margin:10px 0 0">
-        A Pal's type decides its palette, its attack costs and where it sits in
+        A Creature's type decides its palette, its attack costs and where it sits in
         the weakness chart — which is why adding a creature is four lines of
         JSON, not a design job. Every symbol is drawn as a path, never a font
         character, so a card can't print a tofu box where its element should be.
@@ -302,7 +302,7 @@ footer .wrap{display:flex; justify-content:space-between; gap:20px; flex-wrap:wr
         job is accepted, so a jammed printer becomes a void rather than a refund
         request.</p>
         <ol class="flow">
-          <li><dt>Pick</dt><dd>A Pal, a Party card, or a pastel Cutie card</dd></li>
+          <li><dt>Pick</dt><dd>A Creature, a Party card, or a pastel Cutie card</dd></li>
           <li><dt>Personalise</dt><dd>Name, age and a buddy, typed on the touchscreen — party cards only</dd></li>
           <li><dt>Pay</dt><dd>Tap on a Stripe Terminal reader, or scan to pay by phone</dd></li>
           <li><dt>Shoot</dt><dd>Four frames off the camera's HDMI feed, plus a burst for the GIF</dd></li>

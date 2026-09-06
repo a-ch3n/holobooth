@@ -2,7 +2,7 @@
  * templates.mjs — the three creature-card layouts, plus the photo strip.
  *
  * Templates own layout. The catalogue owns colour, copy and stats, and colour
- * comes from the card's energy type — so a new Pal is a JSON entry, never a
+ * comes from the card's energy type — so a new Creature is a JSON entry, never a
  * design job.
  *
  * All coordinates derive from W/H, so the same code renders a 250px picker
@@ -258,7 +258,7 @@ function abilityBox(ctx, ability, x, y, w, W, H, t, onDark = false) {
 /**
  * How tall the ability + attacks block will be. Measured rather than guessed,
  * so the body can be centred in the space between the art and the flavour
- * text — otherwise a Pal with one attack leaves a third of the card empty.
+ * text — otherwise a Creature with one attack leaves a third of the card empty.
  */
 function measureBody(ctx, c, w, W, H, t, { scale = 1, maxAttacks = 99 } = {}) {
   let h = 0;
@@ -492,7 +492,7 @@ export function creatureMax(ctx, o) {
   ctx.save();
   ctx.fillStyle = 'rgba(26,29,36,.55)';
   ctx.font = font(700, W * 0.020, t.fontBody);
-  ctx.fillText('MAX Pal', ix, nameY + H * 0.020);
+  ctx.fillText('MAX Creature', ix, nameY + H * 0.020);
   ctx.restore();
 
   /* ---- art window (same rect as every other card type), with a burst behind it */
