@@ -391,10 +391,15 @@ flow against Stripe's simulated reader before hardware arrives.
 
 The "Surprise me" button next to the name field (personalize screen, and the
 decorate screen's Name tab) asks `server/index.js` for a real AI-generated
-character name. The kiosk never holds the key — same reasoning as Stripe:
+character name, via **Google's Gemini API** — chosen because its free tier
+needs no credit card and costs nothing to run at an event. The kiosk never
+holds the key — same reasoning as Stripe:
+
+1. Grab a free key from [Google AI Studio](https://aistudio.google.com/apikey).
+2. Run the server with it set:
 
 ```bash
-ANTHROPIC_API_KEY=sk-ant-... npm run server
+GEMINI_API_KEY=AIza... npm run server
 ```
 
 Without a key configured (or if the request errors, times out, or the server
@@ -403,6 +408,9 @@ word-list generator instead — the feature never blocks the flow, it just gets
 less varied. Set `ai.enabled: false` in `booth.config.json` to skip the AI
 call entirely and always use the offline generator. `ai.timeoutMs` (default
 6000) controls how long the kiosk waits before giving up and falling back.
+`GEMINI_MODEL` (default `gemini-3.5-flash`) picks the model — check
+[the current model list](https://ai.google.dev/gemini-api/docs/pricing) if
+the default one is ever retired.
 
 ---
 
