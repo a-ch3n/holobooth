@@ -2,7 +2,7 @@
  * HoloBooth local server.
  *
  * Runs on the booth PC (or a small VPS if you want the download links to work
- * off the venue's network). Two responsibilities:
+ * off the venue's network). Three responsibilities:
  *
  *   1. Hold the Stripe secret key. The kiosk UI never sees it — it only asks
  *      this server to create and drive PaymentIntents. That is the difference
@@ -10,8 +10,10 @@
  *   2. Serve the customer-facing bits: the QR download page, the GIF/photo
  *      files, and the season "dex" that shows which frames someone has
  *      collected.
+ *   3. Hold the Anthropic API key for the "Surprise me" name generator, same
+ *      reasoning as Stripe — a browser-executed secret is a published secret.
  *
- *   STRIPE_SECRET_KEY=sk_test_... node server/index.js
+ *   STRIPE_SECRET_KEY=sk_test_... ANTHROPIC_API_KEY=sk-ant-... node server/index.js
  */
 const express = require('express');
 const cors = require('cors');
@@ -29,6 +31,9 @@ const stripe = process.env.STRIPE_SECRET_KEY
   ? require('stripe')(process.env.STRIPE_SECRET_KEY)
   : null;
 
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || null;
+const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
+
 fs.mkdirSync(MEDIA_DIR, { recursive: true });
 
 const app = express();
@@ -40,10 +45,61 @@ app.use(express.json({ limit: '40mb' }));
 app.get('/health', (_req, res) => res.json({
   ok: true,
   stripe: !!stripe,
+  ai: !!ANTHROPIC_API_KEY,
   provider: CONFIG.payments?.provider,
   season: CONFIG.collection?.seasonId,
   uptime: process.uptime(),
 }));
+
+/* ========================================================= ai name gen */
+
+/**
+ * "Surprise me" character names. The kiosk's own word-list generator is the
+ * default and the fallback — this only makes the result more varied when a
+ * key is configured and the venue's connection answers in time. Never
+ * required for the booth to work.
+ */
+app.post('/ai/name', async (req, res) => {
+  if (!ANTHROPIC_API_KEY) {
+    return res.status(503).json({ error: 'ANTHROPIC_API_KEY is not set on the server.' });
+  }
+  const theme = String(req.body?.theme || '').replace(/[^a-z ]/gi, '').slice(0, 40);
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 8000);
+  try {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      signal: ac.signal,
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: ANTHROPIC_MODEL,
+        max_tokens: 20,
+        messages: [{
+          role: 'user',
+          content: 'Invent one short, fun two-word trading-card character alias'
+            + (theme ? ` with a ${theme} energy vibe` : '')
+            + '. Style: a superhero nickname, e.g. "Blaze Fox" or "Cosmic Drift". '
+            + 'Reply with ONLY the two words — no quotes, no punctuation, no explanation.',
+        }],
+      }),
+    });
+    if (!r.ok) throw new Error(`Anthropic API ${r.status}`);
+    const data = await r.json();
+    const raw = (data.content || []).map(b => b.text || '').join('');
+    const words = raw.replace(/[^a-zA-Z' -]/g, '').trim().split(/\s+/).filter(Boolean).slice(0, 2);
+    const name = words.join(' ').slice(0, 24);
+    if (!name) throw new Error('empty response');
+    res.json({ name });
+  } catch (e) {
+    res.status(502).json({ error: e.name === 'AbortError' ? 'timed out' : e.message });
+  } finally {
+    clearTimeout(timer);
+  }
+});
 
 /* ====================================================== stripe terminal */
 

@@ -73,12 +73,13 @@ function oddsBreakdownHtml(odds) {
 /* ------------------------------------------------------ name generator */
 
 /**
- * "Surprise me" is a local, offline generator — no network call, no API key,
- * so it works identically at a venue with no signal as it does anywhere
- * else, and never adds latency or a point of failure to the kiosk flow.
- * Every prefix/suffix pair is kept to 14 characters or under (the tightest
- * of the two name fields' own limits), so a generated name is guaranteed to
- * fit without truncating wherever it lands.
+ * "Surprise me" tries the real AI generator first (server/index.js holds the
+ * Anthropic key — the kiosk never sees it, same reasoning as Stripe) and
+ * falls back to this local word-list generator whenever that isn't
+ * configured, isn't reachable, or doesn't answer in time. Every
+ * prefix/suffix pair is kept to 14 characters or under (the tightest of the
+ * two name fields' own limits), so the fallback always fits without
+ * truncating wherever it lands.
  */
 const NAME_GEN_PREFIX = ['Blaze', 'Nova', 'Echo', 'Storm', 'Frost', 'Comet', 'Ember', 'Rogue', 'Turbo', 'Lucky', 'Cosmic', 'Wild', 'Neon', 'Ghost', 'Shadow', 'Golden', 'Mystic', 'Silver'];
 const NAME_GEN_SUFFIX = ['Fox', 'Wolf', 'Spark', 'Nova', 'Comet', 'Blaze', 'Storm', 'Star', 'Fang', 'Flare', 'Wisp', 'Shade', 'Bolt', 'Ranger', 'Drift', 'Ghost', 'Phoenix', 'Tiger', 'Falcon', 'Glow'];
@@ -89,6 +90,60 @@ function generateCharacterName() {
   do { suffix = NAME_GEN_SUFFIX[Math.floor(Math.random() * NAME_GEN_SUFFIX.length)]; }
   while (suffix === prefix);
   return `${prefix} ${suffix}`;
+}
+
+/** Keep whatever the AI (or anything else) hands back inside the same shape
+ *  a typed name has to obey: letters/apostrophes/hyphens, at most two words,
+ *  14 characters — so it can never be the thing that breaks a card layout. */
+function sanitizeGeneratedName(raw) {
+  const words = String(raw || '')
+    .replace(/[^a-zA-Z' -]/g, '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2);
+  const name = words.join(' ').slice(0, 14).trim();
+  return name || null;
+}
+
+/**
+ * Ask the local server for a real AI-generated name; give up (and hand back
+ * null) on any error, timeout, or disabled config so the caller can fall
+ * back to generateCharacterName() without the button ever visibly failing.
+ */
+async function aiCharacterName(theme) {
+  const ai = S.cfg?.ai;
+  if (!ai?.enabled || !ai?.serverUrl) return null;
+  try {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), ai.timeoutMs || 6000);
+    const res = await fetch(`${ai.serverUrl}/ai/name`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ theme: theme || '' }),
+      signal: ac.signal,
+    });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    const { name } = await res.json();
+    return sanitizeGeneratedName(name);
+  } catch {
+    return null;
+  }
+}
+
+/** Surprise-me for either name field: try AI, fall back to the offline
+ *  generator, and give the button a brief busy state while it waits. */
+async function surpriseName(btn, theme) {
+  btn.disabled = true;
+  const label = btn.textContent;
+  btn.textContent = 'Generating…';
+  try {
+    return (await aiCharacterName(theme)) || generateCharacterName();
+  } finally {
+    btn.textContent = label;
+    btn.disabled = false;
+  }
 }
 
 /* ---------------------------------------------------------- navigation */
@@ -470,8 +525,9 @@ function buildPersonalizeUI() {
     onChange: refreshPersonalize,
   });
 
-  $('#pz-gen-name').addEventListener('click', () => {
-    S.personal.name = generateCharacterName();
+  $('#pz-gen-name').addEventListener('click', async e => {
+    const theme = energy(lookupFrame(S.frameId)?.energyType)?.name;
+    S.personal.name = await surpriseName(e.currentTarget, theme);
     refreshPersonalize();
   });
 
@@ -807,8 +863,9 @@ function buildDecorateUI() {
     onChange: refreshDecName,
   });
 
-  $('#dec-gen-name').addEventListener('click', () => {
-    S.personal.name = generateCharacterName();
+  $('#dec-gen-name').addEventListener('click', async e => {
+    const theme = energy(lookupFrame(S.frameId)?.energyType)?.name;
+    S.personal.name = await surpriseName(e.currentTarget, theme);
     refreshDecName();
   });
 
