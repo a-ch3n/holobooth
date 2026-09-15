@@ -31,7 +31,25 @@
     },
     "mirrorPreview": true,
     "cropToPortrait": true,
-    "warmupMs": 1200
+    "warmupMs": 1200,
+    "angles": {
+      "//": "Optional: two (or more) capture cards, one per physical camera. When 2+ entries are listed here, the customer picks one on a screen shown right after paying, before the shoot starts. Each entry's preferredLabels/excludeLabels/constraints override the defaults above for that angle only — fields left out fall back to the defaults. Leave this as a single entry (or remove it) to skip the picker and keep the single-camera flow exactly as it was.",
+      "list": [
+        {
+          "id": "standard",
+          "label": "Standard",
+          "sub": "Eye level",
+          "icon": "📷"
+        },
+        {
+          "id": "high",
+          "label": "High Angle",
+          "sub": "Overhead",
+          "icon": "🔝",
+          "preferredLabels": ["High Angle", "Overhead", "Top Cam"]
+        }
+      ]
+    }
   },
   "capture": {
     "countdownSeconds": 5,
