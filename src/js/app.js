@@ -41,6 +41,7 @@ const S = {
   downloadUrl: null,
   retakes: 0,
   camera: null,
+  cameraAngle: null,
   pay: null,
   idleTimer: null,
   adminTaps: 0,
@@ -272,6 +273,7 @@ ON_ENTER.attract = async () => {
   S.stickers = [];
   S.artWindow = null;
   S.previewCard = null;
+  S.cameraAngle = null;
   S.camera?.stop();
 
   const live = pickerGroups();
@@ -739,7 +741,33 @@ ON_ENTER.pay = async () => {
     frameId: S.frameId, paymentId: res.paymentId, method: res.method,
     brand: res.brand, last4: res.last4, boothId: S.cfg.booth.id,
   });
-  go('capture');
+  // Two physical cameras (e.g. a second, high-angle capture card) means a
+  // choice to make before the shoot; one camera means there's nothing to
+  // ask, so the flow skips straight to capture exactly as it always did.
+  go(cameraAngles().length >= 2 ? 'angle' : 'capture');
+};
+
+/** Configured camera angles, or [] if only the single default camera is set up. */
+function cameraAngles() {
+  return S.cfg.camera?.angles?.list || [];
+}
+
+/* --------------------------------------------------------- camera angle */
+
+ON_ENTER.angle = () => {
+  const host = $('#angle-options');
+  host.innerHTML = cameraAngles().map(a => `
+    <div class="angle-option${a.id === S.cameraAngle ? ' on' : ''}" data-angle="${a.id}">
+      <div class="ic">${a.icon || '📷'}</div>
+      <div class="lbl">${a.label}</div>
+      ${a.sub ? `<div class="sub">${a.sub}</div>` : ''}
+    </div>`).join('');
+  host.onclick = e => {
+    const id = e.target.closest('.angle-option')?.dataset.angle;
+    if (!id) return;
+    S.cameraAngle = id;
+    go('capture');
+  };
 };
 
 /* ------------------------------------------------------------- capture */
@@ -750,6 +778,18 @@ ON_ENTER.capture = async () => {
     $('#cam-status').textContent = s.message;
     if (s.level === 'error') toast(s.message, true);
   };
+
+  // The chosen angle's own preferredLabels/excludeLabels/constraints (if any)
+  // point pickDevice() at that physical camera instead of the default one;
+  // anything the angle doesn't override just falls back to booth.config.json.
+  const angle = cameraAngles().find(a => a.id === S.cameraAngle);
+  const base = S.cfg.camera;
+  cam.cfg.preferredLabels = angle?.preferredLabels || base.preferredLabels;
+  cam.cfg.excludeLabels = angle?.excludeLabels || base.excludeLabels;
+  cam.cfg.constraints = angle?.constraints || base.constraints;
+  // A different physical camera has its own device list; re-enumerate rather
+  // than trust whatever was cached from the last angle picked this session.
+  cam.devices = [];
 
   try {
     await cam.start($('#preview'));

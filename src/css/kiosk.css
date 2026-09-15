@@ -200,6 +200,21 @@ body.debug { cursor: auto; }
 .reader-icon { font-size: 78px; color: var(--accent-2); position: relative; }
 .pay-status { font-size: 21px; font-weight: 700; min-height: 30px; margin-bottom: 26px; }
 .pay-status.err { color: var(--bad); }
+
+/* -------------------------------------------------------- camera angle */
+.angle-card { text-align: center; max-width: 640px; width: 100%; }
+.angle-card h2 { font-size: 32px; margin: 0 0 28px; }
+.angle-options { display: flex; gap: 20px; justify-content: center; flex-wrap: wrap; }
+.angle-option {
+  background: var(--panel); border: 2px solid var(--line); border-radius: var(--radius);
+  padding: 36px 40px; cursor: pointer; min-width: 220px;
+  transition: border-color .15s, transform .15s;
+}
+.angle-option:active { transform: scale(.97); }
+.angle-option.on { border-color: var(--accent); box-shadow: 0 0 0 4px rgba(255,215,110,.15); }
+.angle-option .ic { font-size: 44px; margin-bottom: 14px; }
+.angle-option .lbl { font-size: 22px; font-weight: 800; }
+.angle-option .sub { color: var(--ink-dim); font-size: 14px; margin-top: 4px; }
 .qr { width: 260px; border-radius: 16px; background: #fff; padding: 12px; margin-bottom: 22px; }
 
 /* ------------------------------------------------------------- capture */
