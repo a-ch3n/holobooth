@@ -39,7 +39,12 @@ if (!process.env.STRIPE_SECRET_KEY) {
   console.error('Set STRIPE_SECRET_KEY first, e.g.:\n  STRIPE_SECRET_KEY=sk_test_... node tools/stripe-sync-catalog.mjs');
   process.exit(1);
 }
-const stripe = (await import('stripe')).default(process.env.STRIPE_SECRET_KEY);
+const Stripe = (await import('stripe')).default;
+// The SDK's default Node client uses the raw `https` module and ignores
+// HTTP(S)_PROXY, which breaks it behind an env-configured proxy (common in
+// sandboxes/CI). The fetch-based client honors it via Node's env-proxy
+// support (Node >= 22.21, run with NODE_USE_ENV_PROXY=1).
+const stripe = Stripe(process.env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient() });
 
 const config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
 const currency = config.booth?.currency || 'usd';
