@@ -1392,6 +1392,66 @@ async function retake() {
 
 /* --------------------------------------------------------------- print */
 
+/**
+ * Most dye-subs (DNP DS40 included) only load 4x6 media, so a lone
+ * 2.5x3.5 card can't be sent as its own page — the printer has nothing
+ * that size loaded. Tile copies of the card master onto printing.sheet-
+ * sized pages instead, with hairline cut marks at each card boundary so
+ * the operator trims them apart. Returns one canvas per physical sheet
+ * needed (the last one may be partly blank if count doesn't divide evenly).
+ */
+function buildCardSheets(cardCanvas, count, printing) {
+  const { sheet, card } = printing;
+  const dpi = cardCanvas.width / card.widthIn;
+  const cardW = cardCanvas.width, cardH = cardCanvas.height;
+  const cols = Math.max(1, Math.floor(sheet.widthIn / card.widthIn));
+  const rows = Math.max(1, Math.floor(sheet.heightIn / card.heightIn));
+  const perSheet = cols * rows;
+  const sheetW = Math.round(sheet.widthIn * dpi);
+  const sheetH = Math.round(sheet.heightIn * dpi);
+  const marginX = (sheetW - cols * cardW) / 2;
+  const marginY = (sheetH - rows * cardH) / 2;
+
+  const sheets = [];
+  for (let remaining = count; remaining > 0; remaining -= perSheet) {
+    const canvas = document.createElement('canvas');
+    canvas.width = sheetW; canvas.height = sheetH;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, sheetW, sheetH);
+    const onThisSheet = Math.min(perSheet, remaining);
+    for (let i = 0; i < onThisSheet; i++) {
+      const x = marginX + (i % cols) * cardW;
+      const y = marginY + Math.floor(i / cols) * cardH;
+      ctx.drawImage(cardCanvas, x, y);
+    }
+    if (sheet.cutMarks) drawSheetCutMarks(ctx, sheetW, sheetH, marginX, marginY, cardW, cardH, cols, rows);
+    sheets.push(canvas);
+  }
+  return sheets;
+}
+
+/** Tick marks at each card boundary, drawn out to the sheet's own edges — a straightedge guide, not a border. */
+function drawSheetCutMarks(ctx, sheetW, sheetH, marginX, marginY, cardW, cardH, cols, rows) {
+  const tick = Math.round(sheetW * 0.02);
+  ctx.save();
+  ctx.strokeStyle = '#c4c4c4';
+  ctx.lineWidth = Math.max(1, Math.round(sheetW / 1000));
+  ctx.beginPath();
+  for (let c = 0; c <= cols; c++) {
+    const x = marginX + c * cardW;
+    ctx.moveTo(x, 0); ctx.lineTo(x, tick);
+    ctx.moveTo(x, sheetH - tick); ctx.lineTo(x, sheetH);
+  }
+  for (let r = 0; r <= rows; r++) {
+    const y = marginY + r * cardH;
+    ctx.moveTo(0, y); ctx.lineTo(tick, y);
+    ctx.moveTo(sheetW - tick, y); ctx.lineTo(sheetW, y);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
 async function doPrint() {
   const btn = $('#btn-print');
   btn.disabled = true;
@@ -1403,15 +1463,27 @@ async function doPrint() {
       st.textContent = `Printing ${S.product.prints.card} card${S.product.prints.card > 1 ? 's' : ''}…`;
       const cardIsStrip = isStrip(lookupFrame(S.frameId));
       const geo = cardIsStrip ? p.strip : p.card;
-      const r = await window.booth.printers.print({
-        // JPEG, not PNG: the Pi wraps this straight into a PDF via /DCTDecode
-        // to get exact physical sizing out of CUPS, and dye-sub is continuous
-        // tone anyway so q95 is indistinguishable from lossless on paper.
-        dataUrl: S.cardCanvas.toDataURL('image/jpeg', 0.95),
-        widthIn: geo.widthIn, heightIn: geo.heightIn,
-        printerName: p.cardPrinterName, copies: S.product.prints.card, silent: p.silent,
-      });
-      if (!r.ok) throw new Error(r.reason || 'Card print was rejected');
+
+      if (!cardIsStrip && p.sheet?.enabled) {
+        for (const sheetCanvas of buildCardSheets(S.cardCanvas, S.product.prints.card, p)) {
+          const r = await window.booth.printers.print({
+            dataUrl: sheetCanvas.toDataURL('image/jpeg', 0.95),
+            widthIn: p.sheet.widthIn, heightIn: p.sheet.heightIn,
+            printerName: p.cardPrinterName, copies: 1, silent: p.silent,
+          });
+          if (!r.ok) throw new Error(r.reason || 'Card sheet print was rejected');
+        }
+      } else {
+        const r = await window.booth.printers.print({
+          // JPEG, not PNG: the Pi wraps this straight into a PDF via /DCTDecode
+          // to get exact physical sizing out of CUPS, and dye-sub is continuous
+          // tone anyway so q95 is indistinguishable from lossless on paper.
+          dataUrl: S.cardCanvas.toDataURL('image/jpeg', 0.95),
+          widthIn: geo.widthIn, heightIn: geo.heightIn,
+          printerName: p.cardPrinterName, copies: S.product.prints.card, silent: p.silent,
+        });
+        if (!r.ok) throw new Error(r.reason || 'Card print was rejected');
+      }
     }
 
     if (S.product.prints.strip && S.stripCanvas) {

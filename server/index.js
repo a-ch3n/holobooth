@@ -28,10 +28,34 @@ const CONFIG = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'config', '
 const PORT = Number(process.env.PORT || 4242);
 const MEDIA_DIR = process.env.MEDIA_DIR || path.join(__dirname, '..', 'out', 'media');
 const RETENTION_DAYS = CONFIG.delivery?.retentionDays || 30;
+const PRODUCTS_BY_ID = new Map((CONFIG.pricing?.products || []).map(p => [p.id, p]));
 
 const stripe = process.env.STRIPE_SECRET_KEY
   ? require('stripe')(process.env.STRIPE_SECRET_KEY)
   : null;
+
+/**
+ * Stripe product/price ids from `npm run stripe:sync` (tools/stripe-sync-catalog.mjs).
+ * Optional: the QR checkout falls back to an inline price_data line item
+ * when this hasn't been run yet, so a fresh clone still works end to end.
+ */
+const CATALOG_PATH = path.join(__dirname, '..', 'out', 'stripe-catalog.json');
+let STRIPE_CATALOG = {};
+try { STRIPE_CATALOG = JSON.parse(fs.readFileSync(CATALOG_PATH, 'utf8')); } catch { /* not synced yet */ }
+
+/**
+ * The price a customer pays comes from booth.config.json, never from the
+ * request body — the kiosk sends a productId, and this is the only place
+ * that turns it into an amount, so a tampered client can't discount itself.
+ */
+function requireProduct(req, res) {
+  const product = PRODUCTS_BY_ID.get(req.body?.productId);
+  if (!product) {
+    res.status(400).json({ error: `Unknown productId: ${req.body?.productId}` });
+    return null;
+  }
+  return product;
+}
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || null;
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash';
@@ -47,6 +71,7 @@ app.use(express.json({ limit: '40mb' }));
 app.get('/health', (_req, res) => res.json({
   ok: true,
   stripe: !!stripe,
+  stripeCatalogSynced: Object.keys(STRIPE_CATALOG).length,
   ai: !!GEMINI_API_KEY,
   provider: CONFIG.payments?.provider,
   season: CONFIG.collection?.seasonId,
@@ -137,10 +162,16 @@ app.get('/terminal/readers', async (_req, res) => {
 
 app.post('/terminal/payment_intent', async (req, res) => {
   if (!requireStripe(res)) return;
-  const { amount, currency = 'usd', description, metadata = {} } = req.body;
+  const product = requireProduct(req, res);
+  if (!product) return;
+  const { metadata = {} } = req.body;
+  const currency = CONFIG.booth?.currency || 'usd';
   try {
     const pi = await stripe.paymentIntents.create({
-      amount, currency, description, metadata,
+      amount: product.amount,
+      currency,
+      description: `${product.name} — HoloBooth`,
+      metadata: { productId: product.id, ...metadata },
       payment_method_types: ['card_present'],
       capture_method: 'manual', // capture only once the print actually succeeds
     });
@@ -202,19 +233,27 @@ const sessions = new Map();
 
 app.post('/checkout/session', async (req, res) => {
   if (!requireStripe(res)) return;
-  const { amount, productId, meta } = req.body;
+  const product = requireProduct(req, res);
+  if (!product) return;
+  const { meta } = req.body;
+  const cataloged = STRIPE_CATALOG[product.id];
   try {
     const s = await stripe.checkout.sessions.create({
       mode: 'payment',
-      line_items: [{
-        price_data: {
-          currency: CONFIG.booth?.currency || 'usd',
-          product_data: { name: `HoloBooth — ${productId}` },
-          unit_amount: amount,
-        },
-        quantity: 1,
-      }],
-      metadata: { productId, ...meta },
+      // Prefer the synced catalog Price so the sale shows up in Stripe
+      // against a real Product (see tools/stripe-sync-catalog.mjs); fall
+      // back to an inline line item if `npm run stripe:sync` hasn't run yet.
+      line_items: [cataloged
+        ? { price: cataloged.stripePriceId, quantity: 1 }
+        : {
+            price_data: {
+              currency: CONFIG.booth?.currency || 'usd',
+              product_data: { name: `HoloBooth — ${product.name}` },
+              unit_amount: product.amount,
+            },
+            quantity: 1,
+          }],
+      metadata: { productId: product.id, ...meta },
       success_url: `${req.protocol}://${req.get('host')}/checkout/done`,
       cancel_url: `${req.protocol}://${req.get('host')}/checkout/done`,
     });
@@ -325,6 +364,7 @@ setInterval(() => {
 
 app.listen(PORT, () => {
   console.log(`HoloBooth server on http://127.0.0.1:${PORT}`);
-  console.log(`  stripe: ${stripe ? 'configured' : 'NOT configured (set STRIPE_SECRET_KEY)'}`);
-  console.log(`  media:  ${MEDIA_DIR}`);
+  console.log(`  stripe:  ${stripe ? 'configured' : 'NOT configured (set STRIPE_SECRET_KEY)'}`);
+  console.log(`  catalog: ${Object.keys(STRIPE_CATALOG).length ? `${Object.keys(STRIPE_CATALOG).length} products synced` : 'not synced — run `npm run stripe:sync`'}`);
+  console.log(`  media:   ${MEDIA_DIR}`);
 });

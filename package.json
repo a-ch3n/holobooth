@@ -8,6 +8,7 @@
     "start": "electron .",
     "dev": "cross-env HOLOBOOTH_DEV=1 electron .",
     "server": "node server/index.js",
+    "stripe:sync": "node tools/stripe-sync-catalog.mjs",
     "render": "node tools/render-all.mjs",
     "gallery": "node tools/build-gallery.mjs",
     "dist": "electron-builder",

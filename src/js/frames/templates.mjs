@@ -457,8 +457,8 @@ export function creatureMax(ctx, o) {
   cardStock(ctx, W, H, 'silver', e);
   ctx.save();
   roundRect(ctx, 0, 0, W, H, W * 0.05); ctx.clip();
-  ctx.fillStyle = linGrad(ctx, 0, H * 0.32, 0, H, [[0, 'rgba(0,0,0,0)'], [1, alpha(e.base, 0.6)]]);
-  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = alpha(e.base, 0.6);
+  ctx.fillRect(0, H * 0.32, W, H * 0.68);
   ctx.restore();
   ctx.strokeStyle = alpha('#ffffff', 0.8);
   ctx.lineWidth = W * 0.004;
@@ -573,8 +573,7 @@ export function creatureFullArt(ctx, o) {
   ctx.save();
   roundRect(ctx, 0, 0, W, H, W * 0.05);
   ctx.clip();
-  ctx.fillStyle = radGrad(ctx, W * 0.5, H * 0.22, W * 0.1, W * 1.15,
-    [[0, alpha(e.light, 0.26)], [1, alpha(e.dark, 0.9)]]);
+  ctx.fillStyle = alpha(e.dark, 0.9);
   ctx.fillRect(0, 0, W, H);
   grain(ctx, 0, 0, W, H, 0.03, 13);
   ctx.restore();
@@ -686,9 +685,6 @@ export function kawaii(ctx, o) {
   cardBase(ctx, W, H, soft);
   ctx.save();
   roundRect(ctx, 0, 0, W, H, W * 0.075); ctx.clip();
-  ctx.fillStyle = linGrad(ctx, 0, 0, W * 0.45, H,
-    [[0, shade(e.light, 0.38)], [0.55, soft], [1, shade(e.light, 0.14)]]);
-  ctx.fillRect(0, 0, W, H);
   confetti(ctx, 0, 0, W, H,
     [shade(e.base, 0.30), '#ffffff', shade(e.light, 0.20), '#fff0b8'],
     38, (meta.seed || 3) >>> 0, ['star', 'heart', 'dot']);
@@ -898,7 +894,7 @@ export function party(ctx, o) {
   ctx.clip();
   ctx.fillStyle = '#fffdf7';
   ctx.fillRect(m, m, W - m * 2, H - m * 2);
-  ctx.fillStyle = linGrad(ctx, 0, m, 0, H * 0.55, [[0, alpha(e.light, 0.34)], [1, alpha(e.light, 0.03)]]);
+  ctx.fillStyle = alpha(e.light, 0.34);
   ctx.fillRect(m, m, W - m * 2, H - m * 2);
   ctx.restore();
 
@@ -1107,15 +1103,9 @@ export function strip(ctx, o) {
   const n = Math.max(1, c.cells || shots.length || 4);
 
   /* ---- stock */
-  const ground = c.kawaii ? '#ffd9e8' : dark ? shade(e.ink, 0.02) : shade(e.light, 0.34);
+  const ground = c.kawaii ? '#ffd9e8' : dark ? shade(e.ink, 0.06) : shade(e.light, 0.34);
   ctx.save();
   ctx.fillStyle = ground;
-  ctx.fillRect(0, 0, W, H);
-  ctx.fillStyle = linGrad(ctx, 0, 0, W * 0.6, H, c.kawaii
-    ? [[0, '#fff2f8'], [0.52, '#ffd9e8'], [1, '#f5b7d2']]
-    : dark
-    ? [[0, shade(e.dark, -0.10)], [0.55, shade(e.ink, 0.06)], [1, shade(e.dark, -0.14)]]
-    : [[0, shade(e.light, 0.40)], [0.55, ground], [1, shade(e.light, 0.18)]]);
   ctx.fillRect(0, 0, W, H);
   if (c.kawaii) {
     ctx.save();
