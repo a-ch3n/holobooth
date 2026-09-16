@@ -1,0 +1,21 @@
+[Unit]
+Description=HoloBooth kiosk service (printing, ledgers, GPIO)
+After=network.target cups.service
+Wants=cups.service
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/opt/holobooth
+Environment=NODE_ENV=production
+Environment=HOLOBOOTH_DATA=/var/lib/holobooth
+ExecStart=/usr/bin/node /opt/holobooth/pi/kiosk-server.mjs
+Restart=always
+RestartSec=2
+# The ledgers are the season's history — make sure the service can always write them.
+StateDirectory=holobooth
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,22 @@
+[Unit]
+Description=HoloBooth payments and media server (Stripe)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/opt/holobooth
+Environment=NODE_ENV=production
+Environment=PORT=4242
+Environment=MEDIA_DIR=/var/lib/holobooth/media
+# The Stripe secret key lives here and nowhere else. chmod 600 this file.
+EnvironmentFile=-/etc/holobooth/stripe.env
+ExecStart=/usr/bin/node /opt/holobooth/server/index.js
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
