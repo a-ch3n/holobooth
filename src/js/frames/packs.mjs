@@ -237,6 +237,7 @@ const CUTIE_THEMES = [
  * because a strip has no stat block to colour.
  */
 const STRIP_THEMES = [
+  { key: 'kawaii',   name: 'Kawaii',   type: 'radiant', dark: false, confetti: false, kawaii: true, header: 'CUTE MOMENTS' },
   { key: 'classic',  name: 'Classic',  type: 'plain',   dark: true,  confetti: false, header: 'PHOTO BOOTH' },
   { key: 'midnight', name: 'Midnight', type: 'psy',     dark: true,  confetti: true,  header: 'TONIGHT' },
   { key: 'sunset',   name: 'Sunset',   type: 'ember',   dark: true,  confetti: false, header: 'GOLDEN HOUR' },
@@ -292,11 +293,11 @@ function makeCard({
     energyType: typeId,
     stage,
     hp: variant === 'max' ? Math.round(hp * 1.9 / 10) * 10 : hp,
-    stock: variant === 'max' ? 'silver' : 'gold',
+    stock: 'classic',
     template: variant === 'max' ? 'creatureMax'
       : (variant === 'fullart' || variant === 'rainbow') ? 'creatureFullArt'
       : 'creature',
-    theme: themeFor(typeId, variant),
+    theme: themeFor(typeId, 'standard'),
     rarityFloor,
     content: {
       ability: ability || null,
@@ -533,21 +534,21 @@ FRAMES.forEach((f, i) => {
 /* ================================================================= packs */
 
 const PACK_META = [
-  { id: 'party',   name: 'Party Cards',    tagline: 'Put their name and age on it — birthdays, graduations, showers', order: 1 },
-  { id: 'cutie',   name: 'Cutie Club',     tagline: 'Pastel, scalloped and soft — with a buddy peeking out', order: 2 },
-  { id: 'strips',  name: 'Photo Strips',   tagline: 'The classic four-frame strip, themed and stickerable', order: 3 },
-  { id: 'promo',   name: 'Limited Promos', tagline: 'Hand-drawn guests. Here for a fortnight, then gone.', order: 5,  limited: true },
-  { id: 'basics',  name: 'Basics',         tagline: 'One Creature for every energy type — where a collection starts', order: 10 },
-  { id: 'max',     name: 'MAX Cards',      tagline: 'Oversized HP, silver frame, damage that ends the game',    order: 30 },
-  { id: 'fullart', name: 'Full Art',       tagline: 'Dark metallic frame, text floating below your photo',      order: 40 },
-  { id: 'secret',  name: 'Secret Rare',    tagline: 'Rainbow foil, numbered past the end of the set',           order: 60 },
+  { id: 'basics', name: 'Pokémon Cards', tagline: 'Standard energy colors and classic yellow card borders', order: 1 },
+  { id: 'strips', name: 'Photo Strips', tagline: 'The classic four-frame photo strip', order: 2 },
+  { id: 'party', name: 'Party Cards', tagline: 'Personalised party cards', order: 10 },
+  { id: 'cutie', name: 'Cutie Club', tagline: 'Pastel personalised cards', order: 11 },
+  { id: 'promo', name: 'Limited Promos', tagline: 'Limited promotional cards', order: 12, limited: true },
+  { id: 'max', name: 'MAX Cards', tagline: 'Oversized special cards', order: 20 },
+  { id: 'fullart', name: 'Full Art', tagline: 'Full-art special cards', order: 21 },
+  { id: 'secret', name: 'Secret Rare', tagline: 'Secret rare special cards', order: 22 },
 ];
 
 export const SET = {
   id: 'PP-BASE',
   name: 'Pocket Creatures — Base Set',
   size: SET_SIZE,
-  total: FRAMES.length,
+  total: FRAMES.filter(f => f.packId === 'basics' || f.packId === 'strips').length,
   types: ENERGY_IDS.length,
 };
 
@@ -610,6 +611,7 @@ export function pickerGroups(now = new Date()) {
       id: p.id, name: p.name, tagline: p.tagline, limited: !!p.limited,
       frames: live.filter(f => f.packId === p.id),
     }))
+    .filter(g => g.id === 'basics' || g.id === 'strips')
     .filter(g => g.frames.length);
 }
 

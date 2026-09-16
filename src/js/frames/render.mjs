@@ -148,12 +148,13 @@ export function mintCard({
   const serial = makeSerial({ seasonId, frameId, mint, mintLimit });
   const seed = hashString(`${seasonId}|${frameId}|${mint}|${boothId}`);
 
-  const rarity = forcedRarity || rollRarity({
+  const normalFrame = frame.packId === 'basics' || frame.packId === 'strips';
+  const rarity = normalFrame ? 'common' : (forcedRarity || rollRarity({
     boost: product.rarityBoost || 1,
     floor: frame.rarityFloor || null,
     guarantee: product.guaranteeAtLeast || null,
     rng: seededRng(seed),
-  });
+  }));
 
   return {
     frameId,
@@ -250,7 +251,11 @@ export function renderCard(ctx, opts) {
   // The art window is excluded from the foil pass — see applyFoil() — so the
   // customer's own photo (and anything stuck onto it) always stays clean;
   // only the frame/background ever carries a rarity effect.
-  if (foil && card?.rarity) applyFoil(ctx, W, H, card.rarity, card.seed, meta.artWindow);
+  // Standard cards and strips stay free of foil treatments. They use the
+  // energy palette and classic card stock instead of rarity effects.
+  if (foil && card?.rarity && base.packId !== 'basics' && base.packId !== 'strips') {
+    applyFoil(ctx, W, H, card.rarity, card.seed, meta.artWindow);
+  }
 
   if (watermark) drawWatermark(ctx, W, H, watermark);
   return meta;

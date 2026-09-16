@@ -13,20 +13,20 @@
 import { TAU, roundRect, radGrad, shade, alpha } from './draw.mjs';
 
 export const ENERGY = {
-  ember:   { name: 'Ember',   base: '#f2622a', light: '#ffb27a', dark: '#8c2c06', ink: '#4a1703', weak: 'wave',   resist: 'leaf'  },
-  wave:    { name: 'Wave',    base: '#2b8fd4', light: '#8fd2ff', dark: '#124f7d', ink: '#0a2c45', weak: 'volt',   resist: 'ember' },
-  leaf:    { name: 'Leaf',    base: '#4aa544', light: '#a9e39c', dark: '#215c1d', ink: '#123310', weak: 'ember',  resist: 'wave'  },
-  volt:    { name: 'Volt',    base: '#f0c419', light: '#ffe97a', dark: '#8f7204', ink: '#4a3b01', weak: 'stone',  resist: 'steel' },
-  frost:   { name: 'Frost',   base: '#79c6ea', light: '#d3f0ff', dark: '#356f8c', ink: '#173d4f', weak: 'steel',  resist: 'wave'  },
-  stone:   { name: 'Stone',   base: '#b0813f', light: '#e6c48d', dark: '#63451a', ink: '#39270d', weak: 'leaf',   resist: 'volt'  },
-  gale:    { name: 'Gale',    base: '#8fb6d9', light: '#dbeeff', dark: '#4a6d8c', ink: '#263c4f', weak: 'volt',   resist: 'stone' },
-  shade:   { name: 'Shade',   base: '#5b4a7a', light: '#a292c7', dark: '#2c2140', ink: '#171024', weak: 'radiant',resist: 'psy'   },
-  radiant: { name: 'Radiant', base: '#f07fae', light: '#ffc3da', dark: '#8c3057', ink: '#4f172f', weak: 'steel',  resist: 'shade' },
-  toxin:   { name: 'Toxin',   base: '#a457bf', light: '#dfa8ee', dark: '#5c2a6f', ink: '#33153e', weak: 'psy',    resist: 'leaf'  },
-  steel:   { name: 'Steel',   base: '#8d99a8', light: '#d6dee6', dark: '#4c5663', ink: '#272e37', weak: 'ember',  resist: 'radiant' },
-  psy:     { name: 'Psy',     base: '#a06ad4', light: '#d9b6ff', dark: '#54307a', ink: '#2d1943', weak: 'shade',  resist: 'toxin' },
-  wyrm:    { name: 'Wyrm',    base: '#c9a227', light: '#f2dc8a', dark: '#6f5610', ink: '#3d2f06', weak: 'wyrm',   resist: null    },
-  plain:   { name: 'Plain',   base: '#c4b7a4', light: '#eee5d8', dark: '#6f6353', ink: '#3b342b', weak: 'stone',  resist: 'shade' },
+  ember:   { name: 'Fire',      base: '#e53935', light: '#ff9e9e', dark: '#8f1717', ink: '#4d0b0b', weak: 'wave',   resist: 'leaf'  },
+  wave:    { name: 'Water',     base: '#2f80ed', light: '#9ac7ff', dark: '#174b9b', ink: '#092957', weak: 'volt',   resist: 'ember' },
+  leaf:    { name: 'Grass',     base: '#43a047', light: '#a8df9b', dark: '#216326', ink: '#123b16', weak: 'ember',  resist: 'wave'  },
+  volt:    { name: 'Lightning', base: '#f2c500', light: '#fff09a', dark: '#927500', ink: '#4b3c00', weak: 'stone',  resist: 'steel' },
+  frost:   { name: 'Water',     base: '#4aa9e8', light: '#b9e5ff', dark: '#23658f', ink: '#123c58', weak: 'steel',  resist: 'wave'  },
+  stone:   { name: 'Fighting',  base: '#a76532', light: '#e0b084', dark: '#633617', ink: '#351a0a', weak: 'leaf',   resist: 'volt'  },
+  gale:    { name: 'Colorless', base: '#c7cbd1', light: '#f2f4f6', dark: '#747b85', ink: '#343940', weak: 'volt',   resist: 'stone' },
+  shade:   { name: 'Darkness',  base: '#34363d', light: '#777b86', dark: '#17181d', ink: '#fff',    weak: 'radiant', resist: 'psy' },
+  radiant: { name: 'Fairy',     base: '#e889b5', light: '#ffd1e4', dark: '#914366', ink: '#4c1731', weak: 'steel',  resist: 'shade' },
+  toxin:   { name: 'Psychic',   base: '#bd68c9', light: '#edb7ee', dark: '#6c2d76', ink: '#35133b', weak: 'psy',    resist: 'leaf'  },
+  steel:   { name: 'Metal',     base: '#9da5ae', light: '#e0e4e8', dark: '#59616a', ink: '#2d3339', weak: 'ember',  resist: 'radiant' },
+  psy:     { name: 'Psychic',   base: '#c05bc2', light: '#efafe7', dark: '#6b2b70', ink: '#351238', weak: 'shade',  resist: 'toxin' },
+  wyrm:    { name: 'Colorless', base: '#d5d8dc', light: '#f7f8f9', dark: '#7c8188', ink: '#373b40', weak: 'wyrm',   resist: null    },
+  plain:   { name: 'Colorless', base: '#e1e3e6', light: '#fff', dark: '#8c9299', ink: '#3b3f44', weak: 'stone', resist: 'shade' },
 };
 
 export const ENERGY_IDS = Object.keys(ENERGY);
