@@ -383,9 +383,8 @@ export function creature(ctx, o) {
   ctx.clip();
   ctx.fillStyle = stock === 'classic' ? '#fffdf4' : t.textbox;
   ctx.fillRect(m, m, W - m * 2, H - m * 2);
-  // faint type wash from the top, so the face belongs to its element
-  ctx.fillStyle = linGrad(ctx, 0, m, 0, H * 0.62,
-    [[0, alpha(e.light, stock === 'classic' ? 0.68 : 0.55)], [1, alpha(e.light, 0.06)]]);
+  // solid type wash across the whole face, not just a fade from the top
+  ctx.fillStyle = alpha(e.light, stock === 'classic' ? 0.68 : 0.55);
   ctx.fillRect(m, m, W - m * 2, H - m * 2);
   grain(ctx, m, m, W - m * 2, H - m * 2, 0.035, 21);
   ctx.restore();
