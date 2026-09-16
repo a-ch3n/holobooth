@@ -492,6 +492,7 @@ function renderGrid(packId) {
     tile.addEventListener('click', () => {
       $$('.frame-tile').forEach(x => x.classList.toggle('on', x === tile));
       S.frameId = f.id;
+      if (isStrip(f)) S.stripFrameId = f.id;
       $('#picked-label').textContent = isStrip(f)
         ? `${f.name} — photo strip`
         : `${f.name} — ${f.collectorNumber} · ${energy(f.energyType).name}`;
@@ -704,9 +705,34 @@ function showStripThemePicker() {
   }));
 }
 
+function showCardThemePicker() {
+  const picker = $('#card-theme-picker');
+  const grid = $('#card-theme-grid');
+  const choices = allFrames().filter(f => f.packId === 'basics');
+  picker.hidden = false;
+  grid.innerHTML = choices.map(f => `
+    <button class="strip-theme ${f.id === S.frameId ? 'on' : ''}" data-card-theme="${f.id}" type="button">
+      <span class="strip-theme-swatch" style="--strip-color:${energy(f.energyType).base}"></span>${f.name}
+    </button>`).join('');
+  grid.querySelectorAll('[data-card-theme]').forEach(button => button.addEventListener('click', () => {
+    S.frameId = button.dataset.cardTheme;
+    grid.querySelectorAll('.strip-theme').forEach(b => b.classList.toggle('on', b === button));
+    go('pay');
+  }));
+}
+
 ON_ENTER.product = () => {
   const frame = lookupFrame(S.frameId);
-  $('#products').innerHTML = S.cfg.pricing.products.map(p => {
+  const selectedStrip = isStrip(frame);
+  const visibleProducts = S.cfg.pricing.products.filter(p => {
+    const cardCount = p.prints?.card || 0;
+    const stripCount = p.prints?.strip || 0;
+    // Keep checkout offers focused on the format the customer selected.
+    if (selectedStrip) return stripCount > 0 || p.id === 'digital_strip';
+    return cardCount > 0 || p.id === 'digital_card';
+  });
+
+  $('#products').innerHTML = visibleProducts.map(p => {
     return `
     <div class="product ${p.featured ? 'featured' : ''}" data-product="${p.id}">
       ${p.featured ? '<span class="tag">MOST POPULAR</span>' : ''}
@@ -718,14 +744,21 @@ ON_ENTER.product = () => {
 
   $$('.product').forEach(el => el.addEventListener('click', () => {
     S.product = S.cfg.pricing.products.find(p => p.id === el.dataset.product);
+    const combo = S.product.prints?.card > 0 && S.product.prints?.strip > 0;
     const needsStripTheme = S.product.prints?.strip && !isStrip(frame);
-    if (needsStripTheme) {
+    const needsCardTheme = combo && isStrip(frame);
+    $('#strip-theme-picker').hidden = true;
+    $('#card-theme-picker').hidden = true;
+    if (needsCardTheme) {
+      showCardThemePicker();
+    } else if (needsStripTheme) {
       S.stripFrameId = S.stripFrameId || stripChoices()[0]?.id || null;
       showStripThemePicker();
     } else go('pay');
   }));
 
   $('#strip-theme-picker').hidden = true;
+  $('#card-theme-picker').hidden = true;
 
   if (frame) $('[data-screen="product"] h2').textContent = `${frame.name} — what do you want?`;
 };
