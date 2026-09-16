@@ -40,7 +40,8 @@
       "src/**",
       "server/**",
       "config/**",
-      "packs/**"
+      "packs/**",
+      "images/**"
     ],
     "mac": {
       "category": "public.app-category.entertainment"

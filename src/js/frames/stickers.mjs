@@ -37,6 +37,8 @@ export const DECOS = [
   { id: 'paw',      name: 'Paw',      color: '#c39a6b' },
 ];
 
+const imageUrl = filename => new URL(`../../../images/${filename}`, import.meta.url).href;
+
 /**
  * Personal-use image sticker pack. Not bundled with any artwork — you supply
  * your own PNGs at the paths below. Each entry needs a transparent-background
@@ -46,36 +48,36 @@ export const DECOS = [
  * pay for or receive.
  */
 export const POKEMON_PACK = [
-  { id: "pikachu-01",    name: "Pikachu",     category: "Electric", imageUrl: "./images/pikachu.png",    dimensions: { width: 150, height: 150 } },
-  { id: "charmander-02", name: "Charmander",  category: "Fire",     imageUrl: "./images/charmander.png", dimensions: { width: 150, height: 150 } },
-  { id: "squirtle-03",   name: "Squirtle",    category: "Water",    imageUrl: "./images/squirtle.png",   dimensions: { width: 150, height: 150 } },
-  { id: "bulbasaur-04",  name: "Bulbasaur",   category: "Grass",    imageUrl: "./images/bulbasaur.png",  dimensions: { width: 150, height: 150 } },
-  { id: "jigglypuff-05", name: "Jigglypuff",  category: "Normal",   imageUrl: "./images/jigglypuff.png", dimensions: { width: 150, height: 150 } },
-  { id: "meowth-06",     name: "Meowth",      category: "Normal",   imageUrl: "./images/meowth.png",     dimensions: { width: 150, height: 150 } },
-  { id: "psyduck-07",    name: "Psyduck",     category: "Water",    imageUrl: "./images/psyduck.png",    dimensions: { width: 150, height: 150 } },
-  { id: "growlithe-08",  name: "Growlithe",   category: "Fire",     imageUrl: "./images/growlithe.png",  dimensions: { width: 150, height: 150 } },
-  { id: "poliwag-09",    name: "Poliwag",     category: "Water",    imageUrl: "./images/poliwag.png",    dimensions: { width: 150, height: 150 } },
-  { id: "abra-10",       name: "Abra",        category: "Psychic",  imageUrl: "./images/abra.png",       dimensions: { width: 150, height: 150 } },
-  { id: "machop-11",     name: "Machop",      category: "Fighting", imageUrl: "./images/machop.png",     dimensions: { width: 150, height: 150 } },
-  { id: "bellsprout-12", name: "Bellsprout",  category: "Grass",    imageUrl: "./images/bellsprout.png", dimensions: { width: 150, height: 150 } },
-  { id: "geodude-13",    name: "Geodude",     category: "Rock",     imageUrl: "./images/geodude.png",    dimensions: { width: 150, height: 150 } },
-  { id: "ponyta-14",     name: "Ponyta",      category: "Fire",     imageUrl: "./images/ponyta.png",     dimensions: { width: 150, height: 150 } },
-  { id: "slowpoke-15",   name: "Slowpoke",    category: "Water",    imageUrl: "./images/slowpoke.png",   dimensions: { width: 150, height: 150 } },
-  { id: "magnemite-16",  name: "Magnemite",   category: "Electric", imageUrl: "./images/magnemite.png",  dimensions: { width: 150, height: 150 } },
-  { id: "farfetchd-17",  name: "Farfetch'd",  category: "Normal",   imageUrl: "./images/farfetchd.png",  dimensions: { width: 150, height: 150 } },
-  { id: "seel-18",       name: "Seel",        category: "Water",    imageUrl: "./images/seel.png",       dimensions: { width: 150, height: 150 } },
-  { id: "grimer-19",     name: "Grimer",      category: "Poison",   imageUrl: "./images/grimer.png",     dimensions: { width: 150, height: 150 } },
-  { id: "shellder-20",   name: "Shellder",    category: "Water",    imageUrl: "./images/shellder.png",   dimensions: { width: 150, height: 150 } },
-  { id: "gastly-21",     name: "Gastly",      category: "Ghost",    imageUrl: "./images/gastly.png",     dimensions: { width: 150, height: 150 } },
-  { id: "onix-22",       name: "Onix",        category: "Rock",     imageUrl: "./images/onix.png",       dimensions: { width: 150, height: 150 } },
-  { id: "drowzee-23",    name: "Drowzee",     category: "Psychic",  imageUrl: "./images/drowzee.png",    dimensions: { width: 150, height: 150 } },
-  { id: "krabby-24",     name: "Krabby",      category: "Water",    imageUrl: "./images/krabby.png",     dimensions: { width: 150, height: 150 } },
-  { id: "voltorb-25",    name: "Voltorb",     category: "Electric", imageUrl: "./images/voltorb.png",    dimensions: { width: 150, height: 150 } },
-  { id: "cubone-26",     name: "Cubone",      category: "Ground",   imageUrl: "./images/cubone.png",     dimensions: { width: 150, height: 150 } },
-  { id: "hitmonchan-27", name: "Hitmonchan",  category: "Fighting", imageUrl: "./images/hitmonchan.png", dimensions: { width: 150, height: 150 } },
-  { id: "lickitung-28",  name: "Lickitung",   category: "Normal",   imageUrl: "./images/lickitung.png",  dimensions: { width: 150, height: 150 } },
-  { id: "koffing-29",    name: "Koffing",     category: "Poison",   imageUrl: "./images/koffing.png",    dimensions: { width: 150, height: 150 } },
-  { id: "rhyhorn-30",    name: "Rhyhorn",     category: "Ground",   imageUrl: "./images/rhyhorn.png",    dimensions: { width: 150, height: 150 } },
+  { id: "pikachu-01",    name: "Pikachu",     category: "Electric", imageUrl: imageUrl('pikachu.png'),    dimensions: { width: 150, height: 150 } },
+  { id: "charmander-02", name: "Charmander",  category: "Fire",     imageUrl: imageUrl('charmander.png'), dimensions: { width: 150, height: 150 } },
+  { id: "squirtle-03",   name: "Squirtle",    category: "Water",    imageUrl: imageUrl('squirtle.png'),   dimensions: { width: 150, height: 150 } },
+  { id: "bulbasaur-04",  name: "Bulbasaur",   category: "Grass",    imageUrl: imageUrl('bulbasaur.png'),  dimensions: { width: 150, height: 150 } },
+  { id: "jigglypuff-05", name: "Jigglypuff",  category: "Normal",   imageUrl: imageUrl('jigglypuff.png'), dimensions: { width: 150, height: 150 } },
+  { id: "meowth-06",     name: "Meowth",      category: "Normal",   imageUrl: imageUrl('meowth.png'),     dimensions: { width: 150, height: 150 } },
+  { id: "psyduck-07",    name: "Psyduck",     category: "Water",    imageUrl: imageUrl('psyduck.png'),    dimensions: { width: 150, height: 150 } },
+  { id: "growlithe-08",  name: "Growlithe",   category: "Fire",     imageUrl: imageUrl('growlithe.png'),  dimensions: { width: 150, height: 150 } },
+  { id: "poliwag-09",    name: "Poliwag",     category: "Water",    imageUrl: imageUrl('poliwag.png'),    dimensions: { width: 150, height: 150 } },
+  { id: "abra-10",       name: "Abra",        category: "Psychic",  imageUrl: imageUrl('abra.png'),       dimensions: { width: 150, height: 150 } },
+  { id: "machop-11",     name: "Machop",      category: "Fighting", imageUrl: imageUrl('machop.png'),     dimensions: { width: 150, height: 150 } },
+  { id: "bellsprout-12", name: "Bellsprout",  category: "Grass",    imageUrl: imageUrl('bellsprout.png'), dimensions: { width: 150, height: 150 } },
+  { id: "geodude-13",    name: "Geodude",     category: "Rock",     imageUrl: imageUrl('geodude.png'),    dimensions: { width: 150, height: 150 } },
+  { id: "ponyta-14",     name: "Ponyta",     category: "Fire",     imageUrl: imageUrl('ponyta.png'),     dimensions: { width: 150, height: 150 } },
+  { id: "slowpoke-15",   name: "Slowpoke",    category: "Water",    imageUrl: imageUrl('slowpoke.png'),   dimensions: { width: 150, height: 150 } },
+  { id: "magnemite-16",  name: "Magnemite",   category: "Electric", imageUrl: imageUrl('magnemite.png'),  dimensions: { width: 150, height: 150 } },
+  { id: "farfetchd-17",  name: "Farfetch'd",  category: "Normal",   imageUrl: imageUrl('farfetchd.png'),  dimensions: { width: 150, height: 150 } },
+  { id: "seel-18",       name: "Seel",        category: "Water",    imageUrl: imageUrl('seel.png'),       dimensions: { width: 150, height: 150 } },
+  { id: "grimer-19",     name: "Grimer",      category: "Poison",   imageUrl: imageUrl('grimer.png'),     dimensions: { width: 150, height: 150 } },
+  { id: "shellder-20",   name: "Shellder",    category: "Water",    imageUrl: imageUrl('shellder.png'),   dimensions: { width: 150, height: 150 } },
+  { id: "gastly-21",     name: "Gastly",      category: "Ghost",    imageUrl: imageUrl('gastly.png'),     dimensions: { width: 150, height: 150 } },
+  { id: "onix-22",       name: "Onix",        category: "Rock",     imageUrl: imageUrl('onix.png'),       dimensions: { width: 150, height: 150 } },
+  { id: "drowzee-23",    name: "Drowzee",     category: "Psychic",  imageUrl: imageUrl('drowzee.png'),    dimensions: { width: 150, height: 150 } },
+  { id: "krabby-24",     name: "Krabby",      category: "Water",    imageUrl: imageUrl('krabby.png'),     dimensions: { width: 150, height: 150 } },
+  { id: "voltorb-25",    name: "Voltorb",     category: "Electric", imageUrl: imageUrl('voltorb.png'),    dimensions: { width: 150, height: 150 } },
+  { id: "cubone-26",     name: "Cubone",      category: "Ground",   imageUrl: imageUrl('cubone.png'),     dimensions: { width: 150, height: 150 } },
+  { id: "hitmonchan-27", name: "Hitmonchan",  category: "Fighting", imageUrl: imageUrl('hitmonchan.png'), dimensions: { width: 150, height: 150 } },
+  { id: "lickitung-28",  name: "Lickitung",   category: "Normal",   imageUrl: imageUrl('lickitung.png'),  dimensions: { width: 150, height: 150 } },
+  { id: "koffing-29",    name: "Koffing",     category: "Poison",   imageUrl: imageUrl('koffing.png'),    dimensions: { width: 150, height: 150 } },
+  { id: "rhyhorn-30",    name: "Rhyhorn",     category: "Ground",   imageUrl: imageUrl('rhyhorn.png'),    dimensions: { width: 150, height: 150 } },
 ];
 
 /** Lazily-populated cache of loaded HTMLImageElements for the pack, keyed by id. */
@@ -290,6 +292,7 @@ export function drawDeco(ctx, id, x, y, s) {
 export function stickerCanvas(id, size, makeCanvas) {
   const c = makeCanvas(size, size);
   const ctx = c.getContext('2d');
+  c.ready = Promise.resolve();
   if (id.startsWith('buddy:')) {
     const spec = companionById(id.slice(6));
     if (spec) drawCompanion(ctx, spec, 0, 0, size);
@@ -298,8 +301,13 @@ export function stickerCanvas(id, size, makeCanvas) {
     if (entry) {
       const img = loadPackImage(entry);
       const draw = () => ctx.drawImage(img, 0, 0, size, size);
+      c.ready = img.complete && img.naturalWidth
+        ? Promise.resolve().then(draw)
+        : new Promise((resolve, reject) => {
+          img.onload = () => { draw(); resolve(); };
+          img.onerror = reject;
+        });
       if (img.complete && img.naturalWidth) draw();
-      else img.onload = draw;
     }
   } else {
     drawDeco(ctx, id.slice(5), 0, 0, size);
