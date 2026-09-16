@@ -1137,7 +1137,7 @@ function drawDecorate() {
   const meta = renderCard(cv.getContext('2d'), {
     frame: f, frameId: S.frameId, W: cv.width, H: cv.height,
     ...photoArgs(f),
-    character: pokemonCharacter(f),
+    character: null,
     companion: ['party', 'kawaii'].includes(f.template) ? companionThumb(f.energyType) : null,
     personalization: personalizationPayload(),
     card: S.previewCard,
@@ -1388,11 +1388,18 @@ async function buildOutputs() {
   }
 
   await window.booth.cards.record(S.card);
-  if (S.product.digital && S.cfg.delivery.uploadEnabled) uploadMedia().catch(e => console.warn('upload failed', e));
+  if (S.product.digital && S.cfg.delivery.uploadEnabled) {
+    try { await uploadMedia(); }
+    catch (e) { console.warn('upload failed', e); }
+  }
 }
 
 async function uploadMedia() {
-  const files = [{ name: `card-${S.card.serial.replace(/[^\w]+/g, '_')}.png`, dataUrl: S.cardCanvas.toDataURL('image/png') }];
+  const primaryIsStrip = isStrip(lookupFrame(S.frameId));
+  const files = [{
+    name: primaryIsStrip ? 'strip.png' : `card-${S.card.serial.replace(/[^\w]+/g, '_')}.png`,
+    dataUrl: S.cardCanvas.toDataURL('image/png'),
+  }];
   if (S.stripCanvas) files.push({ name: 'strip.png', dataUrl: S.stripCanvas.toDataURL('image/png') });
   S.shots.forEach((c, i) => files.push({ name: `photo-${i + 1}.jpg`, dataUrl: c.toDataURL('image/jpeg', 0.9) }));
   if (S.gifBlob) files.push({ name: 'boomerang.gif', dataUrl: await blobToDataUrl(S.gifBlob) });

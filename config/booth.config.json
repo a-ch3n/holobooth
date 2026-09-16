@@ -79,7 +79,27 @@
         "amount": 700,
         "prints": { "card": 1, "strip": 0 },
         "digital": true,
-        "gif": true,
+        "gif": false,
+        "rarityBoost": 1.0
+      },
+      {
+        "id": "digital_card",
+        "name": "Digital Pokémon Card",
+        "blurb": "Digital card delivered by QR code",
+        "amount": 500,
+        "prints": { "card": 0, "strip": 0 },
+        "digital": true,
+        "gif": false,
+        "rarityBoost": 1.0
+      },
+      {
+        "id": "digital_strip",
+        "name": "Digital Photo Strip",
+        "blurb": "One digital photo strip delivered by QR code",
+        "amount": 500,
+        "prints": { "card": 0, "strip": 1 },
+        "digital": true,
+        "gif": false,
         "rarityBoost": 1.0
       },
       {
@@ -89,7 +109,7 @@
         "amount": 700,
         "prints": { "card": 0, "strip": 2 },
         "digital": true,
-        "gif": true,
+        "gif": false,
         "rarityBoost": 1.0
       },
       {
@@ -97,13 +117,19 @@
         "name": "1 Pokémon Card + 1 Photo Strip",
         "blurb": "One Pokémon card and one themed photo strip",
         "amount": 1200,
-        "prints": {
-          "card": 1,
-          "card": 0,
-          "strip": 0
-        },
+        "prints": { "card": 1, "strip": 1 },
         "digital": true,
-        "gif": true,
+        "gif": false,
+        "rarityBoost": 1.0
+      },
+      {
+        "id": "two_cards_two_strips",
+        "name": "2 Pokémon Cards + 2 Photo Strips",
+        "blurb": "Two printed Pokémon cards and two themed photo strips",
+        "amount": 1800,
+        "prints": { "card": 2, "strip": 2 },
+        "digital": true,
+        "gif": false,
         "rarityBoost": 1.0
       }
     ],
