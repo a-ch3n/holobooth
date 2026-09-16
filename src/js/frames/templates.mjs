@@ -373,7 +373,7 @@ export function creature(ctx, o) {
   const m = W * 0.058;
   ctx.save();
   roundRect(ctx, m * 0.72, m * 0.72, W - m * 1.44, H - m * 1.44, W * 0.024);
-  ctx.strokeStyle = stock === 'classic' ? 'rgba(56,42,8,.68)' : 'rgba(40,32,12,.55)';
+  ctx.strokeStyle = stock === 'classic' ? alpha(e.dark, 0.78) : 'rgba(40,32,12,.55)';
   ctx.lineWidth = W * (stock === 'classic' ? 0.0075 : 0.006);
   ctx.stroke();
   ctx.restore();
@@ -381,10 +381,9 @@ export function creature(ctx, o) {
   ctx.save();
   roundRect(ctx, m, m, W - m * 2, H - m * 2, W * 0.020);
   ctx.clip();
-  ctx.fillStyle = stock === 'classic' ? '#fffdf4' : t.textbox;
-  ctx.fillRect(m, m, W - m * 2, H - m * 2);
-  // solid type wash across the whole face, not just a fade from the top
-  ctx.fillStyle = alpha(e.light, stock === 'classic' ? 0.68 : 0.55);
+  // Normal cards keep the yellow outer border, with one solid energy color
+  // inside it, like a traditional type-themed trading card.
+  ctx.fillStyle = stock === 'classic' ? e.base : t.textbox;
   ctx.fillRect(m, m, W - m * 2, H - m * 2);
   grain(ctx, m, m, W - m * 2, H - m * 2, 0.035, 21);
   ctx.restore();
@@ -1104,10 +1103,25 @@ export function strip(ctx, o) {
   const n = Math.max(1, c.cells || shots.length || 4);
 
   /* ---- stock */
-  const ground = dark ? shade(e.ink, 0.06) : shade(e.light, 0.34);
+  const ground = c.kawaii ? '#ffd9e8' : dark ? shade(e.ink, 0.06) : shade(e.light, 0.34);
   ctx.save();
   ctx.fillStyle = ground;
   ctx.fillRect(0, 0, W, H);
+  if (c.kawaii) {
+    ctx.save();
+    ctx.globalAlpha = 0.82;
+    [[W * 0.12, H * 0.035, W * 0.035], [W * 0.88, H * 0.07, W * 0.028],
+      [W * 0.10, H * 0.965, W * 0.030], [W * 0.90, H * 0.94, W * 0.036]].forEach(([x, y, r]) => {
+      heartPath(ctx, x, y, r);
+      ctx.fillStyle = '#e889b5';
+      ctx.fill();
+    });
+    ctx.fillStyle = '#ffffff';
+    [[W * 0.88, H * 0.30], [W * 0.12, H * 0.62], [W * 0.90, H * 0.73]].forEach(([x, y]) => {
+      ctx.beginPath(); ctx.arc(x, y, W * 0.012, 0, TAU); ctx.fill();
+    });
+    ctx.restore();
+  }
   if (c.confetti) confetti(ctx, 0, 0, W, H, [shade(e.base, 0.25), '#ffffff', shade(e.light, 0.15)], 30, meta.seed || 4);
   grain(ctx, 0, 0, W, H, 0.03, 17);
   ctx.restore();
@@ -1144,8 +1158,8 @@ export function strip(ctx, o) {
     ctx.restore();
     photoWindow(ctx, shots[i % Math.max(1, shots.length)] || null, pad, y, cellW, cellH, W * 0.012, meta.focal);
     ctx.save();
-    ctx.strokeStyle = alpha(dark ? e.light : e.base, 0.45);
-    ctx.lineWidth = W * 0.006;
+    ctx.strokeStyle = c.kawaii ? '#ffffff' : alpha(dark ? e.light : e.base, 0.45);
+    ctx.lineWidth = c.kawaii ? W * 0.012 : W * 0.006;
     roundRect(ctx, pad, y, cellW, cellH, W * 0.012); ctx.stroke();
     ctx.restore();
   }

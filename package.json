@@ -6,7 +6,7 @@
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",
-    "dev": "HOLOBOOTH_DEV=1 electron .",
+    "dev": "cross-env HOLOBOOTH_DEV=1 electron .",
     "server": "node server/index.js",
     "stripe:sync": "node tools/stripe-sync-catalog.mjs",
     "render": "node tools/render-all.mjs",
@@ -30,6 +30,7 @@
   },
   "devDependencies": {
     "@napi-rs/canvas": "^0.1.100",
+    "cross-env": "^7.0.0",
     "electron": "^31.0.0",
     "electron-builder": "^24.13.3"
   },
@@ -40,7 +41,8 @@
       "src/**",
       "server/**",
       "config/**",
-      "packs/**"
+      "packs/**",
+      "images/**"
     ],
     "mac": {
       "category": "public.app-category.entertainment"

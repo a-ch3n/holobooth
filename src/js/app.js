@@ -891,11 +891,15 @@ function buildDecorateUI() {
     host.innerHTML = items.map(s => `<div class="sticker" data-sticker="${s.id}"><canvas width="96" height="96"></canvas></div>`).join('');
     items.forEach(s => {
       const cv = host.querySelector(`[data-sticker="${s.id}"] canvas`);
-      cv.getContext('2d').drawImage(stickerImage(s.id, 96), 0, 0);
+      const image = stickerImage(s.id, 96);
+      const draw = () => cv.getContext('2d').drawImage(image, 0, 0);
+      draw();
+      image.ready?.then(draw).catch(() => {});
     });
   };
   fill($('#sticker-buddies'), cat.filter(s => s.kind === 'buddy'));
   fill($('#sticker-decos'), cat.filter(s => s.kind === 'deco'));
+  fill($('#sticker-pack'), cat.filter(s => s.kind === 'pack'));
 
   $('.dec-panel').addEventListener('click', e => {
     const add = e.target.closest('.sticker')?.dataset.sticker;
