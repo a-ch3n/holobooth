@@ -151,6 +151,26 @@ const CREATURES = [
   },
 ];
 
+// The 30 standard card options use the matching local sticker as their named
+// character, with each image assigned to the closest energy color family.
+const POKEMON_CARD_SPECS = [
+  ['Charmander', 'ember', 'charmander.png'], ['Squirtle', 'wave', 'squirtle.png'],
+  ['Bulbasaur', 'leaf', 'bulbasaur.png'], ['Pikachu', 'volt', 'pikachu.png'],
+  ['Seel', 'frost', 'seel.png'], ['Machop', 'stone', 'machop.png'],
+  ["Farfetch'd", 'gale', 'farfetchd.png'], ['Gastly', 'shade', 'gastly.png'],
+  ['Jigglypuff', 'radiant', 'jigglypuff.png'], ['Grimer', 'toxin', 'grimer.png'],
+  ['Magnemite', 'steel', 'magnemite.png'], ['Abra', 'psy', 'abra.png'],
+  ['Rhyhorn', 'wyrm', 'rhyhorn.png'], ['Meowth', 'plain', 'meowth.png'],
+  ['Psyduck', 'wave', 'psyduck.png'], ['Growlithe', 'ember', 'growlithe.png'],
+  ['Poliwag', 'wave', 'poliwag.png'], ['Bellsprout', 'leaf', 'bellsprout.png'],
+  ['Geodude', 'stone', 'geodude.png'], ['Ponyta', 'ember', 'ponyta.png'],
+  ['Slowpoke', 'wave', 'slowpoke.png'], ['Shellder', 'wave', 'shellder.png'],
+  ['Onix', 'stone', 'onix.png'], ['Drowzee', 'psy', 'drowzee.png'],
+  ['Krabby', 'wave', 'krabby.png'], ['Voltorb', 'volt', 'voltorb.png'],
+  ['Cubone', 'stone', 'cubone.png'], ['Hitmonchan', 'stone', 'hitmonchan.png'],
+  ['Lickitung', 'plain', 'lickitung.png'], ['Koffing', 'toxin', 'koffing.png'],
+].map(([name, type, file]) => ({ name, type, file }));
+
 /* -------------------------------------------------------- chase variants */
 
 const MAX_CARDS   = ['emberling', 'splashling', 'zaplet', 'dracolet', 'glimmerpuff'];
@@ -237,7 +257,7 @@ const CUTIE_THEMES = [
  * because a strip has no stat block to colour.
  */
 const STRIP_THEMES = [
-  { key: 'kawaii',   name: 'Kawaii',   type: 'radiant', dark: false, confetti: false, kawaii: true, header: 'CUTE MOMENTS' },
+  { key: 'cute-mix',  name: 'Cute Mix', type: 'radiant', dark: false, confetti: false, kawaii: true, bright: true, header: 'CUTE MOMENTS' },
   { key: 'classic',  name: 'Classic',  type: 'plain',   dark: true,  confetti: false, header: 'PHOTO BOOTH' },
   { key: 'midnight', name: 'Midnight', type: 'psy',     dark: true,  confetti: true,  header: 'TONIGHT' },
   { key: 'sunset',   name: 'Sunset',   type: 'ember',   dark: true,  confetti: false, header: 'GOLDEN HOUR' },
@@ -281,7 +301,7 @@ function push(frame) {
 }
 
 function makeCard({
-  key, name, typeId, stage, hp, retreat, attacks, ability, flavor,
+  key, name, typeId, stage, hp, retreat, attacks, ability, flavor, character,
   variant = 'standard', rarityFloor = null, extra = {},
 }) {
   const e = energy(typeId);
@@ -298,6 +318,7 @@ function makeCard({
       : (variant === 'fullart' || variant === 'rainbow') ? 'creatureFullArt'
       : 'creature',
     theme: themeFor(typeId, 'standard'),
+    character: character ? { file: character, anchor: 'bottom-right', scale: 0.44 } : null,
     rarityFloor,
     content: {
       ability: ability || null,
@@ -331,15 +352,38 @@ function pokedexEntry(name, typeId, body) {
 }
 
 for (const c of CREATURES) {
+  const pokemon = POKEMON_CARD_SPECS[CREATURES.indexOf(c)];
   const basic = makeCard({
-    key: c.id, name: c.name, typeId: c.type, stage: 'Basic',
+    key: c.id, name: pokemon.name, typeId: pokemon.type, stage: 'Basic',
     hp: c.hp, retreat: c.retreat, attacks: c.attacks, ability: c.ability,
-    flavor: pokedexEntry(c.name, c.type, c.flavor),
+    flavor: pokedexEntry(pokemon.name, pokemon.type, c.flavor),
     rarityFloor: c.ability ? 'uncommon' : null,
+    character: pokemon.file,
     extra: { packId: 'basics' },
   });
   byName[c.id] = basic;
   push(basic);
+}
+
+for (const [index, pokemon] of POKEMON_CARD_SPECS.entries()) {
+  if (index < CREATURES.length) continue;
+  const hp = 60 + (index % 5) * 10;
+  const typeName = energy(pokemon.type).name;
+  push(makeCard({
+    key: `pokemon-${pokemon.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+    name: pokemon.name,
+    typeId: pokemon.type,
+    stage: 'Basic',
+    hp,
+    retreat: 1 + (index % 3),
+    attacks: [
+      { cost: [pokemon.type], name: `${pokemon.name} Pose`, dmg: 20 + (index % 3) * 10, text: `${pokemon.name} brings ${typeName.toLowerCase()} energy to the photo.` },
+      { cost: [pokemon.type, 'plain'], name: 'Snapshot Rush', dmg: 40 + (index % 4) * 10, text: 'Take the perfect picture before the moment passes.' },
+    ],
+    flavor: pokedexEntry(pokemon.name, pokemon.type, `A ${typeName.toLowerCase()}-type friend that loves appearing in photos.`),
+    character: pokemon.file,
+    extra: { packId: 'basics' },
+  }));
 }
 
 /* --- chase variants ----------------------------------------------------- */
@@ -548,7 +592,7 @@ export const SET = {
   id: 'PP-BASE',
   name: 'Pocket Creatures — Base Set',
   size: SET_SIZE,
-  total: FRAMES.filter(f => f.packId === 'basics' || f.packId === 'strips').length,
+  total: FRAMES.filter(f => f.packId === 'basics').length,
   types: ENERGY_IDS.length,
 };
 

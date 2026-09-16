@@ -42,6 +42,7 @@ const S = {
   retakes: 0,
   camera: null,
   cameraAngle: null,
+  angleCameras: [],
   pay: null,
   idleTimer: null,
   adminTaps: 0,
@@ -54,6 +55,8 @@ const S = {
   stickerImgs: {},
   artWindow: null,
   previewCard: null,
+  pokemonImages: {},
+  stripFrameId: null,
 };
 
 const $ = sel => document.querySelector(sel);
@@ -197,6 +200,8 @@ function resetIdle() {
 
 function abandon() {
   S.camera?.stop();
+  S.angleCameras.forEach(({ camera }) => camera.stop());
+  S.angleCameras = [];
   S.pay?.cancel();
   go('attract');
 }
@@ -257,8 +262,23 @@ async function boot() {
   });
 
   await loadAssetPacks();
+  await loadPokemonCharacters();
   buildPicker();
   go('attract');
+}
+
+async function loadPokemonCharacters() {
+  const frames = allFrames().filter(f => f.packId === 'basics' && f.character?.file);
+  await Promise.all(frames.map(f => new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => { S.pokemonImages[f.character.file] = img; resolve(); };
+    img.onerror = () => resolve();
+    img.src = `../images/${f.character.file}`;
+  })));
+}
+
+function pokemonCharacter(frame) {
+  return frame?.character ? S.pokemonImages[frame.character.file] || null : null;
 }
 
 /* ------------------------------------------------------------- attract */
@@ -273,7 +293,9 @@ ON_ENTER.attract = async () => {
   S.stickers = [];
   S.artWindow = null;
   S.previewCard = null;
+  S.stripFrameId = null;
   S.cameraAngle = null;
+  S.angleCameras = [];
   S.camera?.stop();
 
   const live = pickerGroups();
@@ -457,14 +479,13 @@ function renderGrid(packId) {
       frame: f, frameId: f.id, W: box.W, H: box.H,
       photo: placeholderPhoto(),
       photos: isStrip(f) ? [placeholderPhoto(), placeholderPhoto(), placeholderPhoto(), placeholderPhoto()] : [],
-      character: f.character ? placeholderCharacter() : null,
+      character: pokemonCharacter(f),
       companion: (f.template === 'party' || f.template === 'kawaii') ? companionThumb(f.energyType) : null,
       card: mintCard({ frame: f, frameId: f.id, seasonId: S.cfg.collection.seasonId, mint: 1, forcedRarity: f.rarityFloor || 'rare' }),
       stock: S.cfg.cards?.stock || null,
-      // Every template now prints whatever name it's given (falling back to
-      // "Friend" only when nothing was typed), so the browsing preview shows
-      // an obvious placeholder rather than that generic fallback.
-      personalization: { name: 'Name', age: 7 },
+      // The picker preview uses the actual Pokémon name; customers can change
+      // it later in the decorate screen before printing.
+      personalization: { name: f.name, age: 7 },
       foil: true,
     });
 
@@ -653,8 +674,9 @@ async function drawPersonalizePreview() {
 
 /** What the renderer needs, from what the customer typed. */
 function personalizationPayload() {
+  const typedName = S.personal.name.trim();
   return {
-    name: S.personal.name.trim(),
+    name: typedName || lookupFrame(S.frameId)?.name || '',
     age: S.personal.age === '' ? null : Number(S.personal.age),
     companionId: S.personal.companionId,
   };
@@ -662,32 +684,48 @@ function personalizationPayload() {
 
 /* ------------------------------------------------------------- product */
 
+function stripChoices() {
+  return allFrames().filter(f => f.template === 'strip');
+}
+
+function showStripThemePicker() {
+  const picker = $('#strip-theme-picker');
+  const grid = $('#strip-theme-grid');
+  const choices = stripChoices();
+  picker.hidden = false;
+  grid.innerHTML = choices.map(f => `
+    <button class="strip-theme ${f.id === S.stripFrameId ? 'on' : ''}" data-strip-theme="${f.id}" type="button">
+      <span class="strip-theme-swatch" style="--strip-color:${energy(f.energyType).base}"></span>${f.name}
+    </button>`).join('');
+  grid.querySelectorAll('[data-strip-theme]').forEach(button => button.addEventListener('click', () => {
+    S.stripFrameId = button.dataset.stripTheme;
+    grid.querySelectorAll('.strip-theme').forEach(b => b.classList.toggle('on', b === button));
+    go('pay');
+  }));
+}
+
 ON_ENTER.product = () => {
   const frame = lookupFrame(S.frameId);
   $('#products').innerHTML = S.cfg.pricing.products.map(p => {
-    const odds = rarityOdds({
-      boost: p.rarityBoost || 1,
-      floor: frame?.rarityFloor || null,
-      guarantee: p.guaranteeAtLeast || null,
-    });
-    const toughPct = odds.filter(o => isToughRarity(o.rarity)).reduce((a, o) => a + o.pct, 0);
     return `
     <div class="product ${p.featured ? 'featured' : ''}" data-product="${p.id}">
       ${p.featured ? '<span class="tag">MOST POPULAR</span>' : ''}
       <h3>${p.name}</h3>
       <div class="blurb">${p.blurb}</div>
       <div class="price">${money(p.amount)}</div>
-      ${p.guaranteeAtLeast ? `<div class="odds">Guaranteed ${RARITIES[p.guaranteeAtLeast].label} or better</div>`
-        : p.rarityBoost > 1 ? `<div class="odds">${Math.round((p.rarityBoost - 1) * 100)}% better pull odds</div>` : ''}
-      <div class="odds-breakdown">${oddsBreakdownHtml(odds)}</div>
-      <div class="odds-tough">Rare or better: ${formatPct(toughPct)}</div>
     </div>`;
   }).join('');
 
   $$('.product').forEach(el => el.addEventListener('click', () => {
     S.product = S.cfg.pricing.products.find(p => p.id === el.dataset.product);
-    go('pay');
+    const needsStripTheme = S.product.prints?.strip && !isStrip(frame);
+    if (needsStripTheme) {
+      S.stripFrameId = S.stripFrameId || stripChoices()[0]?.id || null;
+      showStripThemePicker();
+    } else go('pay');
   }));
+
+  $('#strip-theme-picker').hidden = true;
 
   if (frame) $('[data-screen="product"] h2').textContent = `${frame.name} — what do you want?`;
 };
@@ -758,14 +796,36 @@ ON_ENTER.angle = () => {
   const host = $('#angle-options');
   host.innerHTML = cameraAngles().map(a => `
     <div class="angle-option${a.id === S.cameraAngle ? ' on' : ''}" data-angle="${a.id}">
+      <video class="angle-preview" data-angle-video="${a.id}" autoplay muted playsinline></video>
       <div class="ic">${a.icon || '📷'}</div>
       <div class="lbl">${a.label}</div>
       ${a.sub ? `<div class="sub">${a.sub}</div>` : ''}
+      <div class="angle-status" data-angle-status="${a.id}">Connecting preview…</div>
     </div>`).join('');
-  host.onclick = e => {
+  S.angleCameras = cameraAngles().map(a => ({ id: a.id, camera: new Camera(S.cfg.camera), ready: null }));
+  S.angleCameras.forEach(entry => {
+    const { id, camera } = entry;
+    const angle = cameraAngles().find(a => a.id === id);
+    camera.cfg.preferredLabels = angle?.preferredLabels || S.cfg.camera.preferredLabels;
+    camera.cfg.excludeLabels = angle?.excludeLabels || S.cfg.camera.excludeLabels;
+    camera.cfg.constraints = angle?.constraints || S.cfg.camera.constraints;
+    camera.onStatus = status => {
+      const el = host.querySelector(`[data-angle-status="${id}"]`);
+      if (el) el.textContent = status.message || '';
+    };
+    entry.ready = camera.start(host.querySelector(`[data-angle-video="${id}"]`)).catch(error => {
+      const el = host.querySelector(`[data-angle-status="${id}"]`);
+      if (el) el.textContent = `Preview unavailable: ${error.message}`;
+    });
+  });
+  host.onclick = async e => {
     const id = e.target.closest('.angle-option')?.dataset.angle;
     if (!id) return;
     S.cameraAngle = id;
+    S.angleCameras.forEach(({ id: cameraId }) => {
+      host.querySelector(`[data-angle="${cameraId}"]`)?.classList.toggle('on', cameraId === id);
+    });
+    await Promise.allSettled(S.angleCameras.map(({ ready }) => ready));
     go('capture');
   };
 };
@@ -773,6 +833,8 @@ ON_ENTER.angle = () => {
 /* ------------------------------------------------------------- capture */
 
 ON_ENTER.capture = async () => {
+  S.angleCameras.forEach(({ camera }) => camera.stop());
+  S.angleCameras = [];
   const cam = (S.camera ||= new Camera(S.cfg.camera));
   cam.onStatus = s => {
     $('#cam-status').textContent = s.message;
@@ -929,8 +991,10 @@ function buildDecorateUI() {
 
   const refreshDecName = () => {
     const el = $('#dec-name');
-    el.textContent = S.personal.name || '';
-    el.classList.toggle('is-empty', !S.personal.name);
+    const typedName = S.personal.name.trim();
+    const defaultName = lookupFrame(S.frameId)?.name || '';
+    el.textContent = typedName || defaultName;
+    el.classList.toggle('is-empty', !typedName && !defaultName);
     renderNameSuggestions($('#dec-name-suggest'), S.personal.name, name => {
       S.personal.name = name;
       refreshDecName();
@@ -1073,6 +1137,7 @@ function drawDecorate() {
   const meta = renderCard(cv.getContext('2d'), {
     frame: f, frameId: S.frameId, W: cv.width, H: cv.height,
     ...photoArgs(f),
+    character: pokemonCharacter(f),
     companion: ['party', 'kawaii'].includes(f.template) ? companionThumb(f.energyType) : null,
     personalization: personalizationPayload(),
     card: S.previewCard,
@@ -1287,7 +1352,9 @@ async function buildOutputs() {
     frame: frameDef, frameId: S.frameId, W, H,
     photo: stripStyle ? null : heroImg,
     photos: heroImgs,
-    character: frameDef.character ? placeholderCharacter() : null,
+    // Pokémon character art is preview-only; the printed/downloaded card
+    // keeps the customer's photo clean unless they explicitly add a sticker.
+    character: null,
     companion: usesCompanion ? await companionImage() : null,
     card: S.card,
     stock: S.cfg.cards?.stock || null,
@@ -1308,7 +1375,11 @@ async function buildOutputs() {
     S.stripCanvas = document.createElement('canvas');
     S.stripCanvas.width = s.W; S.stripCanvas.height = s.H;
     const imgs = await Promise.all(S.shots.map(canvasToImage));
-    renderStrip(S.stripCanvas.getContext('2d'), { W: s.W, H: s.H, photos: imgs, card: S.card });
+    const stripFrame = lookupFrame(S.stripFrameId) || stripChoices()[0];
+    renderStrip(S.stripCanvas.getContext('2d'), {
+      W: s.W, H: s.H, photos: imgs, card: S.card, frame: stripFrame,
+      stickers: S.stickers, stickerImages: stickerImageMap(),
+    });
   }
 
   if (S.product.gif && S.burst.length) {
@@ -1491,7 +1562,8 @@ async function doPrint() {
       const r = await window.booth.printers.print({
         dataUrl: S.stripCanvas.toDataURL('image/jpeg', 0.95),
         widthIn: p.strip.widthIn, heightIn: p.strip.heightIn,
-        printerName: p.stripPrinterName || p.cardPrinterName, copies: 1, silent: p.silent,
+        printerName: p.stripPrinterName || p.cardPrinterName,
+        copies: S.product.prints.strip, silent: p.silent,
       });
       if (!r.ok) throw new Error(r.reason || 'Strip print was rejected');
     }

@@ -74,51 +74,31 @@
     "products": [
       {
         "id": "single_card",
-        "name": "1 Creature Card",
-        "blurb": "One printed creature card + digital copy",
+        "name": "1 Pokémon Card",
+        "blurb": "One printed Pokémon card + digital copy",
         "amount": 700,
-        "prints": {
-          "card": 1,
-          "strip": 0
-        },
+        "prints": { "card": 1, "strip": 0 },
+        "digital": true,
+        "gif": true,
+        "rarityBoost": 1.0
+      },
+      {
+        "id": "two_strips",
+        "name": "2 Photo Strips",
+        "blurb": "Two printed photo strips with your chosen theme",
+        "amount": 700,
+        "prints": { "card": 0, "strip": 2 },
         "digital": true,
         "gif": true,
         "rarityBoost": 1.0
       },
       {
         "id": "card_plus_strip",
-        "name": "Creature + Photo Strip",
-        "blurb": "Creature card, classic 2x6 strip, GIF + downloads",
+        "name": "1 Pokémon Card + 1 Photo Strip",
+        "blurb": "One Pokémon card and one themed photo strip",
         "amount": 1200,
         "prints": {
           "card": 1,
-          "strip": 1
-        },
-        "digital": true,
-        "gif": true,
-        "rarityBoost": 1.15,
-        "featured": true
-      },
-      {
-        "id": "booster_pack",
-        "name": "Booster Pack \u2014 3 Creatures",
-        "blurb": "Three cards, guaranteed at least one Rare or better",
-        "amount": 2000,
-        "prints": {
-          "card": 3,
-          "strip": 1
-        },
-        "digital": true,
-        "gif": true,
-        "rarityBoost": 1.6,
-        "guaranteeAtLeast": "rare"
-      },
-      {
-        "id": "digital_only",
-        "name": "Digital Only",
-        "blurb": "No print \u2014 instant phone download + GIF",
-        "amount": 400,
-        "prints": {
           "card": 0,
           "strip": 0
         },
@@ -256,7 +236,7 @@
   },
   "cards": {
     "//": "Card stock for the drawn creature frames. 'gold' = metallic foil (default), 'classic' = flat saturated yellow board, 'silver' = MAX cards, 'type' = the card's own energy colour.",
-    "stock": "gold"
+    "stock": "classic"
   },
   "stickers": {
     "//": "Decoration layer on the photo. maxPerCard keeps a card readable and the print master fast.",

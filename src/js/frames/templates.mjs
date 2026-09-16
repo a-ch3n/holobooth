@@ -383,7 +383,9 @@ export function creature(ctx, o) {
   ctx.clip();
   // Normal cards keep the yellow outer border, with one solid energy color
   // inside it, like a traditional type-themed trading card.
-  ctx.fillStyle = stock === 'classic' ? e.base : t.textbox;
+  // Keep the face flat and saturated: brighten the energy color slightly
+  // without blending in the pale highlight ramp.
+  ctx.fillStyle = stock === 'classic' ? shade(e.base, 0.08) : t.textbox;
   ctx.fillRect(m, m, W - m * 2, H - m * 2);
   grain(ctx, m, m, W - m * 2, H - m * 2, 0.035, 21);
   ctx.restore();
@@ -1103,9 +1105,17 @@ export function strip(ctx, o) {
   const n = Math.max(1, c.cells || shots.length || 4);
 
   /* ---- stock */
-  const ground = c.kawaii ? '#ffd9e8' : dark ? shade(e.ink, 0.06) : shade(e.light, 0.34);
+  const ground = c.bright ? '#fff0a8' : c.kawaii ? '#ffd9e8' : dark ? shade(e.ink, 0.02) : shade(e.light, 0.34);
   ctx.save();
   ctx.fillStyle = ground;
+  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = linGrad(ctx, 0, 0, W * 0.6, H, c.bright
+    ? [[0, '#fff8cf'], [0.48, '#ffd8ec'], [1, '#b9efff']]
+    : c.kawaii
+    ? [[0, '#fff2f8'], [0.52, '#ffd9e8'], [1, '#f5b7d2']]
+    : dark
+    ? [[0, shade(e.dark, -0.10)], [0.55, shade(e.ink, 0.06)], [1, shade(e.dark, -0.14)]]
+    : [[0, shade(e.light, 0.40)], [0.55, ground], [1, shade(e.light, 0.18)]]);
   ctx.fillRect(0, 0, W, H);
   if (c.kawaii) {
     ctx.save();
@@ -1113,7 +1123,7 @@ export function strip(ctx, o) {
     [[W * 0.12, H * 0.035, W * 0.035], [W * 0.88, H * 0.07, W * 0.028],
       [W * 0.10, H * 0.965, W * 0.030], [W * 0.90, H * 0.94, W * 0.036]].forEach(([x, y, r]) => {
       heartPath(ctx, x, y, r);
-      ctx.fillStyle = '#e889b5';
+      ctx.fillStyle = c.bright ? ['#ff6fae', '#55cfee', '#ffd447', '#8edb69'][Math.floor((x / W) * 4) % 4] : '#e889b5';
       ctx.fill();
     });
     ctx.fillStyle = '#ffffff';
