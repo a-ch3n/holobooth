@@ -385,6 +385,23 @@ Set `payments.stripe.locationId`, register the reader in the Stripe dashboard,
 and the app finds it on boot. Leave `stripe.simulated: true` to test the whole
 flow against Stripe's simulated reader before hardware arrives.
 
+### Product catalog
+
+`pricing.products` in `booth.config.json` is the source of truth for names
+and amounts. Mirror it into real Stripe Products/Prices with:
+
+```bash
+STRIPE_SECRET_KEY=sk_test_... npm run stripe:sync
+```
+
+This writes `out/stripe-catalog.json`, which `server/index.js` reads on boot
+so QR Checkout Sessions reference a real synced Price (dashboard reports and
+receipts show the product by name) instead of an inline, unnamed line item.
+Re-run it any time a price or product name changes in the config — it
+updates in place rather than creating duplicates, archiving the old Price
+if the amount changed. Both payment endpoints look the amount up server-side
+from `productId`; the kiosk's own `amount` is never trusted.
+
 ---
 
 ## AI names

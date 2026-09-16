@@ -81,11 +81,11 @@ class StripeTerminalProvider extends BaseProvider {
     this.cancelled = false;
     if (!this.readerId) await this.init();
 
+    // The server looks the price up by productId from its own copy of
+    // booth.config.json — it doesn't trust amount/description from here.
     const intent = await this.api('POST', '/terminal/payment_intent', {
-      amount: product.amount,
-      currency: this.cfg.currency || 'usd',
-      description: `${product.name} — HoloBooth`,
-      metadata: { productId: product.id, ...meta },
+      productId: product.id,
+      metadata: meta,
     });
 
     this.onStatus({ phase: 'ready', message: 'Tap, insert or swipe your card' });
@@ -145,7 +145,7 @@ class StripeQrProvider extends BaseProvider {
     const res = await fetch(this.cfg.serverUrl + '/checkout/session', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ amount: product.amount, productId: product.id, meta }),
+      body: JSON.stringify({ productId: product.id, meta }),
     });
     const { sessionId, url } = await res.json();
 
