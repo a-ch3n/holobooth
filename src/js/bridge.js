@@ -110,7 +110,17 @@ function makeMemoryBridge() {
     config: { get: () => cfg, save: async () => true, reload: async () => cfg },
     printers: {
       list: async () => [],
-      print: async () => ({ ok: false, reason: 'Printing is disabled in browser preview' }),
+      // No real printer in browser preview, but a mock job still resolves
+      // `ok: true` (like the mock payment provider) so the whole flow —
+      // including print → thanks — can be exercised with no hardware.
+      print: async ({ copies = 1 } = {}) => {
+        const { printing } = await cfg;
+        if (printing?.enabled === false) {
+          return { ok: false, reason: 'Printing is disabled in booth.config.json' };
+        }
+        await sleep(600);
+        return { ok: true, mock: true, copies };
+      },
     },
     cards: {
       nextMint: async ({ frameId }) => mem.cards.filter(c => c.frameId === frameId).length + 1,
@@ -144,3 +154,5 @@ function makeMemoryBridge() {
 function countBy(rows, key) {
   return rows.reduce((m, r) => ((m[r[key]] = (m[r[key]] || 0) + 1), m), {});
 }
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));

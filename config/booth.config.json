@@ -33,20 +33,23 @@
     "cropToPortrait": true,
     "warmupMs": 1200,
     "angles": {
-      "//": "Optional: two (or more) capture cards, one per physical camera. When 2+ entries are listed here, the customer picks one on a screen shown right after paying, before the shoot starts. Each entry's preferredLabels/excludeLabels/constraints override the defaults above for that angle only — fields left out fall back to the defaults. Leave this as a single entry (or remove it) to skip the picker and keep the single-camera flow exactly as it was.",
+      "//": "Optional: two (or more) physical cameras. When 2+ entries are listed here, the customer picks one on a screen shown right after paying, before the shoot starts. Each entry's preferredLabels/excludeLabels/constraints override the defaults above for that angle only — fields left out fall back to the defaults. Leave this as a single entry (or remove it) to skip the picker and keep the single-camera flow exactly as it was.",
       "list": [
         {
           "id": "standard",
           "label": "Standard",
           "sub": "Eye level",
-          "icon": "📷"
+          "icon": "📷",
+          "//": "The main camera, in over HDMI through the capture card.",
+          "preferredLabels": ["Capture Card", "Cam Link", "Elgato", "HDMI", "USB Video", "UVC", "Capture"]
         },
         {
           "id": "high",
           "label": "High Angle",
-          "sub": "Overhead",
+          "sub": "GoPro overhead",
           "icon": "🔝",
-          "preferredLabels": ["High Angle", "Overhead", "Top Cam"]
+          "//": "The second camera: a GoPro in USB webcam mode, so it enumerates as its own UVC device with 'GoPro' in the label — no second capture card needed.",
+          "preferredLabels": ["GoPro Webcam", "GoPro"]
         }
       ]
     }
