@@ -447,9 +447,14 @@ media exactly, the driver silently scales and your 2.5×3.5″ card comes out at
 
 Don't "fix" either one by letting the driver fit-to-page.
 
-Most dye-subs only load 4×6 media. `printing.sheet.enabled` gangs card prints
-onto a 4×6 with cut marks so you trim after — cheaper per card and much faster
-than single-card media.
+Most dye-subs (a DNP DS40 included) only load 4×6 media, so a lone 2.5×3.5″
+card can't go to the printer as its own page. With `printing.sheet.enabled`,
+`buildCardSheets()` in `app.js` tiles as many card copies as fit onto a
+4×6 canvas with hairline cut marks, and that's what actually gets sent as
+the print job — cheaper per card and much faster than single-card media.
+A photo strip (2×6) already matches a DS40's native "2×6 divided" media
+mode, so it prints at its own size with no ganging needed; just select
+that media type in the printer driver.
 
 ---
 
@@ -493,8 +498,6 @@ Honest list of what needs real work before an event:
 - **Collector dex identity.** `collection.identifyBy` is set to `phone` but the
   kiosk never asks for one — cards record `collectorId: null`. The server
   endpoint (`GET /dex?id=`) works; the phone-entry screen doesn't exist.
-- **Sheet ganging.** `printing.sheet` is read from config but `printImage()`
-  still prints one card per page.
 - **Fonts.** The card faces fall back to system fonts until you drop real files
   into `src/assets/fonts/` and add `@font-face` rules. The layouts hold either
   way, but a rounded display face is a big part of the genre's feel.
