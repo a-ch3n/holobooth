@@ -6,9 +6,10 @@
  * kiosk owns the gestures, and the renderer composites placed stickers into the
  * card's photo window so what they arranged is what prints.
  *
- * Two kinds:
- *   'buddy' — the mascots from companions.mjs, reused as stickers
- *   'deco'  — the decorations below, drawn from paths
+ * Kinds:
+ *   'buddy'  — the mascots from companions.mjs, reused as stickers
+ *   'deco'   — the decorations below, drawn from paths
+ *   'pack'   — user-supplied image-based sticker packs (see POKEMON_PACK below)
  *
  * Placed stickers are stored in coordinates NORMALISED TO THE PHOTO WINDOW
  * (0..1), never pixels. That is what lets someone arrange a sticker on a 340px
@@ -36,11 +37,64 @@ export const DECOS = [
   { id: 'paw',      name: 'Paw',      color: '#c39a6b' },
 ];
 
-/** Everything the picker can offer, buddies first. */
+/**
+ * Personal-use image sticker pack. Not bundled with any artwork — you supply
+ * your own PNGs at the paths below. Each entry needs a transparent-background
+ * PNG at `imageUrl` (the fetch script saves these into ./images/).
+ *
+ * Personal/non-commercial build only — keep this out of anything customers
+ * pay for or receive.
+ */
+export const POKEMON_PACK = [
+  { id: "pikachu-01",    name: "Pikachu",     category: "Electric", imageUrl: "./images/pikachu.png",    dimensions: { width: 150, height: 150 } },
+  { id: "charmander-02", name: "Charmander",  category: "Fire",     imageUrl: "./images/charmander.png", dimensions: { width: 150, height: 150 } },
+  { id: "squirtle-03",   name: "Squirtle",    category: "Water",    imageUrl: "./images/squirtle.png",   dimensions: { width: 150, height: 150 } },
+  { id: "bulbasaur-04",  name: "Bulbasaur",   category: "Grass",    imageUrl: "./images/bulbasaur.png",  dimensions: { width: 150, height: 150 } },
+  { id: "jigglypuff-05", name: "Jigglypuff",  category: "Normal",   imageUrl: "./images/jigglypuff.png", dimensions: { width: 150, height: 150 } },
+  { id: "meowth-06",     name: "Meowth",      category: "Normal",   imageUrl: "./images/meowth.png",     dimensions: { width: 150, height: 150 } },
+  { id: "psyduck-07",    name: "Psyduck",     category: "Water",    imageUrl: "./images/psyduck.png",    dimensions: { width: 150, height: 150 } },
+  { id: "growlithe-08",  name: "Growlithe",   category: "Fire",     imageUrl: "./images/growlithe.png",  dimensions: { width: 150, height: 150 } },
+  { id: "poliwag-09",    name: "Poliwag",     category: "Water",    imageUrl: "./images/poliwag.png",    dimensions: { width: 150, height: 150 } },
+  { id: "abra-10",       name: "Abra",        category: "Psychic",  imageUrl: "./images/abra.png",       dimensions: { width: 150, height: 150 } },
+  { id: "machop-11",     name: "Machop",      category: "Fighting", imageUrl: "./images/machop.png",     dimensions: { width: 150, height: 150 } },
+  { id: "bellsprout-12", name: "Bellsprout",  category: "Grass",    imageUrl: "./images/bellsprout.png", dimensions: { width: 150, height: 150 } },
+  { id: "geodude-13",    name: "Geodude",     category: "Rock",     imageUrl: "./images/geodude.png",    dimensions: { width: 150, height: 150 } },
+  { id: "ponyta-14",     name: "Ponyta",      category: "Fire",     imageUrl: "./images/ponyta.png",     dimensions: { width: 150, height: 150 } },
+  { id: "slowpoke-15",   name: "Slowpoke",    category: "Water",    imageUrl: "./images/slowpoke.png",   dimensions: { width: 150, height: 150 } },
+  { id: "magnemite-16",  name: "Magnemite",   category: "Electric", imageUrl: "./images/magnemite.png",  dimensions: { width: 150, height: 150 } },
+  { id: "farfetchd-17",  name: "Farfetch'd",  category: "Normal",   imageUrl: "./images/farfetchd.png",  dimensions: { width: 150, height: 150 } },
+  { id: "seel-18",       name: "Seel",        category: "Water",    imageUrl: "./images/seel.png",       dimensions: { width: 150, height: 150 } },
+  { id: "grimer-19",     name: "Grimer",      category: "Poison",   imageUrl: "./images/grimer.png",     dimensions: { width: 150, height: 150 } },
+  { id: "shellder-20",   name: "Shellder",    category: "Water",    imageUrl: "./images/shellder.png",   dimensions: { width: 150, height: 150 } },
+  { id: "gastly-21",     name: "Gastly",      category: "Ghost",    imageUrl: "./images/gastly.png",     dimensions: { width: 150, height: 150 } },
+  { id: "onix-22",       name: "Onix",        category: "Rock",     imageUrl: "./images/onix.png",       dimensions: { width: 150, height: 150 } },
+  { id: "drowzee-23",    name: "Drowzee",     category: "Psychic",  imageUrl: "./images/drowzee.png",    dimensions: { width: 150, height: 150 } },
+  { id: "krabby-24",     name: "Krabby",      category: "Water",    imageUrl: "./images/krabby.png",     dimensions: { width: 150, height: 150 } },
+  { id: "voltorb-25",    name: "Voltorb",     category: "Electric", imageUrl: "./images/voltorb.png",    dimensions: { width: 150, height: 150 } },
+  { id: "cubone-26",     name: "Cubone",      category: "Ground",   imageUrl: "./images/cubone.png",     dimensions: { width: 150, height: 150 } },
+  { id: "hitmonchan-27", name: "Hitmonchan",  category: "Fighting", imageUrl: "./images/hitmonchan.png", dimensions: { width: 150, height: 150 } },
+  { id: "lickitung-28",  name: "Lickitung",   category: "Normal",   imageUrl: "./images/lickitung.png",  dimensions: { width: 150, height: 150 } },
+  { id: "koffing-29",    name: "Koffing",     category: "Poison",   imageUrl: "./images/koffing.png",    dimensions: { width: 150, height: 150 } },
+  { id: "rhyhorn-30",    name: "Rhyhorn",     category: "Ground",   imageUrl: "./images/rhyhorn.png",    dimensions: { width: 150, height: 150 } },
+];
+
+/** Lazily-populated cache of loaded HTMLImageElements for the pack, keyed by id. */
+const _packImageCache = new Map();
+
+function loadPackImage(entry) {
+  if (_packImageCache.has(entry.id)) return _packImageCache.get(entry.id);
+  const img = new Image();
+  img.src = entry.imageUrl;
+  _packImageCache.set(entry.id, img);
+  return img;
+}
+
+/** Everything the picker can offer: buddies, then deco, then the pack. */
 export function stickerCatalog() {
   return [
     ...COMPANIONS.map(c => ({ id: `buddy:${c.id}`, name: c.name, kind: 'buddy', spec: c })),
     ...DECOS.map(d => ({ id: `deco:${d.id}`, name: d.name, kind: 'deco', spec: d })),
+    ...POKEMON_PACK.map(p => ({ id: `pack:${p.id}`, name: p.name, kind: 'pack', spec: p })),
   ];
 }
 
@@ -75,7 +129,6 @@ export function drawDeco(ctx, id, x, y, s) {
       break;
 
     case 'sparkle':
-      // four-point twinkle plus two small companions
       starPath(ctx, cx, cy, r * 1.05, r * 0.20, 4); ctx.fill(); ctx.stroke();
       ctx.lineWidth = s * 0.032;
       starPath(ctx, cx + r * 0.86, cy - r * 0.78, r * 0.34, r * 0.08, 4); ctx.fill(); ctx.stroke();
@@ -111,8 +164,6 @@ export function drawDeco(ctx, id, x, y, s) {
       break;
 
     case 'cloud': {
-      // One outlined silhouette, not three overlapping circles — otherwise the
-      // internal edges show as seams once it sits on a photo.
       ctx.beginPath();
       ctx.moveTo(cx - r * 1.10, cy + r * 0.52);
       ctx.arc(cx - r * 0.62, cy + r * 0.10, r * 0.50, Math.PI * 0.75, Math.PI * 1.55);
@@ -235,13 +286,21 @@ export function drawDeco(ctx, id, x, y, s) {
   ctx.restore();
 }
 
-/** A sticker of either kind, rendered to its own square canvas. */
+/** A sticker of any kind, rendered to its own square canvas. */
 export function stickerCanvas(id, size, makeCanvas) {
   const c = makeCanvas(size, size);
   const ctx = c.getContext('2d');
   if (id.startsWith('buddy:')) {
     const spec = companionById(id.slice(6));
     if (spec) drawCompanion(ctx, spec, 0, 0, size);
+  } else if (id.startsWith('pack:')) {
+    const entry = POKEMON_PACK.find(p => `pack:${p.id}` === id);
+    if (entry) {
+      const img = loadPackImage(entry);
+      const draw = () => ctx.drawImage(img, 0, 0, size, size);
+      if (img.complete && img.naturalWidth) draw();
+      else img.onload = draw;
+    }
   } else {
     drawDeco(ctx, id.slice(5), 0, 0, size);
   }
@@ -284,7 +343,6 @@ export function drawStickers(ctx, stickers, win, images) {
     ctx.save();
     ctx.translate(win.x + s.x * win.w, win.y + s.y * win.h);
     ctx.rotate(s.rot || 0);
-    // A soft drop shadow is what makes a flat sticker sit *on* the photo.
     ctx.shadowColor = 'rgba(0,0,0,.32)';
     ctx.shadowBlur = size * 0.10;
     ctx.shadowOffsetY = size * 0.03;
@@ -301,7 +359,6 @@ export function stickerAt(stickers, fx, fy, win) {
     const s = stickers[i];
     const size = base * (s.scale || 0.26);
     const hw = (size / 2) / win.w, hh = (size / 2) / win.h;
-    // Generous box: fingers are imprecise and a missed grab feels broken.
     if (Math.abs(fx - s.x) < hw * 1.15 && Math.abs(fy - s.y) < hh * 1.15) return s;
   }
   return null;
