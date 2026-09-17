@@ -265,9 +265,14 @@ body.debug { cursor: auto; }
   gap: 48px; padding: 48px; align-items: center;
 }
 @media (max-width: 900px) { .reveal-wrap { grid-template-columns: 1fr; gap: 24px; padding: 24px; } }
-.reveal-left { position: relative; display: grid; place-items: center; }
+.reveal-left { position: relative; display: grid; place-items: center; min-height: 0; }
+/* max-width AND max-height, with width/height auto, so the box fits both a
+   card's 2.5:3.5 and a strip's much taller 2:6 without cropping either —
+   a strip sized off width alone would come out ~3x the height of a card
+   and blow past the screen, showing only its top frame. */
 #card-canvas {
-  width: min(100%, 420px); height: auto; border-radius: 18px;
+  max-width: min(100%, 420px); max-height: 72vh;
+  width: auto; height: auto; border-radius: 18px;
   box-shadow: 0 30px 80px rgba(0,0,0,.7);
   animation: cardIn .7s cubic-bezier(.2,.9,.25,1.1);
 }
