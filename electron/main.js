@@ -118,8 +118,12 @@ async function printImage({ dataUrl, widthIn, heightIn, printerName, copies = 1,
     img { display:block; width:${widthIn}in; height:${heightIn}in; object-fit:cover; }
   </style></head><body><img src="${dataUrl}"></body></html>`;
 
+  // show: false is enough to keep this invisible — offscreen: true looks
+  // equivalent but isn't: an offscreen webContents' print() call resolves
+  // its callback with success while never actually reaching the OS print
+  // spooler, so the job vanishes silently instead of erroring.
   if (printWin) { try { printWin.destroy(); } catch {} }
-  printWin = new BrowserWindow({ show: false, webPreferences: { offscreen: true } });
+  printWin = new BrowserWindow({ show: false });
   await printWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
 
   const opts = {
