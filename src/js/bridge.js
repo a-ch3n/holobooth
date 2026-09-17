@@ -5,7 +5,7 @@
  *
  *   Electron desktop  → the preload script already installed window.booth
  *   Raspberry Pi      → Chromium kiosk talking JSON-RPC to the local Node service
- *   Plain browser     → in-memory stub, so `npm run web` works with no hardware
+ *   Plain browser     → system print dialog plus in-memory storage
  *
  * That's the whole reason the Pi port didn't need the app rewritten: the state
  * machine calls the same eight namespaces either way, and only this file knows
@@ -110,16 +110,12 @@ function makeMemoryBridge() {
     config: { get: () => cfg, save: async () => true, reload: async () => cfg },
     printers: {
       list: async () => [],
-      // No real printer in browser preview, but a mock job still resolves
-      // `ok: true` (like the mock payment provider) so the whole flow —
-      // including print → thanks — can be exercised with no hardware.
-      print: async ({ copies = 1 } = {}) => {
+      print: async args => {
         const { printing } = await cfg;
         if (printing?.enabled === false) {
           return { ok: false, reason: 'Printing is disabled in booth.config.json' };
         }
-        await sleep(600);
-        return { ok: true, mock: true, copies };
+        return printInBrowser(args);
       },
     },
     cards: {
@@ -149,6 +145,41 @@ function makeMemoryBridge() {
     },
     input: { subscribe: () => () => {} },
   };
+}
+
+function printInBrowser({ dataUrl, widthIn, heightIn, copies = 1 } = {}) {
+  if (!dataUrl || !widthIn || !heightIn) {
+    return Promise.reject(new Error('Print requires an image and physical dimensions'));
+  }
+
+  return new Promise((resolve, reject) => {
+    const frame = document.createElement('iframe');
+    frame.style.position = 'fixed';
+    frame.style.width = '1px';
+    frame.style.height = '1px';
+    frame.style.opacity = '0';
+    frame.style.border = '0';
+    frame.onload = () => {
+      try {
+        frame.contentWindow.focus();
+        frame.contentWindow.print();
+        setTimeout(() => frame.remove(), 1000);
+        resolve({ ok: true, browser: true, copies });
+      } catch (error) {
+        frame.remove();
+        reject(error);
+      }
+    };
+
+    const pages = Array.from({ length: Math.max(1, copies) }, () =>
+      `<img src="${dataUrl}" style="display:block;width:${widthIn}in;height:${heightIn}in;object-fit:cover">`
+    ).join('');
+    frame.srcdoc = `<!doctype html><html><head><style>
+      @page { size: ${widthIn}in ${heightIn}in; margin: 0; }
+      html, body { margin: 0; padding: 0; }
+    </style></head><body>${pages}</body></html>`;
+    document.body.append(frame);
+  });
 }
 
 function countBy(rows, key) {
