@@ -447,14 +447,23 @@ media exactly, the driver silently scales and your 2.5×3.5″ card comes out at
 
 Don't "fix" either one by letting the driver fit-to-page.
 
-Most dye-subs (a DNP DS40 included) only load 4×6 media, so a lone 2.5×3.5″
-card can't go to the printer as its own page. With `printing.sheet.enabled`,
-`buildCardSheets()` in `app.js` tiles as many card copies as fit onto a
-4×6 canvas with hairline cut marks, and that's what actually gets sent as
-the print job — cheaper per card and much faster than single-card media.
-A photo strip (2×6) already matches a DS40's native "2×6 divided" media
-mode, so it prints at its own size with no ganging needed; just select
-that media type in the printer driver.
+Most dye-subs (a DNP DS40 included) only load 4×6 media, so neither a lone
+2.5×3.5″ card nor a lone 2×6″ strip can go to the printer as its own page —
+there's no media that size loaded. `buildGangSheet()` in `app.js` tiles
+copies of whichever one you're printing onto a sheet-sized canvas with
+hairline cut marks, and that composed sheet is what actually gets sent as
+the print job:
+
+- **Cards** (`printing.sheet`, enabled by default): two 2.5×3.5″ cards side
+  by side on a 6×4″ sheet.
+- **Strips** (`printing.stripSheet`, enabled by default): two 2×6″ copies of
+  the same strip side by side on a 4×6″ sheet — the same layout DNP calls
+  "2×6 (4×6 divided)" media, where the printer's own cutter splits the sheet
+  into two strips. If a purchase only calls for one strip, the second slot
+  just prints blank; nothing extra is charged or given away.
+
+Set either `enabled: false` if your printer actually takes that media size
+directly, and it'll fall back to sending a single page at that exact size.
 
 ---
 
