@@ -125,6 +125,7 @@ async function printImage({ dataUrl, widthIn, heightIn, printerName, copies = 1,
   const opts = {
     silent,
     printBackground: true,
+    landscape: widthIn > heightIn,
     copies: Math.max(1, Math.min(copies, config.printing?.copiesMax || 4)),
     margins: { marginType: 'none' },
     pageSize: {

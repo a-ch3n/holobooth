@@ -130,6 +130,7 @@ export async function printImage(o) {
   args.push('-n', String(Math.max(1, copies)));
   // Exact geometry: matching media, no scaling, no margins the driver invents.
   args.push('-o', `media=Custom.${widthIn}x${heightIn}in`);
+  if (widthIn > heightIn) args.push('-o', 'orientation-requested=4');
   args.push('-o', 'print-scaling=none');
   args.push('-o', 'fit-to-page=false');
   for (const opt of lpOptions) args.push('-o', opt);

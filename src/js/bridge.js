@@ -175,7 +175,7 @@ function printInBrowser({ dataUrl, widthIn, heightIn, copies = 1 } = {}) {
       `<img src="${dataUrl}" style="display:block;width:${widthIn}in;height:${heightIn}in;object-fit:cover">`
     ).join('');
     frame.srcdoc = `<!doctype html><html><head><style>
-      @page { size: ${widthIn}in ${heightIn}in; margin: 0; }
+      @page { size: ${widthIn}in ${heightIn}in${widthIn > heightIn ? ' landscape' : ''}; margin: 0; }
       html, body { margin: 0; padding: 0; }
     </style></head><body>${pages}</body></html>`;
     document.body.append(frame);
