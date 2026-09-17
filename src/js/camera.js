@@ -43,6 +43,9 @@ export class Camera {
    * enumerate for real.
    */
   async listDevices() {
+    if (!navigator.mediaDevices?.getUserMedia || !navigator.mediaDevices?.enumerateDevices) {
+      throw new Error('Camera access is unavailable in this window. Open the booth from Electron or a local web server.');
+    }
     let probe = null;
     try {
       probe = await navigator.mediaDevices.getUserMedia({ video: true });
@@ -81,7 +84,16 @@ export class Camera {
 
   async start(videoEl, explicitId = null) {
     this.video = videoEl;
-    this.deviceId = await this.pickDevice(explicitId);
+    let useGenericStream = false;
+    try {
+      this.deviceId = await this.pickDevice(explicitId);
+    } catch (error) {
+      // Some Chromium kiosk builds can open a camera but hide its device list
+      // until permission has settled. Let getUserMedia choose that camera.
+      if (!/No video input devices found/.test(error.message)) throw error;
+      useGenericStream = true;
+      this.deviceId = null;
+    }
     const c = this.cfg.constraints;
 
     // Ask for the exact device but only *ideal* geometry: a capture card that
@@ -89,7 +101,7 @@ export class Camera {
     const constraints = {
       audio: false,
       video: {
-        deviceId: { exact: this.deviceId },
+        ...(useGenericStream ? {} : { deviceId: { exact: this.deviceId } }),
         width: { ideal: c.width },
         height: { ideal: c.height },
         frameRate: { ideal: c.frameRate },
@@ -98,7 +110,21 @@ export class Camera {
     };
 
     this.stop();
-    this.stream = await navigator.mediaDevices.getUserMedia(constraints);
+    try {
+      this.stream = await navigator.mediaDevices.getUserMedia(constraints);
+    } catch (error) {
+      // A stale deviceId is common after a capture card reconnects. Retry once
+      // without pinning the request to the old device.
+      if (!useGenericStream && ['NotFoundError', 'OverconstrainedError'].includes(error.name)) {
+        this.deviceId = null;
+        this.stream = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: { width: { ideal: c.width }, height: { ideal: c.height }, frameRate: { ideal: c.frameRate } },
+        });
+      } else {
+        throw error;
+      }
+    }
     videoEl.srcObject = this.stream;
     videoEl.muted = true;
     videoEl.playsInline = true;

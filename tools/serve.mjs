@@ -4,9 +4,9 @@
  *
  *   npm run web    →  http://127.0.0.1:5173/src/index.html
  *
- * app.js detects the missing Electron bridge and stubs it (in-memory ledgers,
- * no printing), so the picker, payment mock, capture, rarity roll and card
- * render all work against your laptop's webcam.
+ * app.js detects the missing Electron bridge and uses in-memory ledgers plus
+ * the browser's system print dialog, so the picker, payment mock, capture,
+ * rarity roll and card render all work against your laptop's webcam.
  *
  * Serves from the project root because index.html fetches ../config/booth.config.json.
  * The .mjs mime type matters: browsers refuse a module served as octet-stream.

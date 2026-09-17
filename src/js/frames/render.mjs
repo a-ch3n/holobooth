@@ -331,8 +331,11 @@ export function renderPropBoard(ctx, opts) {
 }
 
 /** Renders a strip. photos should be the session's shots in order. */
-export function renderStrip(ctx, { W, H, photos, card, theme = null }) {
-  const frame = {
+export function renderStrip(ctx, {
+  W, H, photos, card, frame: sourceFrame = null, theme = null,
+  stickers = null, stickerImages = null,
+}) {
+  const frame = sourceFrame || {
     template: 'strip',
     name: 'strip',
     theme: theme || {
@@ -350,5 +353,8 @@ export function renderStrip(ctx, { W, H, photos, card, theme = null }) {
   };
   ctx.clearRect(0, 0, W, H);
   TEMPLATES.strip(ctx, { W, H, frame, photos, meta });
+  if (stickers?.length && stickerImages && meta.artWindow) {
+    drawStickers(ctx, stickers, meta.artWindow, stickerImages);
+  }
   return meta;
 }

@@ -49,7 +49,7 @@
           "sub": "GoPro overhead",
           "icon": "🔝",
           "//": "The second camera: a GoPro in USB webcam mode, so it enumerates as its own UVC device with 'GoPro' in the label — no second capture card needed.",
-          "preferredLabels": ["GoPro Webcam", "GoPro"]
+          "preferredLabels": ["GoPro HERO10", "GoPro HERO 10", "HERO10", "HERO 10", "GoPro Webcam", "GoPro"]
         }
       ]
     }
@@ -74,56 +74,62 @@
     "products": [
       {
         "id": "single_card",
-        "name": "1 Creature Card",
-        "blurb": "One printed creature card + digital copy",
+        "name": "1 Pokémon Card",
+        "blurb": "One printed Pokémon card + digital copy",
         "amount": 700,
-        "prints": {
-          "card": 1,
-          "strip": 0
-        },
+        "prints": { "card": 1, "strip": 0 },
         "digital": true,
-        "gif": true,
+        "gif": false,
+        "rarityBoost": 1.0
+      },
+      {
+        "id": "digital_card",
+        "name": "Digital Pokémon Card",
+        "blurb": "Digital card delivered by QR code",
+        "amount": 500,
+        "prints": { "card": 0, "strip": 0 },
+        "digital": true,
+        "gif": false,
+        "rarityBoost": 1.0
+      },
+      {
+        "id": "digital_strip",
+        "name": "Digital Photo Strip",
+        "blurb": "One digital photo strip delivered by QR code",
+        "amount": 500,
+        "prints": { "card": 0, "strip": 1 },
+        "digital": true,
+        "gif": false,
+        "rarityBoost": 1.0
+      },
+      {
+        "id": "two_strips",
+        "name": "2 Photo Strips",
+        "blurb": "Two printed photo strips with your chosen theme",
+        "amount": 700,
+        "prints": { "card": 0, "strip": 2 },
+        "digital": true,
+        "gif": false,
         "rarityBoost": 1.0
       },
       {
         "id": "card_plus_strip",
-        "name": "Creature + Photo Strip",
-        "blurb": "Creature card, classic 2x6 strip, GIF + downloads",
+        "name": "1 Pokémon Card + 1 Photo Strip",
+        "blurb": "One Pokémon card and one themed photo strip",
         "amount": 1200,
-        "prints": {
-          "card": 1,
-          "strip": 1
-        },
+        "prints": { "card": 1, "strip": 1 },
         "digital": true,
-        "gif": true,
-        "rarityBoost": 1.15,
-        "featured": true
+        "gif": false,
+        "rarityBoost": 1.0
       },
       {
-        "id": "booster_pack",
-        "name": "Booster Pack \u2014 3 Creatures",
-        "blurb": "Three cards, guaranteed at least one Rare or better",
-        "amount": 2000,
-        "prints": {
-          "card": 3,
-          "strip": 1
-        },
+        "id": "two_cards_two_strips",
+        "name": "2 Pokémon Cards + 2 Photo Strips",
+        "blurb": "Two printed Pokémon cards and two themed photo strips",
+        "amount": 1800,
+        "prints": { "card": 2, "strip": 2 },
         "digital": true,
-        "gif": true,
-        "rarityBoost": 1.6,
-        "guaranteeAtLeast": "rare"
-      },
-      {
-        "id": "digital_only",
-        "name": "Digital Only",
-        "blurb": "No print \u2014 instant phone download + GIF",
-        "amount": 400,
-        "prints": {
-          "card": 0,
-          "strip": 0
-        },
-        "digital": true,
-        "gif": true,
+        "gif": false,
         "rarityBoost": 1.0
       }
     ],
@@ -263,7 +269,7 @@
   },
   "cards": {
     "//": "Card stock for the drawn creature frames. 'gold' = metallic foil (default), 'classic' = flat saturated yellow board, 'silver' = MAX cards, 'type' = the card's own energy colour.",
-    "stock": "gold"
+    "stock": "classic"
   },
   "stickers": {
     "//": "Decoration layer on the photo. maxPerCard keeps a card readable and the print master fast.",
