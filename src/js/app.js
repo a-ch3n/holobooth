@@ -1505,23 +1505,28 @@ async function retake() {
 
 /**
  * Most dye-subs (DNP DS40 included) only load 4x6 media, so a lone
- * 2.5x3.5 card can't be sent as its own page — the printer has nothing
- * that size loaded. Tile copies of the card master onto printing.sheet-
- * sized pages instead, with hairline cut marks at each card boundary so
- * the operator trims them apart. Returns one canvas per physical sheet
- * needed (the last one may be partly blank if count doesn't divide evenly).
+ * 2.5x3.5 card — or a lone 2x6 strip — can't be sent as its own page, since
+ * the printer has nothing that size loaded. Tile copies of the master onto
+ * a sheet-sized page instead, with hairline cut marks at each boundary so
+ * the operator (or the printer's own cutter, for a strip on a DS40) trims
+ * them apart. Returns one canvas per physical sheet needed (the last one
+ * may be partly blank if count doesn't divide evenly).
+ *
+ * Also how a 2x6 strip becomes printable on a 4x6-only machine at all:
+ * two copies side by side exactly fill a 4x6 sheet, which is the same
+ * layout DNP's own "2x6 (4x6 divided)" media mode expects — the two
+ * copies aren't a bonus, they're what makes the page size valid.
  */
-function buildCardSheets(cardCanvas, count, printing) {
-  const { sheet, card } = printing;
-  const dpi = cardCanvas.width / card.widthIn;
-  const cardW = cardCanvas.width, cardH = cardCanvas.height;
-  const cols = Math.max(1, Math.floor(sheet.widthIn / card.widthIn));
-  const rows = Math.max(1, Math.floor(sheet.heightIn / card.heightIn));
+function buildGangSheet(unitCanvas, count, sheet, unit) {
+  const dpi = unitCanvas.width / unit.widthIn;
+  const unitW = unitCanvas.width, unitH = unitCanvas.height;
+  const cols = Math.max(1, Math.floor(sheet.widthIn / unit.widthIn));
+  const rows = Math.max(1, Math.floor(sheet.heightIn / unit.heightIn));
   const perSheet = cols * rows;
   const sheetW = Math.round(sheet.widthIn * dpi);
   const sheetH = Math.round(sheet.heightIn * dpi);
-  const marginX = (sheetW - cols * cardW) / 2;
-  const marginY = (sheetH - rows * cardH) / 2;
+  const marginX = (sheetW - cols * unitW) / 2;
+  const marginY = (sheetH - rows * unitH) / 2;
 
   const sheets = [];
   for (let remaining = count; remaining > 0; remaining -= perSheet) {
@@ -1532,11 +1537,11 @@ function buildCardSheets(cardCanvas, count, printing) {
     ctx.fillRect(0, 0, sheetW, sheetH);
     const onThisSheet = Math.min(perSheet, remaining);
     for (let i = 0; i < onThisSheet; i++) {
-      const x = marginX + (i % cols) * cardW;
-      const y = marginY + Math.floor(i / cols) * cardH;
-      ctx.drawImage(cardCanvas, x, y);
+      const x = marginX + (i % cols) * unitW;
+      const y = marginY + Math.floor(i / cols) * unitH;
+      ctx.drawImage(unitCanvas, x, y);
     }
-    if (sheet.cutMarks) drawSheetCutMarks(ctx, sheetW, sheetH, marginX, marginY, cardW, cardH, cols, rows);
+    if (sheet.cutMarks) drawSheetCutMarks(ctx, sheetW, sheetH, marginX, marginY, unitW, unitH, cols, rows);
     sheets.push(canvas);
   }
   return sheets;
@@ -1569,43 +1574,40 @@ async function doPrint() {
   const st = $('#print-status');
   const p = S.cfg.printing;
 
+  /** Send one already-composed page. Shared by every print call below so a
+   *  rejection always surfaces the same way regardless of which item it was. */
+  const sendPage = async (dataUrl, widthIn, heightIn, printerName, copies, label) => {
+    const r = await window.booth.printers.print({ dataUrl, widthIn, heightIn, printerName, copies, silent: p.silent });
+    if (!r.ok) throw new Error(r.reason || `${label} print was rejected`);
+  };
+
+  /** Card or strip, ganged onto printing.sheet/stripSheet when enabled, one page per call otherwise. */
+  const printGanged = async (unitCanvas, count, sheet, unit, printerName, label) => {
+    if (sheet?.enabled) {
+      for (const page of buildGangSheet(unitCanvas, count, sheet, unit)) {
+        await sendPage(page.toDataURL('image/jpeg', 0.95), sheet.widthIn, sheet.heightIn, printerName, 1, label);
+      }
+    } else {
+      // JPEG, not PNG: the Pi wraps this straight into a PDF via /DCTDecode to
+      // get exact physical sizing out of CUPS, and dye-sub is continuous tone
+      // anyway so q95 is indistinguishable from lossless on paper.
+      await sendPage(unitCanvas.toDataURL('image/jpeg', 0.95), unit.widthIn, unit.heightIn, printerName, count, label);
+    }
+  };
+
   try {
     if (S.product.prints.card) {
       st.textContent = `Printing ${S.product.prints.card} card${S.product.prints.card > 1 ? 's' : ''}…`;
       const cardIsStrip = isStrip(lookupFrame(S.frameId));
       const geo = cardIsStrip ? p.strip : p.card;
-
-      if (!cardIsStrip && p.sheet?.enabled) {
-        for (const sheetCanvas of buildCardSheets(S.cardCanvas, S.product.prints.card, p)) {
-          const r = await window.booth.printers.print({
-            dataUrl: sheetCanvas.toDataURL('image/jpeg', 0.95),
-            widthIn: p.sheet.widthIn, heightIn: p.sheet.heightIn,
-            printerName: p.cardPrinterName, copies: 1, silent: p.silent,
-          });
-          if (!r.ok) throw new Error(r.reason || 'Card sheet print was rejected');
-        }
-      } else {
-        const r = await window.booth.printers.print({
-          // JPEG, not PNG: the Pi wraps this straight into a PDF via /DCTDecode
-          // to get exact physical sizing out of CUPS, and dye-sub is continuous
-          // tone anyway so q95 is indistinguishable from lossless on paper.
-          dataUrl: S.cardCanvas.toDataURL('image/jpeg', 0.95),
-          widthIn: geo.widthIn, heightIn: geo.heightIn,
-          printerName: p.cardPrinterName, copies: S.product.prints.card, silent: p.silent,
-        });
-        if (!r.ok) throw new Error(r.reason || 'Card print was rejected');
-      }
+      const sheet = cardIsStrip ? p.stripSheet : p.sheet;
+      const printerName = cardIsStrip ? (p.stripPrinterName || p.cardPrinterName) : p.cardPrinterName;
+      await printGanged(S.cardCanvas, S.product.prints.card, sheet, geo, printerName, cardIsStrip ? 'Strip' : 'Card');
     }
 
     if (S.product.prints.strip && S.stripCanvas) {
       st.textContent = 'Printing your strip…';
-      const r = await window.booth.printers.print({
-        dataUrl: S.stripCanvas.toDataURL('image/jpeg', 0.95),
-        widthIn: p.strip.widthIn, heightIn: p.strip.heightIn,
-        printerName: p.stripPrinterName || p.cardPrinterName,
-        copies: S.product.prints.strip, silent: p.silent,
-      });
-      if (!r.ok) throw new Error(r.reason || 'Strip print was rejected');
+      await printGanged(S.stripCanvas, S.product.prints.strip, p.stripSheet, p.strip, p.stripPrinterName || p.cardPrinterName, 'Strip');
     }
 
     st.textContent = 'Sent to the printer.';

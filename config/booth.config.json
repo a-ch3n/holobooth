@@ -186,6 +186,13 @@
       "heightIn": 4.0,
       "cutMarks": true
     },
+    "//stripSheet": "A 2x6 strip can't be sent as its own page on a 4x6-only printer either — two copies side by side exactly fill a 4x6 sheet, which is also the layout DNP calls '2x6 (4x6 divided)' media: the driver's own cutter splits it into two strips. Set enabled:false only if your printer takes true 2x6 media directly.",
+    "stripSheet": {
+      "enabled": true,
+      "widthIn": 4.0,
+      "heightIn": 6.0,
+      "cutMarks": true
+    },
     "silent": true,
     "copiesMax": 4,
     "lpOptions": [],
