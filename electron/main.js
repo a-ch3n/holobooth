@@ -123,13 +123,17 @@ function createWindow() {
  * printed through Electron's API, which doesn't have this bug there.
  */
 async function printImage({ dataUrl, widthIn, heightIn, printerName, copies = 1, silent = true }) {
+  console.log(`[print] ${process.platform} request: ${widthIn}x${heightIn}in, printer=${printerName || '(OS default)'}, copies=${copies}, silent=${silent}`);
+
   if (process.platform !== 'win32') {
     const { printImage: printViaCups } = await import('../pi/print.mjs');
-    return printViaCups({
+    const result = await printViaCups({
       dataUrl, widthIn, heightIn, printerName, copies,
       lpOptions: config.printing?.lpOptions || [],
       dryRun: !!config.printing?.dryRun,
     });
+    console.log('[print] lp result:', JSON.stringify(result));
+    return result;
   }
 
   const html = `<!doctype html><html><head><meta charset="utf-8"><style>
@@ -157,10 +161,13 @@ async function printImage({ dataUrl, widthIn, heightIn, printerName, copies = 1,
   };
   if (printerName) opts.deviceName = printerName;
 
+  console.log('[print] windows webContents.print options:', JSON.stringify(opts));
+
   return new Promise(resolve => {
     printWin.webContents.print(opts, (ok, reason) => {
       try { printWin.destroy(); } catch {}
       printWin = null;
+      console.log(`[print] windows result: ok=${ok}${reason ? `, reason=${reason}` : ''}`);
       resolve({ ok, reason: reason || null });
     });
   });
