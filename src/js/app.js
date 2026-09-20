@@ -773,7 +773,7 @@ ON_ENTER.pay = async () => {
   status.classList.remove('err');
 
   S.pay = createPaymentProvider(
-    { ...S.cfg.payments, currency: S.cfg.booth.currency },
+    { ...S.cfg.payments, currency: S.cfg.booth.currency, boothId: S.cfg.booth.id },
     {
       onStatus: s => {
         status.textContent = s.message || '';

@@ -53,67 +53,53 @@ class MockProvider extends BaseProvider {
 /* ---------------------------------------------------- stripe terminal  */
 
 /**
- * Server-driven Terminal flow:
- *   kiosk -> your server -> Stripe (create PaymentIntent)
- *   kiosk -> your server -> Stripe (process_payment_intent on the reader)
- *   reader prompts, customer taps, kiosk polls until succeeded
+ * M2 + companion-phone flow:
+ *   kiosk -> your server: "sell productId to boothId" — creates the PaymentIntent
+ *   phone -> your server: polls for the pending sale, then drives the M2
+ *            itself over Bluetooth via the Stripe Terminal SDK
+ *   kiosk -> your server: polls that same session until it flips to paid
  *
- * The secret key never leaves your server. The kiosk only ever holds ids.
+ * An M2 is Bluetooth-only, so the kiosk can't talk to it directly — that's
+ * why a phone is in the loop at all. The secret key still never reaches
+ * either the kiosk or the phone; both only ever hold ids.
  */
 class StripeTerminalProvider extends BaseProvider {
   constructor(cfg, onStatus) {
     super(cfg, onStatus);
     this.base = cfg.serverUrl;
-    this.readerId = null;
-  }
-
-  async init() {
-    const readers = await this.api('GET', '/terminal/readers');
-    if (!readers.length) throw new Error('No Stripe Terminal readers registered at this location.');
-    const wanted = this.cfg.stripe?.readerLabel;
-    this.reader = (wanted && readers.find(r => r.label === wanted)) || readers[0];
-    this.readerId = this.reader.id;
-    this.onStatus({ phase: 'idle', message: `Reader: ${this.reader.label} (${this.reader.status})` });
-    return this.reader;
+    this.boothId = cfg.boothId;
   }
 
   async collect(product, meta = {}) {
     this.cancelled = false;
-    if (!this.readerId) await this.init();
 
     // The server looks the price up by productId from its own copy of
     // booth.config.json — it doesn't trust amount/description from here.
-    const intent = await this.api('POST', '/terminal/payment_intent', {
-      productId: product.id,
-      metadata: meta,
+    const session = await this.api('POST', '/sessions', {
+      productId: product.id, boothId: this.boothId, metadata: meta,
     });
 
-    this.onStatus({ phase: 'ready', message: 'Tap, insert or swipe your card' });
-    await this.api('POST', '/terminal/process', { readerId: this.readerId, paymentIntentId: intent.id });
+    this.onStatus({ phase: 'ready', message: 'Tap, insert or swipe your card on the reader' });
 
     const deadline = Date.now() + 120000;
     while (Date.now() < deadline) {
       if (this.cancelled) {
-        await this.api('POST', '/terminal/cancel_action', { readerId: this.readerId }).catch(() => {});
+        await this.api('POST', `/sessions/${session.sessionId}/cancel`).catch(() => {});
         return { ok: false, error: 'cancelled' };
       }
-      await sleep(1200);
-      const st = await this.api('GET', `/terminal/payment_intent/${intent.id}`);
+      await sleep(1500);
+      const st = await this.api('GET', `/sessions/${session.sessionId}`);
 
-      if (st.status === 'requires_capture' || st.status === 'succeeded') {
-        this.onStatus({ phase: 'processing', message: 'Approved' });
-        if (st.status === 'requires_capture') await this.api('POST', '/terminal/capture', { paymentIntentId: intent.id });
-        const charge = st.latest_charge_details || {};
+      if (st.status === 'paid') {
         return {
-          ok: true, method: 'card_present', paymentId: intent.id, amount: product.amount,
-          brand: charge.brand || null, last4: charge.last4 || null,
+          ok: true, method: 'card_present', paymentId: session.sessionId, amount: product.amount,
+          brand: st.brand || null, last4: st.last4 || null,
         };
       }
-      if (st.status === 'canceled') return { ok: false, error: 'Payment cancelled' };
-      if (st.last_payment_error) return { ok: false, error: st.last_payment_error.message || 'Card declined' };
-      this.onStatus({ phase: 'waiting', message: readerPrompt(st.status) });
+      if (st.status === 'failed') return { ok: false, error: st.error || 'Card declined' };
+      this.onStatus({ phase: 'waiting', message: 'Waiting on the phone paired to the reader…' });
     }
-    await this.api('POST', '/terminal/cancel_action', { readerId: this.readerId }).catch(() => {});
+    await this.api('POST', `/sessions/${session.sessionId}/cancel`).catch(() => {});
     return { ok: false, error: 'Timed out waiting for the card reader' };
   }
 
@@ -126,14 +112,6 @@ class StripeTerminalProvider extends BaseProvider {
     if (!res.ok) throw new Error(`${path}: ${res.status} ${await res.text()}`);
     return res.json();
   }
-}
-
-function readerPrompt(status) {
-  return {
-    requires_payment_method: 'Waiting for card…',
-    requires_confirmation: 'Confirming…',
-    processing: 'Processing…',
-  }[status] || 'Follow the prompts on the reader';
 }
 
 /* --------------------------------------------------------- stripe QR  */

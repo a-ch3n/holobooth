@@ -33,6 +33,20 @@ const PRODUCTS_BY_ID = new Map((CONFIG.pricing?.products || []).map(p => [p.id, 
 const stripe = process.env.STRIPE_SECRET_KEY
   ? require('stripe')(process.env.STRIPE_SECRET_KEY)
   : null;
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || null;
+/** Shared secret the companion phone app sends on every request. Per-booth
+ *  in a real multi-booth deployment; one value is enough to start. */
+const APP_KEY = process.env.COMPANION_APP_KEY || null;
+
+/**
+ * M2 reader sessions. The phone (not this server) drives the reader over
+ * Bluetooth — this server only ever creates the PaymentIntent, hands the
+ * phone whatever it needs to collect it, and tracks the result. keyed by
+ * PaymentIntent id; pendingByBooth points each boothId at its one open one.
+ */
+const terminalSessions = new Map();
+const pendingByBooth = new Map();
+const STALE_SESSION_MS = 3 * 60 * 1000;
 
 /**
  * Stripe product/price ids from `npm run stripe:sync` (tools/stripe-sync-catalog.mjs).
@@ -64,6 +78,40 @@ fs.mkdirSync(MEDIA_DIR, { recursive: true });
 
 const app = express();
 app.use(cors());
+
+/**
+ * Stripe webhooks need the raw request body to verify the signature, so this
+ * has to be mounted before the app-wide express.json() below swallows it.
+ */
+app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), (req, res) => {
+  if (!stripe) return res.status(503).end();
+  let event;
+  try {
+    event = STRIPE_WEBHOOK_SECRET
+      ? stripe.webhooks.constructEvent(req.body, req.headers['stripe-signature'], STRIPE_WEBHOOK_SECRET)
+      : JSON.parse(req.body);
+  } catch (e) {
+    console.error('[webhook] signature check failed:', e.message);
+    return res.status(400).send(`Webhook Error: ${e.message}`);
+  }
+
+  const pi = event.data?.object;
+  const boothSession = pi && terminalSessions.get(pi.id);
+  if (boothSession) {
+    if (event.type === 'payment_intent.succeeded') {
+      boothSession.status = 'paid';
+      const card = pi.charges?.data?.[0]?.payment_method_details?.card_present;
+      if (card) { boothSession.brand = card.brand; boothSession.last4 = card.last4; }
+      if (pendingByBooth.get(boothSession.boothId) === pi.id) pendingByBooth.delete(boothSession.boothId);
+    } else if (event.type === 'payment_intent.payment_failed' || event.type === 'payment_intent.canceled') {
+      boothSession.status = 'failed';
+      boothSession.error = pi.last_payment_error?.message || 'Payment failed';
+      if (pendingByBooth.get(boothSession.boothId) === pi.id) pendingByBooth.delete(boothSession.boothId);
+    }
+  }
+  res.json({ received: true });
+});
+
 app.use(express.json({ limit: '40mb' }));
 
 /* =============================================================== health */
@@ -129,7 +177,17 @@ app.post('/ai/name', async (req, res) => {
   }
 });
 
-/* ====================================================== stripe terminal */
+/* ============================================ stripe terminal (M2 + phone) */
+
+/**
+ * An M2 reader is Bluetooth-only — this server never talks to it directly.
+ * A phone running the Stripe Terminal SDK pairs with the M2 over Bluetooth,
+ * polls this server for the sale it should collect, and drives the reader
+ * itself. This server's whole job is: decide the price, create the
+ * PaymentIntent, hand it to whichever phone asks, and track the result —
+ * exactly the same "the client never sets its own price" rule the QR and
+ * card-catalog flows already follow (see requireProduct above).
+ */
 
 function requireStripe(res) {
   if (!stripe) {
@@ -139,8 +197,15 @@ function requireStripe(res) {
   return true;
 }
 
-/** Terminal SDKs exchange this for a session. Kept server-side by design. */
-app.post('/terminal/connection_token', async (_req, res) => {
+/** The companion app sends this on every call; keeps randoms from polling client secrets off your booth. */
+function requireAppKey(req, res, next) {
+  if (!APP_KEY) return next(); // no key configured — fine for local dev, set COMPANION_APP_KEY for a real event
+  if (req.get('x-app-key') !== APP_KEY) return res.status(401).json({ error: 'bad or missing x-app-key' });
+  next();
+}
+
+/** Terminal SDKs (the phone's, in this setup) exchange this for a session. Kept server-side by design. */
+app.post('/terminal/connection_token', requireAppKey, async (_req, res) => {
   if (!requireStripe(res)) return;
   try {
     const token = await stripe.terminal.connectionTokens.create();
@@ -148,75 +213,117 @@ app.post('/terminal/connection_token', async (_req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.get('/terminal/readers', async (_req, res) => {
-  if (!requireStripe(res)) return;
-  try {
-    const params = {};
-    if (CONFIG.payments?.stripe?.locationId) params.location = CONFIG.payments.stripe.locationId;
-    const readers = await stripe.terminal.readers.list(params);
-    res.json(readers.data.map(r => ({
-      id: r.id, label: r.label, status: r.status, deviceType: r.device_type, serial: r.serial_number,
-    })));
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-app.post('/terminal/payment_intent', async (req, res) => {
+/** HoloBooth creates the sale here — a productId and a boothId, never an amount. */
+app.post('/sessions', async (req, res) => {
   if (!requireStripe(res)) return;
   const product = requireProduct(req, res);
   if (!product) return;
-  const { metadata = {} } = req.body;
+  const { boothId, metadata = {} } = req.body;
+  if (!boothId) return res.status(400).json({ error: 'boothId is required' });
   const currency = CONFIG.booth?.currency || 'usd';
   try {
     const pi = await stripe.paymentIntents.create({
       amount: product.amount,
       currency,
       description: `${product.name} — HoloBooth`,
-      metadata: { productId: product.id, ...metadata },
+      metadata: { productId: product.id, boothId, ...metadata },
       payment_method_types: ['card_present'],
-      capture_method: 'manual', // capture only once the print actually succeeds
+      capture_method: 'manual', // capture only once the phone confirms the tap succeeded
     });
-    res.json({ id: pi.id, status: pi.status });
+    terminalSessions.set(pi.id, {
+      boothId, productId: product.id, amount: product.amount, currency,
+      status: 'pending', createdAt: Date.now(),
+    });
+    pendingByBooth.set(boothId, pi.id);
+    res.json({ sessionId: pi.id, amount: product.amount });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post('/terminal/process', async (req, res) => {
+/** The companion app polls this to find the sale it should collect on the M2. */
+app.get('/booths/:boothId/pending', requireAppKey, async (req, res) => {
   if (!requireStripe(res)) return;
-  const { readerId, paymentIntentId } = req.body;
+  const id = pendingByBooth.get(req.params.boothId);
+  if (!id) return res.json({ pending: null });
   try {
-    const r = await stripe.terminal.readers.processPaymentIntent(readerId, { payment_intent: paymentIntentId });
-    res.json({ status: r.action?.status || 'in_progress' });
+    const pi = await stripe.paymentIntents.retrieve(id);
+    if (!['requires_payment_method', 'requires_confirmation', 'requires_action'].includes(pi.status)) {
+      // Already collected (or dead) by the time this poll landed — nothing left to hand out.
+      pendingByBooth.delete(req.params.boothId);
+      return res.json({ pending: null });
+    }
+    res.json({ pending: { id: pi.id, amount: pi.amount, currency: pi.currency, clientSecret: pi.client_secret } });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.get('/terminal/payment_intent/:id', async (req, res) => {
+/** HoloBooth polls this — same shape as the QR flow's session poll — until status flips to "paid". */
+app.get('/sessions/:id', async (req, res) => {
   if (!requireStripe(res)) return;
+  const cached = terminalSessions.get(req.params.id);
   try {
-    const pi = await stripe.paymentIntents.retrieve(req.params.id, { expand: ['latest_charge'] });
-    const card = pi.latest_charge?.payment_method_details?.card_present;
+    const pi = await stripe.paymentIntents.retrieve(req.params.id);
+    const card = pi.charges?.data?.[0]?.payment_method_details?.card_present;
     res.json({
       id: pi.id,
-      status: pi.status,
-      last_payment_error: pi.last_payment_error || null,
-      latest_charge_details: card ? { brand: card.brand, last4: card.last4 } : null,
+      status: cached?.status === 'paid' || pi.status === 'succeeded' ? 'paid'
+        : cached?.status === 'failed' || pi.status === 'canceled' ? 'failed'
+        : 'pending',
+      amount: pi.amount,
+      error: cached?.error || pi.last_payment_error?.message || null,
+      brand: cached?.brand || card?.brand || null,
+      last4: cached?.last4 || card?.last4 || null,
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post('/terminal/capture', async (req, res) => {
+/**
+ * The companion app calls this right after the Terminal SDK confirms the
+ * tap on the M2 (which brings a manual-capture PaymentIntent to
+ * requires_capture, not all the way to succeeded). The payment_intent.
+ * succeeded webhook above is the belt-and-suspenders path if the phone
+ * loses its connection before this call lands.
+ */
+app.post('/sessions/:id/capture', requireAppKey, async (req, res) => {
   if (!requireStripe(res)) return;
   try {
-    const pi = await stripe.paymentIntents.capture(req.body.paymentIntentId);
+    const pi = await stripe.paymentIntents.capture(req.params.id);
+    const session = terminalSessions.get(req.params.id);
+    if (session) {
+      session.status = 'paid';
+      const card = pi.charges?.data?.[0]?.payment_method_details?.card_present;
+      if (card) { session.brand = card.brand; session.last4 = card.last4; }
+      if (pendingByBooth.get(session.boothId) === req.params.id) pendingByBooth.delete(session.boothId);
+    }
     res.json({ status: pi.status });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post('/terminal/cancel_action', async (req, res) => {
+/** Customer walked away, or HoloBooth timed out waiting — free up the booth for the next one. */
+app.post('/sessions/:id/cancel', async (req, res) => {
   if (!requireStripe(res)) return;
+  const session = terminalSessions.get(req.params.id);
   try {
-    await stripe.terminal.readers.cancelAction(req.body.readerId);
+    await stripe.paymentIntents.cancel(req.params.id).catch(() => {}); // already captured/canceled is fine
+    if (session) {
+      session.status = 'failed';
+      session.error = 'cancelled';
+      if (pendingByBooth.get(session.boothId) === req.params.id) pendingByBooth.delete(session.boothId);
+    }
     res.json({ ok: true });
   } catch (e) { res.status(200).json({ ok: false, error: e.message }); }
 });
+
+/** Nobody walks away cleanly every time — sweep sessions a customer abandoned mid-tap. */
+setInterval(() => {
+  const cutoff = Date.now() - STALE_SESSION_MS;
+  for (const [id, session] of terminalSessions) {
+    if (session.status === 'pending' && session.createdAt < cutoff) {
+      stripe?.paymentIntents.cancel(id).catch(() => {});
+      session.status = 'failed';
+      session.error = 'timed out';
+      if (pendingByBooth.get(session.boothId) === id) pendingByBooth.delete(session.boothId);
+    }
+  }
+}, 30000).unref();
 
 /** Refund the last sale — the operator panel's "print jammed, give it back" button. */
 app.post('/terminal/refund', async (req, res) => {

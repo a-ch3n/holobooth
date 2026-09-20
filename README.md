@@ -86,6 +86,7 @@ pi/print.mjs          PI: exact-size printing via CUPS
 pi/gpio-button.py     PI: arcade buttons → the same flow as a screen tap
 
 server/index.js       Stripe secret key + QR downloads + season dex (both platforms)
+companion-app/        phone app that pairs with a Stripe M2 reader over Bluetooth
 config/booth.config.json   every number you'd want to change on site
 ```
 
@@ -338,7 +339,7 @@ The simulation and the film stack fine together.
 | Capture card | Elgato Cam Link 4K, or a generic UVC HDMI dongle | This is what makes the camera look like a webcam. Generic dongles are often 1080p30 MJPEG — fine for stills |
 | Lens | 16–23mm equivalent | Two people at four feet in a booth |
 | Printer | DNP DS620A / Citizen CX-02 dye-sub, or Canon SELPHY on a budget | Dye-sub prints are dry and handleable instantly, which matters when there's a line |
-| Payment | Stripe **WisePOS E**, or Tap to Pay on a spare iPhone | Card-present rates beat online rates |
+| Payment | Stripe **M2** + a phone running the companion app (`companion-app/`), or Tap to Pay on a spare iPhone | Card-present rates beat online rates. The M2 is Bluetooth-only — see the companion app's README for why a phone is in the loop |
 | Display | 1080×1920 portrait touchscreen | CSS is built for portrait but reflows |
 | Lighting | Constant LED panel, not flash | Flash and rolling-shutter HDMI capture do not get along |
 
@@ -369,9 +370,13 @@ signal drops, and the next customer gets a black card.
 Three providers behind one interface, chosen by `payments.provider`:
 
 - **`mock`** — approves after a beat. Develop against this.
-- **`stripe-terminal`** — the real thing. The server creates a PaymentIntent with
-  `capture_method: 'manual'`, drives the reader, and **captures only after the
-  print job is accepted.** A jammed printer becomes a void, not a chargeback.
+- **`stripe-terminal`** — the real thing, for a Stripe **M2** reader. The M2 is
+  Bluetooth-only, so the kiosk can't drive it directly: the server creates a
+  PaymentIntent and hands it off, a **phone running `companion-app/`** pairs
+  with the M2 over Bluetooth and actually collects the tap, and the kiosk
+  polls the server until that session flips to paid. Capture happens as soon
+  as the tap is approved, same as before — see `companion-app/README.md` for
+  the full flow and `server/index.js`'s `/sessions` endpoints.
 - **`stripe-qr`** — customer pays on their phone from an on-screen QR. No
   hardware, slower line.
 
