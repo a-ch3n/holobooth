@@ -145,12 +145,12 @@
   "payments": {
     "//": "provider: 'stripe-terminal' | 'stripe-qr' | 'mock'. Use 'mock' for development with no hardware.",
     "//stripe-terminal": "Reader is an M2, which is Bluetooth-only — the kiosk can't drive it directly. A phone running the companion app (companion-app/) pairs with the M2 and does the actual collecting; the kiosk only creates the sale and polls for it to be paid. See server/index.js's /sessions and /booths/:boothId/pending, and companion-app/README.md for pairing the phone. Set COMPANION_APP_KEY on the server and give the same value to the phone app so random devices can't poll your booth's payments.",
-    "provider": "mock",
-    "serverUrl": "http://127.0.0.1:4242",
+    "provider": "stripe-terminal",
+    "serverUrl": "http://192.168.1.11:4242",
     "stripe": {
-      "publishableKey": "pk_test_REPLACE_ME",
-      "locationId": "tml_REPLACE_ME",
-      "simulated": true
+      "publishableKey": "pk_live_51UC0PHGZUT57A45HuaGS9jqtRee5v0TtKo9FDVVpqca7qVkBpRDEFEka9llzsNmsbxchERupMKPVuQcpoolVCo5o00evnae4cG",
+      "locationId": "tml_Gqwbw5yrW85LOz",
+      "simulated": false
     },
     "qr": {
       "checkoutBaseUrl": "https://pay.yourbooth.com/c",
