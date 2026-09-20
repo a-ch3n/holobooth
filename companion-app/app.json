@@ -1,0 +1,37 @@
+{
+  "expo": {
+    "name": "HoloBooth Reader",
+    "slug": "holobooth-companion",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "plugins": [
+      [
+        "@stripe/stripe-terminal-react-native",
+        {
+          "bluetoothBackgroundMode": true,
+          "locationWhenInUsePermission": "This app uses your location to discover and connect to the M2 reader over Bluetooth, which Stripe's SDK requires on both iOS and Android.",
+          "bluetoothPeripheralPermission": "This app connects to your Stripe M2 card reader over Bluetooth.",
+          "bluetoothAlwaysUsagePermission": "This app connects to your Stripe M2 card reader over Bluetooth."
+        }
+      ]
+    ],
+    "ios": {
+      "bundleIdentifier": "com.holobooth.companion",
+      "supportsTablet": false,
+      "infoPlist": {
+        "UIBackgroundModes": ["bluetooth-central"]
+      }
+    },
+    "android": {
+      "package": "com.holobooth.companion",
+      "permissions": [
+        "BLUETOOTH",
+        "BLUETOOTH_ADMIN",
+        "BLUETOOTH_SCAN",
+        "BLUETOOTH_CONNECT",
+        "ACCESS_FINE_LOCATION"
+      ]
+    }
+  }
+}

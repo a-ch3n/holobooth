@@ -53,6 +53,7 @@ createServer(async (req, res) => {
 }).listen(PORT, '127.0.0.1', () => {
   console.log(`\n  HoloBooth (browser preview)`);
   console.log(`  → http://127.0.0.1:${PORT}/src/index.html\n`);
-  console.log(`  Camera: your laptop webcam. Payments: mock. Printing: disabled.`);
+  console.log(`  Camera: your laptop webcam. Payments: mock.`);
+  console.log(`  Printing: the browser's own print dialog (no silent local printing here — use npm run dev for that).`);
   console.log(`  Press "d" before paying to simulate a decline, Esc to abandon.\n`);
 });

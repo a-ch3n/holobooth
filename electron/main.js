@@ -107,10 +107,35 @@ function createWindow() {
  *
  * Dye-subs are unforgiving: the page must be the exact media size with zero
  * margins, or the driver silently scales and your 2.5x3.5 card comes out at
- * 2.42x3.39 and no longer fits a card sleeve. We build a page whose CSS
- * @page size matches the media exactly and print with margins none.
+ * 2.42x3.39 and no longer fits a card sleeve.
+ *
+ * On macOS and Linux, hand this straight to `lp` via the same code the Pi
+ * build already uses (pi/print.mjs) instead of Electron's own silent-print
+ * API. That's not a style choice — webContents.print({ silent: true }) has
+ * a real bug on macOS where the callback reports success while the job
+ * never reaches the OS print spooler at all (confirmed against a real DNP
+ * DS40: non-silent printing and printing from every other app worked fine,
+ * silent printing through Electron vanished every time). `lp` is the same
+ * CUPS underneath either OS, so the Pi's exact-geometry PDF approach works
+ * unmodified here too.
+ *
+ * Windows has no CUPS, so it keeps the original @page-sized BrowserWindow
+ * printed through Electron's API, which doesn't have this bug there.
  */
 async function printImage({ dataUrl, widthIn, heightIn, printerName, copies = 1, silent = true }) {
+  console.log(`[print] ${process.platform} request: ${widthIn}x${heightIn}in, printer=${printerName || '(OS default)'}, copies=${copies}, silent=${silent}`);
+
+  if (process.platform !== 'win32') {
+    const { printImage: printViaCups } = await import('../pi/print.mjs');
+    const result = await printViaCups({
+      dataUrl, widthIn, heightIn, printerName, copies,
+      lpOptions: config.printing?.lpOptions || [],
+      dryRun: !!config.printing?.dryRun,
+    });
+    console.log('[print] lp result:', JSON.stringify(result));
+    return result;
+  }
+
   const html = `<!doctype html><html><head><meta charset="utf-8"><style>
     @page { size: ${widthIn}in ${heightIn}in; margin: 0; }
     html,body { margin:0; padding:0; width:${widthIn}in; height:${heightIn}in;
@@ -119,7 +144,7 @@ async function printImage({ dataUrl, widthIn, heightIn, printerName, copies = 1,
   </style></head><body><img src="${dataUrl}"></body></html>`;
 
   if (printWin) { try { printWin.destroy(); } catch {} }
-  printWin = new BrowserWindow({ show: false, webPreferences: { offscreen: true } });
+  printWin = new BrowserWindow({ show: false });
   await printWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
 
   const opts = {
@@ -136,10 +161,13 @@ async function printImage({ dataUrl, widthIn, heightIn, printerName, copies = 1,
   };
   if (printerName) opts.deviceName = printerName;
 
+  console.log('[print] windows webContents.print options:', JSON.stringify(opts));
+
   return new Promise(resolve => {
     printWin.webContents.print(opts, (ok, reason) => {
       try { printWin.destroy(); } catch {}
       printWin = null;
+      console.log(`[print] windows result: ok=${ok}${reason ? `, reason=${reason}` : ''}`);
       resolve({ ok, reason: reason || null });
     });
   });

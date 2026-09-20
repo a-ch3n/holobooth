@@ -31,7 +31,7 @@
   "devDependencies": {
     "@napi-rs/canvas": "^0.1.100",
     "cross-env": "^7.0.0",
-    "electron": "^31.0.0",
+    "electron": "^32.0.0",
     "electron-builder": "^24.13.3"
   },
   "build": {
