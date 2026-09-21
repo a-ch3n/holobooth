@@ -150,7 +150,11 @@ async function printImage({ dataUrl, widthIn, heightIn, printerName, copies = 1,
   const opts = {
     silent,
     printBackground: true,
-    landscape: widthIn > heightIn,
+    // Not `landscape: widthIn > heightIn` — pageSize below already gives the
+    // exact physical width/height, wide-first or tall-first as wanted. Also
+    // telling Windows "landscape" rotates that already-oriented page again,
+    // so a wide (e.g. 6x4 card gang sheet) page came out sideways.
+    landscape: false,
     copies: Math.max(1, Math.min(copies, config.printing?.copiesMax || 4)),
     margins: { marginType: 'none' },
     pageSize: {
