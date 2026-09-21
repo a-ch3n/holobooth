@@ -793,9 +793,14 @@ ON_ENTER.pay = async () => {
     return;
   }
 
-  const res = await S.pay.collect(S.product, {
-    frameId: S.frameId, boothId: S.cfg.booth.id, season: S.cfg.collection.seasonId,
-  });
+  let res;
+  try {
+    res = await S.pay.collect(S.product, {
+      frameId: S.frameId, boothId: S.cfg.booth.id, season: S.cfg.collection.seasonId,
+    });
+  } catch (e) {
+    res = { ok: false, error: e.message };
+  }
 
   if (!res.ok) {
     if (res.error === 'cancelled') return;
