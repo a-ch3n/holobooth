@@ -1561,7 +1561,8 @@ function buildGangSheet(unitCanvas, count, sheet, unit) {
       if (rotate) {
         ctx.save();
         ctx.translate(x + unitW / 2, y + unitH / 2);
-        ctx.rotate(Math.PI / 2);
+        // Confirmed on a real DS40: +90° came out backwards once cut apart.
+        ctx.rotate(-Math.PI / 2);
         ctx.drawImage(unitCanvas, -unitCanvas.width / 2, -unitCanvas.height / 2);
         ctx.restore();
       } else {
