@@ -131,13 +131,12 @@ export async function printImage(o) {
   // Exact geometry: matching media, no scaling, no margins the driver invents.
   args.push('-o', `media=Custom.${widthIn}x${heightIn}in`);
   // The PDF's MediaBox is already built at exactly widthIn x heightIn (see
-  // jpegToPdf) — whichever way round that is IS the wanted orientation. Pin
-  // orientation-requested to 3 ("as authored") unconditionally so no driver
-  // rotates it again on top of that: a landscape-shaped MediaBox rotated by
-  // orientation-requested=4 comes out sideways, and leaving it unset lets
-  // some DNP PPDs fall back to a landscape-native default and rotate a
-  // portrait sheet (e.g. the strip gang sheet) too.
-  args.push('-o', 'orientation-requested=3');
+  // jpegToPdf) — whichever way round that is IS the wanted orientation, and
+  // we don't want this DNP's own PPD default rotating it again on top of
+  // that. orientation-requested=3 ("portrait") came out perpendicular to the
+  // media's long edge on this printer — confirmed against a real DS40 — so
+  // pin it to 4 ("landscape") unconditionally instead.
+  args.push('-o', 'orientation-requested=4');
   args.push('-o', 'print-scaling=none');
   args.push('-o', 'fit-to-page=false');
   for (const opt of lpOptions) args.push('-o', opt);
