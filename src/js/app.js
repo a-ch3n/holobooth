@@ -1521,12 +1521,23 @@ async function retake() {
  * two copies side by side exactly fill a 4x6 sheet, which is the same
  * layout DNP's own "2x6 (4x6 divided)" media mode expects — the two
  * copies aren't a bonus, they're what makes the page size valid.
+ *
+ * sheet.rotateForCutter (the DS40 strip sheet): the printer's own auto-cutter
+ * only slices along the sheet's short/feed axis, not along whichever axis the
+ * unit image happens to be tall on. So each unit gets pre-rotated 90 and
+ * tiled by its rotated footprint — a 2x6 strip occupies a 6-wide x 2-tall
+ * spot — so that the cutter's slices land on the strip's own boundaries and
+ * the cut-apart piece reads right-side up once turned upright.
  */
 function buildGangSheet(unitCanvas, count, sheet, unit) {
   const dpi = unitCanvas.width / unit.widthIn;
-  const unitW = unitCanvas.width, unitH = unitCanvas.height;
-  const cols = Math.max(1, Math.floor(sheet.widthIn / unit.widthIn));
-  const rows = Math.max(1, Math.floor(sheet.heightIn / unit.heightIn));
+  const rotate = !!sheet.rotateForCutter;
+  const unitW = rotate ? unitCanvas.height : unitCanvas.width;
+  const unitH = rotate ? unitCanvas.width : unitCanvas.height;
+  const effUnitWidthIn = rotate ? unit.heightIn : unit.widthIn;
+  const effUnitHeightIn = rotate ? unit.widthIn : unit.heightIn;
+  const cols = Math.max(1, Math.floor(sheet.widthIn / effUnitWidthIn));
+  const rows = Math.max(1, Math.floor(sheet.heightIn / effUnitHeightIn));
   const perSheet = cols * rows;
   const sheetW = Math.round(sheet.widthIn * dpi);
   const sheetH = Math.round(sheet.heightIn * dpi);
@@ -1544,7 +1555,15 @@ function buildGangSheet(unitCanvas, count, sheet, unit) {
     for (let i = 0; i < onThisSheet; i++) {
       const x = marginX + (i % cols) * unitW;
       const y = marginY + Math.floor(i / cols) * unitH;
-      ctx.drawImage(unitCanvas, x, y);
+      if (rotate) {
+        ctx.save();
+        ctx.translate(x + unitW / 2, y + unitH / 2);
+        ctx.rotate(Math.PI / 2);
+        ctx.drawImage(unitCanvas, -unitCanvas.width / 2, -unitCanvas.height / 2);
+        ctx.restore();
+      } else {
+        ctx.drawImage(unitCanvas, x, y);
+      }
     }
     if (sheet.cutMarks) drawSheetCutMarks(ctx, sheetW, sheetH, marginX, marginY, unitW, unitH, cols, rows);
     sheets.push(canvas);
@@ -1580,9 +1599,12 @@ async function doPrint() {
   const p = S.cfg.printing;
 
   /** Send one already-composed page. Shared by every print call below so a
-   *  rejection always surfaces the same way regardless of which item it was. */
-  const sendPage = async (dataUrl, widthIn, heightIn, printerName, copies, label) => {
-    const r = await window.booth.printers.print({ dataUrl, widthIn, heightIn, printerName, copies, silent: p.silent });
+   *  rejection always surfaces the same way regardless of which item it was.
+   *  pageSize (e.g. "dnp6x4") picks the printer's own named media instead of
+   *  an arbitrary Custom.WxHin the driver may not recognize; lpOptions are
+   *  extra per-job -o flags (e.g. the DS40's Cutter=2Inch for strip sheets). */
+  const sendPage = async (dataUrl, widthIn, heightIn, printerName, copies, label, pageSize, lpOptions) => {
+    const r = await window.booth.printers.print({ dataUrl, widthIn, heightIn, printerName, copies, silent: p.silent, pageSize, lpOptions });
     if (!r.ok) throw new Error(r.reason || `${label} print was rejected`);
   };
 
@@ -1590,13 +1612,13 @@ async function doPrint() {
   const printGanged = async (unitCanvas, count, sheet, unit, printerName, label) => {
     if (sheet?.enabled) {
       for (const page of buildGangSheet(unitCanvas, count, sheet, unit)) {
-        await sendPage(page.toDataURL('image/jpeg', 0.95), sheet.widthIn, sheet.heightIn, printerName, 1, label);
+        await sendPage(page.toDataURL('image/jpeg', 0.95), sheet.widthIn, sheet.heightIn, printerName, 1, label, sheet.pageSize, sheet.lpOptions);
       }
     } else {
       // JPEG, not PNG: the Pi wraps this straight into a PDF via /DCTDecode to
       // get exact physical sizing out of CUPS, and dye-sub is continuous tone
       // anyway so q95 is indistinguishable from lossless on paper.
-      await sendPage(unitCanvas.toDataURL('image/jpeg', 0.95), unit.widthIn, unit.heightIn, printerName, count, label);
+      await sendPage(unitCanvas.toDataURL('image/jpeg', 0.95), unit.widthIn, unit.heightIn, printerName, count, label, unit.pageSize, unit.lpOptions);
     }
   };
 

@@ -107,10 +107,19 @@ export async function listPrinters() {
  * @param {number} o.widthIn   @param {number} o.heightIn
  * @param {string} [o.printerName]
  * @param {number} [o.copies]
- * @param {string[]} [o.lpOptions]  extra `-o` values from booth.config.json
+ * @param {string} [o.pageSize]   the printer's own named media (from
+ *   `lpoptions -p NAME -l`'s PageSize/Media Size line, e.g. "dnp6x4") —
+ *   pass this whenever the driver has a real preset for the sheet's exact
+ *   dimensions. Many dye-sub drivers (DNP included) only support a fixed
+ *   list of named sizes and don't handle an arbitrary Custom.WxHin well —
+ *   confirmed on a real DS40, where an unrecognized custom size printed
+ *   off-center and at a slight angle. Falls back to Custom.WxHin when omitted.
+ * @param {string[]} [o.lpOptions]  extra `-o` values, e.g. a DS40 strip
+ *   sheet's Cutter=2Inch to arm the auto-cutter — from booth.config.json,
+ *   both globally and per sheet (see printing.stripSheet.lpOptions).
  */
 export async function printImage(o) {
-  const { dataUrl, widthIn, heightIn, printerName, copies = 1, lpOptions = [], dryRun = false } = o;
+  const { dataUrl, widthIn, heightIn, printerName, copies = 1, lpOptions = [], dryRun = false, pageSize = null } = o;
 
   const [meta, b64] = String(dataUrl).split(',');
   if (!b64) throw new Error('printImage: dataUrl has no payload');
@@ -129,7 +138,10 @@ export async function printImage(o) {
   if (printerName) args.push('-d', printerName);
   args.push('-n', String(Math.max(1, copies)));
   // Exact geometry: matching media, no scaling, no margins the driver invents.
-  args.push('-o', `media=Custom.${widthIn}x${heightIn}in`);
+  // Prefer the driver's own named preset when we have one — an arbitrary
+  // Custom size it doesn't recognize is what a real DNP DS40 silently
+  // mis-registered instead of rejecting.
+  args.push('-o', pageSize ? `PageSize=${pageSize}` : `media=Custom.${widthIn}x${heightIn}in`);
   // The PDF's MediaBox is already built at exactly widthIn x heightIn (see
   // jpegToPdf) — whichever way round that is IS the wanted orientation, and
   // we don't want this DNP's own PPD default rotating it again on top of

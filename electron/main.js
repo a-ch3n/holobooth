@@ -122,14 +122,16 @@ function createWindow() {
  * Windows has no CUPS, so it keeps the original @page-sized BrowserWindow
  * printed through Electron's API, which doesn't have this bug there.
  */
-async function printImage({ dataUrl, widthIn, heightIn, printerName, copies = 1, silent = true }) {
-  console.log(`[print] ${process.platform} request: ${widthIn}x${heightIn}in, printer=${printerName || '(OS default)'}, copies=${copies}, silent=${silent}`);
+async function printImage({ dataUrl, widthIn, heightIn, printerName, copies = 1, silent = true, pageSize = null, lpOptions = [] }) {
+  console.log(`[print] ${process.platform} request: ${widthIn}x${heightIn}in, printer=${printerName || '(OS default)'}, copies=${copies}, silent=${silent}, pageSize=${pageSize || '(custom size)'}`);
 
   if (process.platform !== 'win32') {
     const { printImage: printViaCups } = await import('../pi/print.mjs');
     const result = await printViaCups({
-      dataUrl, widthIn, heightIn, printerName, copies,
-      lpOptions: config.printing?.lpOptions || [],
+      dataUrl, widthIn, heightIn, printerName, copies, pageSize,
+      // Per-job options (e.g. the DS40 strip sheet's Cutter=2Inch) first, so
+      // a global booth.config.json override of the same key still wins.
+      lpOptions: [...(lpOptions || []), ...(config.printing?.lpOptions || [])],
       dryRun: !!config.printing?.dryRun,
     });
     console.log('[print] lp result:', JSON.stringify(result));

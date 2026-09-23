@@ -179,19 +179,23 @@
       "heightIn": 6.0,
       "bleedIn": 0.06
     },
-    "//sheet": "Most dye-subs print 4x6. 'sheet' gangs card prints onto a 4x6 so you cut/perforate after.",
+    "//sheet": "Most dye-subs print 4x6. 'sheet' gangs card prints onto a 4x6 so you cut/perforate after. pageSize is the printer's own named media (see `lpoptions -p NAME -l`, the PageSize/Media Size line) — set it whenever your driver has one, since a Custom.WxHin size the driver doesn't recognize is what caused off-center, crooked cards on a real DNP DS40 (its PageSize list is fixed presets like dnp6x4, no arbitrary custom sizes).",
     "sheet": {
       "enabled": true,
       "widthIn": 6.0,
       "heightIn": 4.0,
-      "cutMarks": true
+      "cutMarks": true,
+      "pageSize": "dnp6x4"
     },
-    "//stripSheet": "A 2x6 strip can't be sent as its own page on a 4x6-only printer either — two copies side by side exactly fill a 4x6 sheet, which is also the layout DNP calls '2x6 (4x6 divided)' media: the driver's own cutter splits it into two strips. Set enabled:false only if your printer takes true 2x6 media directly.",
+    "//stripSheet": "Two 2x6 strips, printed so the DNP's own auto-cutter physically separates them — confirmed on a real DS40. Its Cutter option only cuts along the sheet's short (feed) axis, so this is a 6x4 sheet (matching PageSize dnp6x4, same as the card sheet) with each strip pre-rotated 90 and stacked top/bottom (rotateForCutter) rather than side by side — Cutter=2Inch then slices the 4in feed length into two 2in-tall halves, each 6in wide, which is the strip's own 6in length once you turn the cut piece back upright. If your printer takes true 2x6 media directly, or has no such cutter mode, set enabled:false and rotateForCutter/lpOptions become irrelevant.",
     "stripSheet": {
       "enabled": true,
-      "widthIn": 4.0,
-      "heightIn": 6.0,
-      "cutMarks": true
+      "widthIn": 6.0,
+      "heightIn": 4.0,
+      "cutMarks": true,
+      "pageSize": "dnp6x4",
+      "rotateForCutter": true,
+      "lpOptions": ["Cutter=2Inch"]
     },
     "silent": true,
     "copiesMax": 4,
