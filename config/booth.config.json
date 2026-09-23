@@ -97,7 +97,7 @@
         "name": "Digital Photo Strip",
         "blurb": "One digital photo strip delivered by QR code",
         "amount": 500,
-        "prints": { "card": 0, "strip": 1 },
+        "prints": { "card": 0, "strip": 0 },
         "digital": true,
         "gif": false,
         "rarityBoost": 1.0

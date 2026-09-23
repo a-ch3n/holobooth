@@ -1601,13 +1601,19 @@ async function doPrint() {
   };
 
   try {
-    if (S.product.prints.card) {
-      st.textContent = `Printing ${S.product.prints.card} card${S.product.prints.card > 1 ? 's' : ''}…`;
-      const cardIsStrip = isStrip(lookupFrame(S.frameId));
+    // Normally S.cardCanvas holds a card and its count is prints.card. But when
+    // the customer's chosen frame is itself a strip style (e.g. the "2 Photo
+    // Strips" product), renderCard() draws the strip straight into
+    // S.cardCanvas and prints.card is 0 — the print count to use is
+    // prints.strip instead, since that's what was actually paid for.
+    const cardIsStrip = isStrip(lookupFrame(S.frameId));
+    const cardCount = cardIsStrip ? S.product.prints.strip : S.product.prints.card;
+    if (cardCount) {
+      st.textContent = `Printing ${cardCount} ${cardIsStrip ? 'strip' : 'card'}${cardCount > 1 ? 's' : ''}…`;
       const geo = cardIsStrip ? p.strip : p.card;
       const sheet = cardIsStrip ? p.stripSheet : p.sheet;
       const printerName = cardIsStrip ? (p.stripPrinterName || p.cardPrinterName) : p.cardPrinterName;
-      await printGanged(S.cardCanvas, S.product.prints.card, sheet, geo, printerName, cardIsStrip ? 'Strip' : 'Card');
+      await printGanged(S.cardCanvas, cardCount, sheet, geo, printerName, cardIsStrip ? 'Strip' : 'Card');
     }
 
     if (S.product.prints.strip && S.stripCanvas) {
