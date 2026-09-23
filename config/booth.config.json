@@ -198,7 +198,8 @@
       "cutMarks": true,
       "pageSize": "dnp6x4",
       "rotateForCutter": true,
-      "lpOptions": ["Cutter=2Inch"]
+      "//orientation": "Same dnp6x4 media as the card sheet, which needed orientation-requested=6 (not pi/print.mjs's default of 4) on a real DS40 — trying 6 here too, since flipping the in-canvas pre-rotation direction made no visible difference (a sign the whole sheet's CUPS orientation dominates, same as the card). If still wrong, try 5.",
+      "lpOptions": ["Cutter=2Inch", "orientation-requested=6"]
     },
     "silent": true,
     "copiesMax": 4,
