@@ -185,7 +185,10 @@
       "widthIn": 6.0,
       "heightIn": 4.0,
       "cutMarks": true,
-      "pageSize": "dnp6x4"
+      "pageSize": "dnp6x4",
+      "//orientation": "orientation-requested: 3=portrait 4=landscape 5=reverse-landscape 6=reverse-portrait. 3 was confirmed wrong on a real DS40, 4 (pi/print.mjs's default) didn't fix the card either — trying 6 next. If still wrong, change to 5. offsetYIn/offsetXIn nudge the image within the sheet in inches (+down/+right) if it's still off-center once the rotation is right — no rebuild needed, just edit and reload.",
+      "lpOptions": ["orientation-requested=6"],
+      "offsetYIn": -0.15
     },
     "//stripSheet": "Two 2x6 strips, printed so the DNP's own auto-cutter physically separates them — confirmed on a real DS40. Its Cutter option only cuts along the sheet's short (feed) axis, so this is a 6x4 sheet (matching PageSize dnp6x4, same as the card sheet) with each strip pre-rotated 90 and stacked top/bottom (rotateForCutter) rather than side by side — Cutter=2Inch then slices the 4in feed length into two 2in-tall halves, each 6in wide, which is the strip's own 6in length once you turn the cut piece back upright. If your printer takes true 2x6 media directly, or has no such cutter mode, set enabled:false and rotateForCutter/lpOptions become irrelevant.",
     "stripSheet": {

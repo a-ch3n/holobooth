@@ -1541,8 +1541,11 @@ function buildGangSheet(unitCanvas, count, sheet, unit) {
   const perSheet = cols * rows;
   const sheetW = Math.round(sheet.widthIn * dpi);
   const sheetH = Math.round(sheet.heightIn * dpi);
-  const marginX = (sheetW - cols * unitW) / 2;
-  const marginY = (sheetH - rows * unitH) / 2;
+  // Centered by default; sheet.offsetXIn/offsetYIn (inches, +down/+right)
+  // nudge that off-center when a printer's real registration doesn't match
+  // its declared page geometry exactly — tune per-printer, no code change.
+  const marginX = (sheetW - cols * unitW) / 2 + (sheet.offsetXIn || 0) * dpi;
+  const marginY = (sheetH - rows * unitH) / 2 + (sheet.offsetYIn || 0) * dpi;
 
   const sheets = [];
   for (let remaining = count; remaining > 0; remaining -= perSheet) {
