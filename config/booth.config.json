@@ -54,6 +54,17 @@
       ]
     }
   },
+  "filters": {
+    "//": "Optional camera-look picker shown right before the shoot (after the camera angle picker, if any). cssFilter is a plain CSS filter() string (see developer.mozilla.org/en-US/docs/Web/CSS/filter) applied live in the preview and baked into every captured shot — not just a screen effect, it's what prints and gets delivered. vignette/grain are optional 0-1 intensities layered on top (grain needs a real photo behind it to look right; it's subtle at low values). Set enabled:false, or leave list with just one entry, to skip the picker and always shoot at 'none'.",
+    "enabled": true,
+    "default": "none",
+    "list": [
+      { "id": "none", "label": "Original", "sub": "Straight off the sensor", "icon": "📷", "cssFilter": "none" },
+      { "id": "vintage", "label": "Vintage Film", "sub": "Warm, faded, a little grainy", "icon": "🎞️", "cssFilter": "sepia(0.35) saturate(1.3) contrast(0.92) brightness(1.05) hue-rotate(-6deg)", "vignette": 0.35, "grain": 0.12 },
+      { "id": "g7x", "label": "Canon G7X Mk II", "sub": "Punchy point-and-shoot color", "icon": "📸", "cssFilter": "saturate(1.35) contrast(1.12) brightness(1.03) hue-rotate(-2deg)" },
+      { "id": "pro", "label": "Professional", "sub": "Neutral, studio-flat", "icon": "🎬", "cssFilter": "contrast(1.08) saturate(1.05) brightness(1.02)" }
+    ]
+  },
   "capture": {
     "countdownSeconds": 5,
     "shotsPerSession": 4,

@@ -43,6 +43,7 @@ const S = {
   camera: null,
   cameraAngle: null,
   angleCameras: [],
+  filterId: null,
   pay: null,
   idleTimer: null,
   adminTaps: 0,
@@ -296,6 +297,7 @@ ON_ENTER.attract = async () => {
   S.stripFrameId = null;
   S.cameraAngle = null;
   S.angleCameras = [];
+  S.filterId = S.cfg.filters?.default || null;
   S.camera?.stop();
 
   const live = pickerGroups();
@@ -820,12 +822,28 @@ ON_ENTER.pay = async () => {
   // Two physical cameras (e.g. a second, high-angle capture card) means a
   // choice to make before the shoot; one camera means there's nothing to
   // ask, so the flow skips straight to capture exactly as it always did.
-  go(cameraAngles().length >= 2 ? 'angle' : 'capture');
+  go(cameraAngles().length >= 2 ? 'angle' : screenAfterAngle());
 };
 
 /** Configured camera angles, or [] if only the single default camera is set up. */
 function cameraAngles() {
   return S.cfg.camera?.angles?.list || [];
+}
+
+/** Configured camera-look filters, or [] if the picker is off/unconfigured. */
+function filterChoices() {
+  return S.cfg.filters?.list || [];
+}
+function filtersEnabled() {
+  return !!S.cfg.filters?.enabled && filterChoices().length > 0;
+}
+function lookupFilter(id) {
+  return filterChoices().find(f => f.id === id) || null;
+}
+/** Where to go once the camera (and its angle, if any) is settled: the filter
+ *  picker if configured, otherwise straight to the shoot as it always was. */
+function screenAfterAngle() {
+  return filtersEnabled() ? 'filter' : 'capture';
 }
 
 /* --------------------------------------------------------- camera angle */
@@ -864,11 +882,68 @@ ON_ENTER.angle = () => {
       host.querySelector(`[data-angle="${cameraId}"]`)?.classList.toggle('on', cameraId === id);
     });
     await Promise.allSettled(S.angleCameras.map(({ ready }) => ready));
-    go('capture');
+    go(screenAfterAngle());
   };
 };
 
+/* -------------------------------------------------------- camera filter */
+
+ON_ENTER.filter = async () => {
+  S.angleCameras.forEach(({ camera }) => camera.stop());
+  S.angleCameras = [];
+  if (!lookupFilter(S.filterId)) S.filterId = filterChoices()[0]?.id || null;
+  const cam = (S.camera ||= new Camera(S.cfg.camera));
+  cam.onStatus = () => {};
+  applyCameraAngleCfg(cam);
+  cam.setFilter(lookupFilter(S.filterId));
+
+  const host = $('#filter-options');
+  const renderTiles = () => {
+    host.innerHTML = filterChoices().map(f => `
+      <div class="filter-option${f.id === S.filterId ? ' on' : ''}" data-filter="${f.id}">
+        <div class="ic">${f.icon || '🎨'}</div>
+        <div class="lbl">${f.label}</div>
+        ${f.sub ? `<div class="sub">${f.sub}</div>` : ''}
+      </div>`).join('');
+  };
+  renderTiles();
+
+  try {
+    await cam.start($('#filter-preview'));
+  } catch (e) {
+    toast(`Camera problem: ${e.message}`, true);
+    await sleep(2500);
+    go('thanks');
+    $('#thanks-sub').textContent = 'Sorry — the camera dropped out. Find the operator for a refund.';
+    return;
+  }
+
+  host.onclick = e => {
+    const id = e.target.closest('.filter-option')?.dataset.filter;
+    if (!id) return;
+    S.filterId = id;
+    cam.setFilter(lookupFilter(id));
+    renderTiles();
+  };
+
+  $('#filter-continue').onclick = () => go('capture');
+};
+
 /* ------------------------------------------------------------- capture */
+
+/** The chosen angle's own preferredLabels/excludeLabels/constraints (if any)
+ *  point pickDevice() at that physical camera instead of the default one;
+ *  anything the angle doesn't override just falls back to booth.config.json. */
+function applyCameraAngleCfg(cam) {
+  const angle = cameraAngles().find(a => a.id === S.cameraAngle);
+  const base = S.cfg.camera;
+  cam.cfg.preferredLabels = angle?.preferredLabels || base.preferredLabels;
+  cam.cfg.excludeLabels = angle?.excludeLabels || base.excludeLabels;
+  cam.cfg.constraints = angle?.constraints || base.constraints;
+  // A different physical camera has its own device list; re-enumerate rather
+  // than trust whatever was cached from the last angle picked this session.
+  cam.devices = [];
+}
 
 ON_ENTER.capture = async () => {
   S.angleCameras.forEach(({ camera }) => camera.stop());
@@ -878,18 +953,8 @@ ON_ENTER.capture = async () => {
     $('#cam-status').textContent = s.message;
     if (s.level === 'error') toast(s.message, true);
   };
-
-  // The chosen angle's own preferredLabels/excludeLabels/constraints (if any)
-  // point pickDevice() at that physical camera instead of the default one;
-  // anything the angle doesn't override just falls back to booth.config.json.
-  const angle = cameraAngles().find(a => a.id === S.cameraAngle);
-  const base = S.cfg.camera;
-  cam.cfg.preferredLabels = angle?.preferredLabels || base.preferredLabels;
-  cam.cfg.excludeLabels = angle?.excludeLabels || base.excludeLabels;
-  cam.cfg.constraints = angle?.constraints || base.constraints;
-  // A different physical camera has its own device list; re-enumerate rather
-  // than trust whatever was cached from the last angle picked this session.
-  cam.devices = [];
+  applyCameraAngleCfg(cam);
+  cam.setFilter(lookupFilter(S.filterId));
 
   try {
     await cam.start($('#preview'));
