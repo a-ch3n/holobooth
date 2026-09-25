@@ -713,8 +713,8 @@ function showStripThemePicker() {
   const choices = stripChoices();
   picker.hidden = false;
   grid.innerHTML = choices.map(f => `
-    <button class="strip-theme ${!S.stripCustomColor && f.id === S.stripFrameId ? 'on' : ''}" data-strip-theme="${f.id}" type="button">
-      <span class="strip-theme-swatch" style="--strip-color:${energy(f.energyType).base}"></span>${f.name}
+    <button class="strip-theme ${!S.stripCustomColor && f.id === S.stripFrameId ? 'on' : ''}" data-strip-theme="${f.id}" type="button" aria-label="${f.name}">
+      <span class="strip-theme-swatch" style="--strip-color:${energy(f.energyType).base}"></span>
     </button>`).join('') + `
     <label class="strip-theme strip-theme-custom${S.stripCustomColor ? ' on' : ''}">
       <span class="strip-theme-swatch${S.stripCustomColor ? '' : ' rainbow'}" style="--strip-color:${S.stripCustomColor || 'transparent'}"></span>
