@@ -69,7 +69,21 @@ export class Camera {
     if (explicitId && this.devices.some(d => d.deviceId === explicitId)) return explicitId;
     const ranked = [...this.devices].sort((a, b) => this.score(b) - this.score(a));
     const best = ranked[0];
-    if (!best) throw new Error('No video input devices found. Is the capture card plugged in?');
+    if (!best) {
+      // The on-screen toast is brief and customer-facing — the operator
+      // checking this needs the actual troubleshooting steps, which belong
+      // in the console, not a 4-second banner.
+      console.error(
+        '[camera] No video input devices found. Check: the capture card/camera is ' +
+        'plugged in; on Windows, Settings > Privacy & security > Camera has camera ' +
+        'access AND "Let desktop apps access your camera" both turned on (Chromium ' +
+        'can enumerate zero devices with either off, even with hardware connected); ' +
+        'and no other app (OBS, Windows Camera, a leftover previous run of this app) ' +
+        'already has the capture card open — most HDMI capture dongles only allow one ' +
+        'app at a time.'
+      );
+      throw new Error('No video input devices found. Is the capture card plugged in? (See console for more.)');
+    }
     if (this.score(best) <= 0) {
       this.onStatus({
         level: 'warn',
