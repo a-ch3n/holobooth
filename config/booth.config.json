@@ -49,7 +49,9 @@
           "sub": "GoPro overhead",
           "icon": "🔝",
           "//": "The second camera: a GoPro in USB webcam mode, so it enumerates as its own UVC device with 'GoPro' in the label — no second capture card needed.",
-          "preferredLabels": ["GoPro HERO10", "GoPro HERO 10", "HERO10", "HERO 10", "GoPro Webcam", "GoPro"]
+          "preferredLabels": ["GoPro HERO10", "GoPro HERO 10", "HERO10", "HERO 10", "GoPro Webcam", "GoPro"],
+          "//constraints": "Without this, the GoPro inherits the capture card's 1080p60 ideal — most GoPro webcam-mode firmware can't do 60fps at full FOV and silently switches to a narrower digital crop to hit it instead of failing, which looks like the image not filling the frame. 1080p30 is well within every GoPro webcam mode's full-FOV range. If it's still cropped in, check the GoPro's own on-device webcam FOV setting (Wide/Linear/Narrow) — that's a camera-side setting this app can't reach.",
+          "constraints": { "width": 1920, "height": 1080, "frameRate": 30 }
         }
       ]
     }

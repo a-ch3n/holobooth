@@ -33,14 +33,6 @@ export class Camera {
     this.video = null;
     this.onStatus = () => {};
     this._lost = false;
-    this.filter = null; // active filter entry from booth.config.json's filters.list, or null
-  }
-
-  /** Sets the active camera-look filter. Updates the live preview immediately
-   *  (if a video element is attached) and every grab()/burst() from here on. */
-  setFilter(filter) {
-    this.filter = filter || null;
-    if (this.video) this.video.style.filter = this.filter?.cssFilter || 'none';
   }
 
   /* ------------------------------------------------------------ devices */
@@ -137,7 +129,6 @@ export class Camera {
     videoEl.muted = true;
     videoEl.playsInline = true;
     videoEl.style.transform = this.cfg.mirrorPreview ? 'scaleX(-1)' : 'none';
-    videoEl.style.filter = this.filter?.cssFilter || 'none';
     await videoEl.play().catch(() => {});
 
     const track = this.stream.getVideoTracks()[0];
@@ -189,10 +180,7 @@ export class Camera {
     const ctx = canvas.getContext('2d');
     const flip = mirror === null ? false : mirror;
     if (flip) { ctx.translate(w, 0); ctx.scale(-1, 1); }
-    ctx.filter = this.filter?.cssFilter || 'none';
     ctx.drawImage(this.video, 0, 0, w, h);
-    ctx.filter = 'none';
-    applyFilterExtras(canvas, this.filter);
     return canvas;
   }
 
@@ -204,11 +192,7 @@ export class Camera {
     for (let i = 0; i < frames; i++) {
       const c = document.createElement('canvas');
       c.width = w; c.height = h;
-      const ctx = c.getContext('2d');
-      ctx.filter = this.filter?.cssFilter || 'none';
-      ctx.drawImage(this.video, 0, 0, w, h);
-      ctx.filter = 'none';
-      applyFilterExtras(c, this.filter);
+      c.getContext('2d').drawImage(this.video, 0, 0, w, h);
       out.push(c);
       if (i < frames - 1) await new Promise(r => setTimeout(r, intervalMs));
     }
@@ -231,6 +215,24 @@ export class Camera {
     out.getContext('2d').drawImage(source, sx, sy, cw, ch, 0, 0, out.width, out.height);
     return out;
   }
+}
+
+/**
+ * Applies a camera-look filter (from booth.config.json's filters.list) to an
+ * already-captured photo, returning a new canvas — source is left untouched.
+ * Non-destructive on purpose: the filter is chosen *after* the shoot, on the
+ * actual photos, so picking "Original" (a falsy/none filter) just means every
+ * caller re-derives from the same untouched S.shots instead of a baked-in one.
+ */
+export function applyPhotoFilter(source, filter) {
+  const out = document.createElement('canvas');
+  out.width = source.width; out.height = source.height;
+  const ctx = out.getContext('2d');
+  ctx.filter = filter?.cssFilter || 'none';
+  ctx.drawImage(source, 0, 0);
+  ctx.filter = 'none';
+  applyFilterExtras(out, filter);
+  return out;
 }
 
 /** A CSS filter() string alone can't do grain, so this is the manual part of

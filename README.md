@@ -146,16 +146,19 @@ carousel and print master all size themselves from it.
 ## The session flow
 
 ```
-attract → pick a style → [personalise] → pay → [angle] → [filter] → shoot → DECORATE → reveal → print
+attract → pick a style → [personalise] → pay → [angle] → shoot → [filter] → DECORATE → reveal → print
 ```
 
 `[angle]` and `[filter]` are both optional and skipped automatically unless
 configured: `[angle]` only appears with 2+ entries in `camera.angles.list`,
 `[filter]` only with `filters.enabled` and a real `filters.list` in
-`config/booth.config.json`. The filter picker shows a live preview per option
-(Vintage Film, a punchier point-and-shoot look, a neutral "Professional" look,
-by default) and bakes the chosen one into every shot from that session on —
-it's not a screen effect, it's what actually prints and gets delivered.
+`config/booth.config.json`. `[filter]` runs on the actual photo just taken,
+not a live camera feed — tap through the looks (Vintage Film, a punchier
+point-and-shoot look, a neutral "Professional" look, "Original" to go back
+to unfiltered, by default) and hit Next once you're happy. Nothing is baked
+in until then: the raw shots are kept untouched the whole session, so picking
+a filter is never a one-way trip. Whatever's chosen is what actually prints
+and gets delivered — not a screen-only effect.
 
 `DECORATE` is where the session actually becomes theirs, and it has three tabs:
 

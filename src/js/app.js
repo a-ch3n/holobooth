@@ -17,7 +17,7 @@ import { COMPANIONS, companionById, companionCanvas } from './frames/companions.
 import { loadPack, packFrames } from './frames/assetpack.mjs';
 import { stickerCatalog, stickerCanvas, newPlacement, stickerAt, DECOS } from './frames/stickers.mjs';
 import { renderCard, renderStrip, mintCard, printSize } from './frames/render.mjs';
-import { Camera } from './camera.js';
+import { Camera, applyPhotoFilter } from './camera.js';
 import { createPaymentProvider } from './payments.js';
 import { encodeGif } from './gif.js';
 
@@ -31,8 +31,10 @@ const S = {
   frameId: null,
   product: null,
   payment: null,
-  shots: [],          // full-res captured canvases
+  shots: [],          // full-res captured canvases, always the untouched originals
+  filteredShots: [],  // shots with S.filterId applied — what actually gets rendered/printed
   burst: [],
+  filteredBurst: [],
   heroIndex: 0,
   card: null,
   cardCanvas: null,
@@ -287,7 +289,7 @@ function pokemonCharacter(frame) {
 const ON_ENTER = {};
 
 ON_ENTER.attract = async () => {
-  S.shots = []; S.burst = []; S.card = null; S.retakes = 0;
+  S.shots = []; S.filteredShots = []; S.burst = []; S.filteredBurst = []; S.card = null; S.retakes = 0;
   S.gifBlob = null; S.downloadUrl = null; S.payment = null;
   S.personal = { name: '', age: '', companionId: null };
   S.companionImg = null;
@@ -418,8 +420,8 @@ function isStrip(frame) {
 /** Strips need every shot; cards need the chosen one. */
 function photoArgs(frame) {
   return isStrip(frame)
-    ? { photos: S.shots.length ? S.shots : [placeholderPhoto()], photo: null }
-    : { photo: S.shots[S.heroIndex] || placeholderPhoto(), photos: [] };
+    ? { photos: S.filteredShots.length ? S.filteredShots : [placeholderPhoto()], photo: null }
+    : { photo: S.filteredShots[S.heroIndex] || placeholderPhoto(), photos: [] };
 }
 
 /* -------------------------------------------------------------- picker */
@@ -822,7 +824,7 @@ ON_ENTER.pay = async () => {
   // Two physical cameras (e.g. a second, high-angle capture card) means a
   // choice to make before the shoot; one camera means there's nothing to
   // ask, so the flow skips straight to capture exactly as it always did.
-  go(cameraAngles().length >= 2 ? 'angle' : screenAfterAngle());
+  go(cameraAngles().length >= 2 ? 'angle' : 'capture');
 };
 
 /** Configured camera angles, or [] if only the single default camera is set up. */
@@ -840,10 +842,16 @@ function filtersEnabled() {
 function lookupFilter(id) {
   return filterChoices().find(f => f.id === id) || null;
 }
-/** Where to go once the camera (and its angle, if any) is settled: the filter
- *  picker if configured, otherwise straight to the shoot as it always was. */
-function screenAfterAngle() {
-  return filtersEnabled() ? 'filter' : 'capture';
+/** Bakes the currently-chosen filter onto the untouched originals once, so
+ *  everything downstream (card/strip render, gif, shot-picker thumbnails)
+ *  draws from S.filteredShots without redoing the canvas work per frame.
+ *  S.shots itself is never touched — picking "Original" just re-derives from
+ *  it with a no-op filter, which is how "remove it" gets you the original. */
+function finalizeFilterSelection() {
+  const filter = lookupFilter(S.filterId);
+  S.filteredShots = S.shots.map(s => applyPhotoFilter(s, filter));
+  S.filteredBurst = S.burst.map(s => applyPhotoFilter(s, filter));
+  go('decorate');
 }
 
 /* --------------------------------------------------------- camera angle */
@@ -882,20 +890,25 @@ ON_ENTER.angle = () => {
       host.querySelector(`[data-angle="${cameraId}"]`)?.classList.toggle('on', cameraId === id);
     });
     await Promise.allSettled(S.angleCameras.map(({ ready }) => ready));
-    go(screenAfterAngle());
+    go('capture');
   };
 };
 
 /* -------------------------------------------------------- camera filter */
 
-ON_ENTER.filter = async () => {
-  S.angleCameras.forEach(({ camera }) => camera.stop());
-  S.angleCameras = [];
+/**
+ * Shown right after the shoot, on the actual photo just taken — not a live
+ * camera preview. Tapping a tile only previews that look (so the customer can
+ * flip through all of them on their real photo before deciding); nothing is
+ * final, including the current choice, until Next is tapped. "Original" is
+ * just another tile, so backing out of a filter they don't like is the same
+ * one tap as picking one in the first place.
+ */
+ON_ENTER.filter = () => {
   if (!lookupFilter(S.filterId)) S.filterId = filterChoices()[0]?.id || null;
-  const cam = (S.camera ||= new Camera(S.cfg.camera));
-  cam.onStatus = () => {};
-  applyCameraAngleCfg(cam);
-  cam.setFilter(lookupFilter(S.filterId));
+  const shot = S.shots[S.heroIndex] || S.shots[0];
+  const preview = $('#filter-preview');
+  preview.src = shot.toDataURL('image/jpeg', 0.92);
 
   const host = $('#filter-options');
   const renderTiles = () => {
@@ -907,24 +920,17 @@ ON_ENTER.filter = async () => {
       </div>`).join('');
   };
   renderTiles();
-
-  try {
-    await cam.start($('#filter-preview'));
-  } catch (e) {
-    toast(`Camera problem: ${e.message}`, true);
-    await sleep(2500);
-    go('thanks');
-    $('#thanks-sub').textContent = 'Sorry — the camera dropped out. Find the operator for a refund.';
-    return;
-  }
+  preview.style.filter = lookupFilter(S.filterId)?.cssFilter || 'none';
 
   host.onclick = e => {
     const id = e.target.closest('.filter-option')?.dataset.filter;
     if (!id) return;
     S.filterId = id;
-    cam.setFilter(lookupFilter(id));
-    go('capture');
+    preview.style.filter = lookupFilter(id)?.cssFilter || 'none';
+    renderTiles();
   };
+
+  $('#filter-next').onclick = () => finalizeFilterSelection();
 };
 
 /* ------------------------------------------------------------- capture */
@@ -952,7 +958,6 @@ ON_ENTER.capture = async () => {
     if (s.level === 'error') toast(s.message, true);
   };
   applyCameraAngleCfg(cam);
-  cam.setFilter(lookupFilter(S.filterId));
 
   try {
     await cam.start($('#preview'));
@@ -992,7 +997,10 @@ async function runShootSequence() {
 
   $('#countdown').textContent = '';
   S.camera.stop();
-  go('decorate');
+  // The filter picker works on the actual shot just taken, so it only makes
+  // sense after this point; skip straight to finalizing (with S.filterId
+  // untouched, i.e. "Original") when it's off/unconfigured.
+  if (filtersEnabled()) go('filter'); else finalizeFilterSelection();
 }
 
 function countdown(seconds, prefix) {
@@ -1155,7 +1163,7 @@ function buildShotGrid() {
     `<div class="shot ${i === S.heroIndex ? 'on' : ''}" data-shot="${i}"><i>${i + 1}</i><canvas width="220" height="124"></canvas></div>`).join('');
   S.shots.forEach((shot, i) => {
     const cv = grid.querySelector(`[data-shot="${i}"] canvas`);
-    cv.getContext('2d').drawImage(shot, 0, 0, cv.width, cv.height);
+    cv.getContext('2d').drawImage(S.filteredShots[i] || shot, 0, 0, cv.width, cv.height);
   });
   grid.onclick = e => {
     const idx = e.target.closest('.shot')?.dataset.shot;
@@ -1443,12 +1451,12 @@ async function buildOutputs() {
   // throws away most of the frame and pushes the subject off-centre. Hand the
   // renderer the full frame and let drawCover fit whatever window the template
   // actually has.
-  const heroImg = await canvasToImage(S.shots[S.heroIndex] || S.shots[0]);
+  const heroImg = await canvasToImage(S.filteredShots[S.heroIndex] || S.filteredShots[0]);
 
   const usesCompanion = ['party', 'kawaii'].includes(frameDef.template);
   S.cardCanvas = document.createElement('canvas');
   S.cardCanvas.width = W; S.cardCanvas.height = H;
-  const heroImgs = stripStyle ? await Promise.all(S.shots.map(canvasToImage)) : [];
+  const heroImgs = stripStyle ? await Promise.all(S.filteredShots.map(canvasToImage)) : [];
   renderCard(S.cardCanvas.getContext('2d'), {
     frame: frameDef, frameId: S.frameId, W, H,
     photo: stripStyle ? null : heroImg,
@@ -1475,7 +1483,7 @@ async function buildOutputs() {
     const s = printSize('strip', dpi);
     S.stripCanvas = document.createElement('canvas');
     S.stripCanvas.width = s.W; S.stripCanvas.height = s.H;
-    const imgs = await Promise.all(S.shots.map(canvasToImage));
+    const imgs = await Promise.all(S.filteredShots.map(canvasToImage));
     const stripFrame = lookupFrame(S.stripFrameId) || stripChoices()[0];
     renderStrip(S.stripCanvas.getContext('2d'), {
       W: s.W, H: s.H, photos: imgs, card: S.card, frame: stripFrame,
@@ -1483,8 +1491,8 @@ async function buildOutputs() {
     });
   }
 
-  if (S.product.gif && S.burst.length) {
-    try { S.gifBlob = await encodeGif(S.burst, S.cfg.delivery.gif); }
+  if (S.product.gif && S.filteredBurst.length) {
+    try { S.gifBlob = await encodeGif(S.filteredBurst, S.cfg.delivery.gif); }
     catch (e) { console.warn('gif encode failed', e); }
   }
 
@@ -1502,7 +1510,7 @@ async function uploadMedia() {
     dataUrl: S.cardCanvas.toDataURL('image/png'),
   }];
   if (S.stripCanvas) files.push({ name: 'strip.png', dataUrl: S.stripCanvas.toDataURL('image/png') });
-  S.shots.forEach((c, i) => files.push({ name: `photo-${i + 1}.jpg`, dataUrl: c.toDataURL('image/jpeg', 0.9) }));
+  S.filteredShots.forEach((c, i) => files.push({ name: `photo-${i + 1}.jpg`, dataUrl: c.toDataURL('image/jpeg', 0.9) }));
   if (S.gifBlob) files.push({ name: 'boomerang.gif', dataUrl: await blobToDataUrl(S.gifBlob) });
 
   const res = await fetch(S.cfg.delivery.uploadUrl, {
@@ -1564,7 +1572,7 @@ ON_ENTER.reveal = () => {
 
 async function retake() {
   S.retakes++;
-  S.shots = []; S.burst = [];
+  S.shots = []; S.filteredShots = []; S.burst = []; S.filteredBurst = [];
   S.stickers = [];
   go('capture');
 }
