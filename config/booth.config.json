@@ -96,6 +96,16 @@
         "rarityBoost": 1.0
       },
       {
+        "id": "two_cards",
+        "name": "2 Pokémon Cards",
+        "blurb": "Two printed Pokémon cards + digital copies",
+        "amount": 1200,
+        "prints": { "card": 2, "strip": 0 },
+        "digital": true,
+        "gif": false,
+        "rarityBoost": 1.0
+      },
+      {
         "id": "digital_card",
         "name": "Digital Pokémon Card",
         "blurb": "Digital card delivered by QR code",
