@@ -11,7 +11,7 @@
  *     every failure path still hands them their digital copy.
  */
 
-import { pickerGroups, allFrames, frameById, frameAspect, frameBox, RARITIES, RARITY_ORDER, SET, energy } from './frames/packs.mjs';
+import { pickerGroups, allFrames, frameById, frameAspect, frameBox, RARITIES, RARITY_ORDER, SET, energy, themeFor } from './frames/packs.mjs';
 import { rarityOdds } from './frames/rarity.mjs';
 import { COMPANIONS, companionById, companionCanvas } from './frames/companions.mjs';
 import { loadPack, packFrames } from './frames/assetpack.mjs';
@@ -60,6 +60,7 @@ const S = {
   previewCard: null,
   pokemonImages: {},
   stripFrameId: null,
+  stripCustomColor: null, // hex, set instead of stripFrameId when "Custom" is picked
 };
 
 const $ = sel => document.querySelector(sel);
@@ -297,6 +298,7 @@ ON_ENTER.attract = async () => {
   S.artWindow = null;
   S.previewCard = null;
   S.stripFrameId = null;
+  S.stripCustomColor = null;
   S.cameraAngle = null;
   S.angleCameras = [];
   S.filterId = S.cfg.filters?.default || null;
@@ -693,20 +695,47 @@ function stripChoices() {
   return allFrames().filter(f => f.template === 'strip');
 }
 
+/** The strip frame actually used to render, whichever way it was chosen:
+ *  a preset theme, or a customer-picked custom color standing in for one. */
+function currentStripFrame() {
+  if (S.stripCustomColor) {
+    const base = stripChoices()[0];
+    return { ...base, id: '__custom__', name: 'Custom', theme: themeFor(S.stripCustomColor, 'strip') };
+  }
+  return lookupFrame(S.stripFrameId) || stripChoices()[0];
+}
+
+const DEFAULT_STRIP_CUSTOM_COLOR = '#e889b5';
+
 function showStripThemePicker() {
   const picker = $('#strip-theme-picker');
   const grid = $('#strip-theme-grid');
   const choices = stripChoices();
   picker.hidden = false;
   grid.innerHTML = choices.map(f => `
-    <button class="strip-theme ${f.id === S.stripFrameId ? 'on' : ''}" data-strip-theme="${f.id}" type="button">
+    <button class="strip-theme ${!S.stripCustomColor && f.id === S.stripFrameId ? 'on' : ''}" data-strip-theme="${f.id}" type="button">
       <span class="strip-theme-swatch" style="--strip-color:${energy(f.energyType).base}"></span>${f.name}
-    </button>`).join('');
+    </button>`).join('') + `
+    <label class="strip-theme strip-theme-custom${S.stripCustomColor ? ' on' : ''}">
+      <span class="strip-theme-swatch${S.stripCustomColor ? '' : ' rainbow'}" style="--strip-color:${S.stripCustomColor || 'transparent'}"></span>
+      Custom
+      <input type="color" id="strip-custom-color" value="${S.stripCustomColor || DEFAULT_STRIP_CUSTOM_COLOR}">
+    </label>`;
+
   grid.querySelectorAll('[data-strip-theme]').forEach(button => button.addEventListener('click', () => {
     S.stripFrameId = button.dataset.stripTheme;
+    S.stripCustomColor = null;
     grid.querySelectorAll('.strip-theme').forEach(b => b.classList.toggle('on', b === button));
     go('pay');
   }));
+
+  // 'change' (not 'input') so it only advances once the color wheel actually
+  // closes with a choice made, not on every drag update while it's open.
+  $('#strip-custom-color').addEventListener('change', e => {
+    S.stripCustomColor = e.target.value;
+    S.stripFrameId = null;
+    go('pay');
+  });
 }
 
 function showCardThemePicker() {
@@ -1484,7 +1513,7 @@ async function buildOutputs() {
     S.stripCanvas = document.createElement('canvas');
     S.stripCanvas.width = s.W; S.stripCanvas.height = s.H;
     const imgs = await Promise.all(S.filteredShots.map(canvasToImage));
-    const stripFrame = lookupFrame(S.stripFrameId) || stripChoices()[0];
+    const stripFrame = currentStripFrame();
     renderStrip(S.stripCanvas.getContext('2d'), {
       W: s.W, H: s.H, photos: imgs, card: S.card, frame: stripFrame,
       // Not personalizationPayload() — it falls back to S.frameId's name when
