@@ -1232,8 +1232,9 @@ function buildKeyboard(host, { max = 14, get, set, onChange }) {
     if (k === 'DEL') v = v.slice(0, -1);
     else if (k === 'SPACE') { if (v.length < max) v += ' '; }
     else if (v.length < max) {
-      // Title case as they type — nobody wants CAPS on a keepsake.
-      v += (v.length === 0 || v.endsWith(' ')) ? k : k.toLowerCase();
+      // Keys are always uppercase (KB_ROWS) — type it as pressed, don't
+      // force every letter but the first of a word to lowercase.
+      v += k;
     }
     set(v);
     onChange();
