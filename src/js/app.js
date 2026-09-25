@@ -923,10 +923,8 @@ ON_ENTER.filter = async () => {
     if (!id) return;
     S.filterId = id;
     cam.setFilter(lookupFilter(id));
-    renderTiles();
+    go('capture');
   };
-
-  $('#filter-continue').onclick = () => go('capture');
 };
 
 /* ------------------------------------------------------------- capture */
