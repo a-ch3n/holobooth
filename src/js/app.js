@@ -1487,6 +1487,11 @@ async function buildOutputs() {
     const stripFrame = lookupFrame(S.stripFrameId) || stripChoices()[0];
     renderStrip(S.stripCanvas.getContext('2d'), {
       W: s.W, H: s.H, photos: imgs, card: S.card, frame: stripFrame,
+      // Not personalizationPayload() — it falls back to S.frameId's name when
+      // nothing's typed, which is the *card's* frame here, not the strip's
+      // own theme (S.stripFrameId). Pass the raw typed name only, so an empty
+      // one correctly falls through to the strip theme's own name instead.
+      personalization: { name: S.personal.name.trim() },
       stickers: S.stickers, stickerImages: stickerImageMap(),
     });
   }
