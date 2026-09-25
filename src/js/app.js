@@ -243,7 +243,7 @@ async function boot() {
   $('#to-product').addEventListener('click', () => {
     // Party cards need a name before they mean anything; everything else can
     // go straight to the till.
-    const tpl = lookupFrame(S.frameId)?.template;
+    const tpl = currentFrame()?.template;
     go(['party', 'kawaii', 'assetPack'].includes(tpl) ? 'personalize' : 'product');
   });
   $('#pz-done').addEventListener('click', () => go('product'));
@@ -498,10 +498,52 @@ function renderGrid(packId) {
     tile.addEventListener('click', () => {
       $$('.frame-tile').forEach(x => x.classList.toggle('on', x === tile));
       S.frameId = f.id;
+      S.stripCustomColor = null;
       if (isStrip(f)) S.stripFrameId = f.id;
       $('#picked-label').textContent = isStrip(f)
         ? `${f.name} — photo strip`
         : `${f.name} — ${f.collectorNumber} · ${energy(f.energyType).name}`;
+      $('#to-product').disabled = false;
+    });
+  }
+
+  // A "Custom" tile alongside the strip presets — picking a color here
+  // works exactly like tapping a preset tile (same S.frameId, so mint/dex
+  // still treat it as that base strip), just with S.stripCustomColor set so
+  // currentFrame() swaps in a custom theme everywhere it renders or prints.
+  if (group.id === 'strips' && stripChoices().length) {
+    const base = stripChoices()[0];
+    const tile = document.createElement('div');
+    tile.className = 'frame-tile tall frame-tile-custom';
+    const cv = document.createElement('canvas');
+    const box = boxFor(base, 360);
+    cv.width = box.W; cv.height = box.H;
+    tile.append(cv);
+    tile.insertAdjacentHTML('beforeend', `
+      <div class="nm"><i class="type-dot rainbow"></i>Custom color</div>
+      <div class="mt"><span>Pick any color</span></div>
+      <input type="color" id="frame-strip-custom-color" value="${S.stripCustomColor || DEFAULT_STRIP_CUSTOM_COLOR}">`);
+    grid.append(tile);
+
+    const drawPreview = hex => renderCard(cv.getContext('2d'), {
+      frame: stripFrameWithColor(hex, base), frameId: base.id, W: box.W, H: box.H,
+      photo: null, photos: [placeholderPhoto(), placeholderPhoto(), placeholderPhoto(), placeholderPhoto()],
+      card: mintCard({ frame: base, frameId: base.id, seasonId: S.cfg.collection.seasonId, mint: 1, forcedRarity: base.rarityFloor || 'rare' }),
+      stock: S.cfg.cards?.stock || null,
+      personalization: { name: base.name, age: 7 },
+      foil: true,
+    });
+    drawPreview(S.stripCustomColor || DEFAULT_STRIP_CUSTOM_COLOR);
+    tile.classList.toggle('on', !!S.stripCustomColor);
+
+    const colorInput = $('#frame-strip-custom-color');
+    colorInput.addEventListener('input', () => drawPreview(colorInput.value));
+    colorInput.addEventListener('change', () => {
+      $$('.frame-tile').forEach(x => x.classList.toggle('on', x === tile));
+      S.frameId = base.id;
+      S.stripFrameId = base.id;
+      S.stripCustomColor = colorInput.value;
+      $('#picked-label').textContent = `${base.name} — photo strip, custom color`;
       $('#to-product').disabled = false;
     });
   }
@@ -569,7 +611,7 @@ ON_ENTER.personalize = () => {
   // Default the buddy to one matching the chosen card's colour, so the card
   // already looks finished before they touch anything.
   if (!S.personal.companionId) {
-    const type = lookupFrame(S.frameId)?.energyType;
+    const type = currentFrame()?.energyType;
     S.personal.companionId = (COMPANIONS.find(c => c.type === type) || COMPANIONS[0]).id;
     syncBuddySelection();
   }
@@ -587,7 +629,7 @@ function buildPersonalizeUI() {
   });
 
   $('#pz-gen-name').addEventListener('click', async e => {
-    const theme = energy(lookupFrame(S.frameId)?.energyType)?.name;
+    const theme = energy(currentFrame()?.energyType)?.name;
     S.personal.name = await surpriseName(e.currentTarget, theme);
     refreshPersonalize();
   });
@@ -666,7 +708,7 @@ function refreshPersonalize() {
 
 async function drawPersonalizePreview() {
   const cv = $('#pz-canvas');
-  const pf = lookupFrame(S.frameId);
+  const pf = currentFrame();
   renderCard(cv.getContext('2d'), {
     frame: pf, frameId: S.frameId, W: cv.width, H: cv.height,
     photo: placeholderPhoto(),
@@ -683,7 +725,7 @@ async function drawPersonalizePreview() {
 function personalizationPayload() {
   const typedName = S.personal.name.trim();
   return {
-    name: typedName || lookupFrame(S.frameId)?.name || '',
+    name: typedName || currentFrame()?.name || '',
     age: S.personal.age === '' ? null : Number(S.personal.age),
     companionId: S.personal.companionId,
   };
@@ -695,14 +737,28 @@ function stripChoices() {
   return allFrames().filter(f => f.template === 'strip');
 }
 
-/** The strip frame actually used to render, whichever way it was chosen:
- *  a preset theme, or a customer-picked custom color standing in for one. */
+/** A strip frame with its color swapped to a customer-picked hex. Keeps the
+ *  base's own id/collectorNumber/packId/etc — mint records and dex progress
+ *  read those, and a custom color is a cosmetic override, not a new card to
+ *  collect — only `theme` changes. */
+function stripFrameWithColor(hex, base = stripChoices()[0]) {
+  return { ...base, theme: themeFor(hex, 'strip') };
+}
+
+/** The bonus strip's frame on a card+strip combo (its own separate theme
+ *  choice from showStripThemePicker(), independent of the main frame). */
 function currentStripFrame() {
-  if (S.stripCustomColor) {
-    const base = stripChoices()[0];
-    return { ...base, id: '__custom__', name: 'Custom', theme: themeFor(S.stripCustomColor, 'strip') };
-  }
+  if (S.stripCustomColor) return stripFrameWithColor(S.stripCustomColor, lookupFrame(S.stripFrameId) || stripChoices()[0]);
   return lookupFrame(S.stripFrameId) || stripChoices()[0];
+}
+
+/** The main chosen frame, with a customer-picked custom strip color applied
+ *  when active — use this instead of a raw catalog lookup everywhere a frame
+ *  feeds a preview, print, or record, so a custom color is always reflected
+ *  consistently. */
+function currentFrame() {
+  const f = lookupFrame(S.frameId);
+  return (f && isStrip(f) && S.stripCustomColor) ? stripFrameWithColor(S.stripCustomColor, f) : f;
 }
 
 const DEFAULT_STRIP_CUSTOM_COLOR = '#e889b5';
@@ -755,7 +811,7 @@ function showCardThemePicker() {
 }
 
 ON_ENTER.product = () => {
-  const frame = lookupFrame(S.frameId);
+  const frame = currentFrame();
   const selectedStrip = isStrip(frame);
   const visibleProducts = S.cfg.pricing.products.filter(p => {
     const cardCount = p.prints?.card || 0;
@@ -1070,7 +1126,7 @@ ON_ENTER.decorate = () => {
   // a retake — must not silently reroll a rarity the customer already saw.
   if (!S.previewCard || S.previewCard.frameId !== S.frameId) {
     S.previewCard = mintCard({
-      frame: lookupFrame(S.frameId), frameId: S.frameId,
+      frame: currentFrame(), frameId: S.frameId,
       seasonId: S.cfg.collection.seasonId, mint: 1,
       product: S.product,
     });
@@ -1130,7 +1186,7 @@ function buildDecorateUI() {
   const refreshDecName = () => {
     const el = $('#dec-name');
     const typedName = S.personal.name.trim();
-    const defaultName = lookupFrame(S.frameId)?.name || '';
+    const defaultName = currentFrame()?.name || '';
     el.textContent = typedName || defaultName;
     el.classList.toggle('is-empty', !typedName && !defaultName);
     renderNameSuggestions($('#dec-name-suggest'), S.personal.name, name => {
@@ -1149,7 +1205,7 @@ function buildDecorateUI() {
   });
 
   $('#dec-gen-name').addEventListener('click', async e => {
-    const theme = energy(lookupFrame(S.frameId)?.energyType)?.name;
+    const theme = energy(currentFrame()?.energyType)?.name;
     S.personal.name = await surpriseName(e.currentTarget, theme);
     refreshDecName();
   });
@@ -1234,7 +1290,7 @@ function buildSwatches() {
     S.frameId = pick;
     $$('#frame-swatches .swatch').forEach(el => el.classList.toggle('on', el.dataset.swatch === pick));
     S.previewCard = mintCard({
-      frame: lookupFrame(S.frameId), frameId: S.frameId,
+      frame: currentFrame(), frameId: S.frameId,
       seasonId: S.cfg.collection.seasonId, mint: 1, product: S.product,
     });
     drawDecorate();
@@ -1269,7 +1325,7 @@ function syncTray() {
 
 function drawDecorate() {
   const cv = $('#dec-canvas');
-  const f = lookupFrame(S.frameId);
+  const f = currentFrame();
   const box = boxFor(f, 500);
   if (cv.width !== box.W || cv.height !== box.H) { cv.width = box.W; cv.height = box.H; }
   const meta = renderCard(cv.getContext('2d'), {
@@ -1461,7 +1517,7 @@ async function buildOutputs() {
   const seasonId = S.cfg.collection.seasonId;
   const mint = await window.booth.cards.nextMint({ seasonId, frameId: S.frameId });
 
-  const frameDef = lookupFrame(S.frameId);
+  const frameDef = currentFrame();
   S.card = mintCard({
     frame: frameDef, frameId: S.frameId, seasonId, mint,
     boothId: S.cfg.booth.id, boothName: S.cfg.booth.displayName,
@@ -1538,7 +1594,7 @@ async function buildOutputs() {
 }
 
 async function uploadMedia() {
-  const primaryIsStrip = isStrip(lookupFrame(S.frameId));
+  const primaryIsStrip = isStrip(currentFrame());
   const files = [{
     name: primaryIsStrip ? 'strip.png' : `card-${S.card.serial.replace(/[^\w]+/g, '_')}.png`,
     dataUrl: S.cardCanvas.toDataURL('image/png'),
@@ -1567,7 +1623,7 @@ ON_ENTER.reveal = () => {
   el.textContent = r.label;
   el.style.color = r.color;
   $('#rarity-burst').style.setProperty('--burst', r.color);
-  const pfr = lookupFrame(S.frameId);
+  const pfr = currentFrame();
   const named = S.personal.name.trim();
   $('#pull-name').textContent = named ? S.personal.name.trim() : pfr.name;
   $('#pull-serial').textContent = `${pfr.collectorNumber}  ·  ${S.card.serial}`;
@@ -1737,7 +1793,7 @@ async function doPrint() {
     // Strips" product), renderCard() draws the strip straight into
     // S.cardCanvas and prints.card is 0 — the print count to use is
     // prints.strip instead, since that's what was actually paid for.
-    const cardIsStrip = isStrip(lookupFrame(S.frameId));
+    const cardIsStrip = isStrip(currentFrame());
     const cardCount = cardIsStrip ? S.product.prints.strip : S.product.prints.card;
     if (cardCount) {
       st.textContent = `Printing ${cardCount} ${cardIsStrip ? 'strip' : 'card'}${cardCount > 1 ? 's' : ''}…`;
