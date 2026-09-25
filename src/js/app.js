@@ -11,13 +11,13 @@
  *     every failure path still hands them their digital copy.
  */
 
-import { pickerGroups, allFrames, frameById, frameAspect, frameBox, RARITIES, RARITY_ORDER, SET, energy } from './frames/packs.mjs';
+import { pickerGroups, allFrames, frameById, frameAspect, frameBox, RARITIES, RARITY_ORDER, SET, energy, themeFor } from './frames/packs.mjs';
 import { rarityOdds } from './frames/rarity.mjs';
 import { COMPANIONS, companionById, companionCanvas } from './frames/companions.mjs';
 import { loadPack, packFrames } from './frames/assetpack.mjs';
 import { stickerCatalog, stickerCanvas, newPlacement, stickerAt, DECOS } from './frames/stickers.mjs';
 import { renderCard, renderStrip, mintCard, printSize } from './frames/render.mjs';
-import { Camera } from './camera.js';
+import { Camera, applyPhotoFilter } from './camera.js';
 import { createPaymentProvider } from './payments.js';
 import { encodeGif } from './gif.js';
 
@@ -31,8 +31,10 @@ const S = {
   frameId: null,
   product: null,
   payment: null,
-  shots: [],          // full-res captured canvases
+  shots: [],          // full-res captured canvases, always the untouched originals
+  filteredShots: [],  // shots with S.filterId applied — what actually gets rendered/printed
   burst: [],
+  filteredBurst: [],
   heroIndex: 0,
   card: null,
   cardCanvas: null,
@@ -43,6 +45,7 @@ const S = {
   camera: null,
   cameraAngle: null,
   angleCameras: [],
+  filterId: null,
   pay: null,
   idleTimer: null,
   adminTaps: 0,
@@ -57,6 +60,7 @@ const S = {
   previewCard: null,
   pokemonImages: {},
   stripFrameId: null,
+  stripCustomColor: null, // hex, set instead of stripFrameId when "Custom" is picked
 };
 
 const $ = sel => document.querySelector(sel);
@@ -239,7 +243,7 @@ async function boot() {
   $('#to-product').addEventListener('click', () => {
     // Party cards need a name before they mean anything; everything else can
     // go straight to the till.
-    const tpl = lookupFrame(S.frameId)?.template;
+    const tpl = currentFrame()?.template;
     go(['party', 'kawaii', 'assetPack'].includes(tpl) ? 'personalize' : 'product');
   });
   $('#pz-done').addEventListener('click', () => go('product'));
@@ -286,7 +290,7 @@ function pokemonCharacter(frame) {
 const ON_ENTER = {};
 
 ON_ENTER.attract = async () => {
-  S.shots = []; S.burst = []; S.card = null; S.retakes = 0;
+  S.shots = []; S.filteredShots = []; S.burst = []; S.filteredBurst = []; S.card = null; S.retakes = 0;
   S.gifBlob = null; S.downloadUrl = null; S.payment = null;
   S.personal = { name: '', age: '', companionId: null };
   S.companionImg = null;
@@ -294,8 +298,10 @@ ON_ENTER.attract = async () => {
   S.artWindow = null;
   S.previewCard = null;
   S.stripFrameId = null;
+  S.stripCustomColor = null;
   S.cameraAngle = null;
   S.angleCameras = [];
+  S.filterId = S.cfg.filters?.default || null;
   S.camera?.stop();
 
   const live = pickerGroups();
@@ -416,8 +422,8 @@ function isStrip(frame) {
 /** Strips need every shot; cards need the chosen one. */
 function photoArgs(frame) {
   return isStrip(frame)
-    ? { photos: S.shots.length ? S.shots : [placeholderPhoto()], photo: null }
-    : { photo: S.shots[S.heroIndex] || placeholderPhoto(), photos: [] };
+    ? { photos: S.filteredShots.length ? S.filteredShots : [placeholderPhoto()], photo: null }
+    : { photo: S.filteredShots[S.heroIndex] || placeholderPhoto(), photos: [] };
 }
 
 /* -------------------------------------------------------------- picker */
@@ -492,10 +498,52 @@ function renderGrid(packId) {
     tile.addEventListener('click', () => {
       $$('.frame-tile').forEach(x => x.classList.toggle('on', x === tile));
       S.frameId = f.id;
+      S.stripCustomColor = null;
       if (isStrip(f)) S.stripFrameId = f.id;
       $('#picked-label').textContent = isStrip(f)
         ? `${f.name} — photo strip`
         : `${f.name} — ${f.collectorNumber} · ${energy(f.energyType).name}`;
+      $('#to-product').disabled = false;
+    });
+  }
+
+  // A "Custom" tile alongside the strip presets — picking a color here
+  // works exactly like tapping a preset tile (same S.frameId, so mint/dex
+  // still treat it as that base strip), just with S.stripCustomColor set so
+  // currentFrame() swaps in a custom theme everywhere it renders or prints.
+  if (group.id === 'strips' && stripChoices().length) {
+    const base = stripChoices()[0];
+    const tile = document.createElement('div');
+    tile.className = 'frame-tile tall frame-tile-custom';
+    const cv = document.createElement('canvas');
+    const box = boxFor(base, 360);
+    cv.width = box.W; cv.height = box.H;
+    tile.append(cv);
+    tile.insertAdjacentHTML('beforeend', `
+      <div class="nm"><i class="type-dot rainbow"></i>Custom color</div>
+      <div class="mt"><span>Pick any color</span></div>
+      <input type="color" id="frame-strip-custom-color" value="${S.stripCustomColor || DEFAULT_STRIP_CUSTOM_COLOR}">`);
+    grid.append(tile);
+
+    const drawPreview = hex => renderCard(cv.getContext('2d'), {
+      frame: stripFrameWithColor(hex, base), frameId: base.id, W: box.W, H: box.H,
+      photo: null, photos: [placeholderPhoto(), placeholderPhoto(), placeholderPhoto(), placeholderPhoto()],
+      card: mintCard({ frame: base, frameId: base.id, seasonId: S.cfg.collection.seasonId, mint: 1, forcedRarity: base.rarityFloor || 'rare' }),
+      stock: S.cfg.cards?.stock || null,
+      personalization: { name: base.name, age: 7 },
+      foil: true,
+    });
+    drawPreview(S.stripCustomColor || DEFAULT_STRIP_CUSTOM_COLOR);
+    tile.classList.toggle('on', !!S.stripCustomColor);
+
+    const colorInput = $('#frame-strip-custom-color');
+    colorInput.addEventListener('input', () => drawPreview(colorInput.value));
+    colorInput.addEventListener('change', () => {
+      $$('.frame-tile').forEach(x => x.classList.toggle('on', x === tile));
+      S.frameId = base.id;
+      S.stripFrameId = base.id;
+      S.stripCustomColor = colorInput.value;
+      $('#picked-label').textContent = `${base.name} — photo strip, custom color`;
       $('#to-product').disabled = false;
     });
   }
@@ -563,7 +611,7 @@ ON_ENTER.personalize = () => {
   // Default the buddy to one matching the chosen card's colour, so the card
   // already looks finished before they touch anything.
   if (!S.personal.companionId) {
-    const type = lookupFrame(S.frameId)?.energyType;
+    const type = currentFrame()?.energyType;
     S.personal.companionId = (COMPANIONS.find(c => c.type === type) || COMPANIONS[0]).id;
     syncBuddySelection();
   }
@@ -581,7 +629,7 @@ function buildPersonalizeUI() {
   });
 
   $('#pz-gen-name').addEventListener('click', async e => {
-    const theme = energy(lookupFrame(S.frameId)?.energyType)?.name;
+    const theme = energy(currentFrame()?.energyType)?.name;
     S.personal.name = await surpriseName(e.currentTarget, theme);
     refreshPersonalize();
   });
@@ -660,7 +708,7 @@ function refreshPersonalize() {
 
 async function drawPersonalizePreview() {
   const cv = $('#pz-canvas');
-  const pf = lookupFrame(S.frameId);
+  const pf = currentFrame();
   renderCard(cv.getContext('2d'), {
     frame: pf, frameId: S.frameId, W: cv.width, H: cv.height,
     photo: placeholderPhoto(),
@@ -677,7 +725,7 @@ async function drawPersonalizePreview() {
 function personalizationPayload() {
   const typedName = S.personal.name.trim();
   return {
-    name: typedName || lookupFrame(S.frameId)?.name || '',
+    name: typedName || currentFrame()?.name || '',
     age: S.personal.age === '' ? null : Number(S.personal.age),
     companionId: S.personal.companionId,
   };
@@ -689,20 +737,61 @@ function stripChoices() {
   return allFrames().filter(f => f.template === 'strip');
 }
 
+/** A strip frame with its color swapped to a customer-picked hex. Keeps the
+ *  base's own id/collectorNumber/packId/etc — mint records and dex progress
+ *  read those, and a custom color is a cosmetic override, not a new card to
+ *  collect — only `theme` changes. */
+function stripFrameWithColor(hex, base = stripChoices()[0]) {
+  return { ...base, theme: themeFor(hex, 'strip') };
+}
+
+/** The bonus strip's frame on a card+strip combo (its own separate theme
+ *  choice from showStripThemePicker(), independent of the main frame). */
+function currentStripFrame() {
+  if (S.stripCustomColor) return stripFrameWithColor(S.stripCustomColor, lookupFrame(S.stripFrameId) || stripChoices()[0]);
+  return lookupFrame(S.stripFrameId) || stripChoices()[0];
+}
+
+/** The main chosen frame, with a customer-picked custom strip color applied
+ *  when active — use this instead of a raw catalog lookup everywhere a frame
+ *  feeds a preview, print, or record, so a custom color is always reflected
+ *  consistently. */
+function currentFrame() {
+  const f = lookupFrame(S.frameId);
+  return (f && isStrip(f) && S.stripCustomColor) ? stripFrameWithColor(S.stripCustomColor, f) : f;
+}
+
+const DEFAULT_STRIP_CUSTOM_COLOR = '#e889b5';
+
 function showStripThemePicker() {
   const picker = $('#strip-theme-picker');
   const grid = $('#strip-theme-grid');
   const choices = stripChoices();
   picker.hidden = false;
   grid.innerHTML = choices.map(f => `
-    <button class="strip-theme ${f.id === S.stripFrameId ? 'on' : ''}" data-strip-theme="${f.id}" type="button">
-      <span class="strip-theme-swatch" style="--strip-color:${energy(f.energyType).base}"></span>${f.name}
-    </button>`).join('');
+    <button class="strip-theme ${!S.stripCustomColor && f.id === S.stripFrameId ? 'on' : ''}" data-strip-theme="${f.id}" type="button" aria-label="${f.name}">
+      <span class="strip-theme-swatch" style="--strip-color:${energy(f.energyType).base}"></span>
+    </button>`).join('') + `
+    <label class="strip-theme strip-theme-custom${S.stripCustomColor ? ' on' : ''}">
+      <span class="strip-theme-swatch${S.stripCustomColor ? '' : ' rainbow'}" style="--strip-color:${S.stripCustomColor || 'transparent'}"></span>
+      Custom
+      <input type="color" id="strip-custom-color" value="${S.stripCustomColor || DEFAULT_STRIP_CUSTOM_COLOR}">
+    </label>`;
+
   grid.querySelectorAll('[data-strip-theme]').forEach(button => button.addEventListener('click', () => {
     S.stripFrameId = button.dataset.stripTheme;
+    S.stripCustomColor = null;
     grid.querySelectorAll('.strip-theme').forEach(b => b.classList.toggle('on', b === button));
     go('pay');
   }));
+
+  // 'change' (not 'input') so it only advances once the color wheel actually
+  // closes with a choice made, not on every drag update while it's open.
+  $('#strip-custom-color').addEventListener('change', e => {
+    S.stripCustomColor = e.target.value;
+    S.stripFrameId = null;
+    go('pay');
+  });
 }
 
 function showCardThemePicker() {
@@ -722,7 +811,7 @@ function showCardThemePicker() {
 }
 
 ON_ENTER.product = () => {
-  const frame = lookupFrame(S.frameId);
+  const frame = currentFrame();
   const selectedStrip = isStrip(frame);
   const visibleProducts = S.cfg.pricing.products.filter(p => {
     const cardCount = p.prints?.card || 0;
@@ -793,9 +882,14 @@ ON_ENTER.pay = async () => {
     return;
   }
 
-  const res = await S.pay.collect(S.product, {
-    frameId: S.frameId, boothId: S.cfg.booth.id, season: S.cfg.collection.seasonId,
-  });
+  let res;
+  try {
+    res = await S.pay.collect(S.product, {
+      frameId: S.frameId, boothId: S.cfg.booth.id, season: S.cfg.collection.seasonId,
+    });
+  } catch (e) {
+    res = { ok: false, error: e.message };
+  }
 
   if (!res.ok) {
     if (res.error === 'cancelled') return;
@@ -821,6 +915,28 @@ ON_ENTER.pay = async () => {
 /** Configured camera angles, or [] if only the single default camera is set up. */
 function cameraAngles() {
   return S.cfg.camera?.angles?.list || [];
+}
+
+/** Configured camera-look filters, or [] if the picker is off/unconfigured. */
+function filterChoices() {
+  return S.cfg.filters?.list || [];
+}
+function filtersEnabled() {
+  return !!S.cfg.filters?.enabled && filterChoices().length > 0;
+}
+function lookupFilter(id) {
+  return filterChoices().find(f => f.id === id) || null;
+}
+/** Bakes the currently-chosen filter onto the untouched originals once, so
+ *  everything downstream (card/strip render, gif, shot-picker thumbnails)
+ *  draws from S.filteredShots without redoing the canvas work per frame.
+ *  S.shots itself is never touched — picking "Original" just re-derives from
+ *  it with a no-op filter, which is how "remove it" gets you the original. */
+function finalizeFilterSelection() {
+  const filter = lookupFilter(S.filterId);
+  S.filteredShots = S.shots.map(s => applyPhotoFilter(s, filter));
+  S.filteredBurst = S.burst.map(s => applyPhotoFilter(s, filter));
+  go('decorate');
 }
 
 /* --------------------------------------------------------- camera angle */
@@ -863,7 +979,60 @@ ON_ENTER.angle = () => {
   };
 };
 
+/* -------------------------------------------------------- camera filter */
+
+/**
+ * Shown right after the shoot, on the actual photo just taken — not a live
+ * camera preview. Tapping a tile only previews that look (so the customer can
+ * flip through all of them on their real photo before deciding); nothing is
+ * final, including the current choice, until Next is tapped. "Original" is
+ * just another tile, so backing out of a filter they don't like is the same
+ * one tap as picking one in the first place.
+ */
+ON_ENTER.filter = () => {
+  if (!lookupFilter(S.filterId)) S.filterId = filterChoices()[0]?.id || null;
+  const shot = S.shots[S.heroIndex] || S.shots[0];
+  const preview = $('#filter-preview');
+  preview.src = shot.toDataURL('image/jpeg', 0.92);
+
+  const host = $('#filter-options');
+  const renderTiles = () => {
+    host.innerHTML = filterChoices().map(f => `
+      <div class="filter-option${f.id === S.filterId ? ' on' : ''}" data-filter="${f.id}">
+        <div class="ic">${f.icon || '🎨'}</div>
+        <div class="lbl">${f.label}</div>
+        ${f.sub ? `<div class="sub">${f.sub}</div>` : ''}
+      </div>`).join('');
+  };
+  renderTiles();
+  preview.style.filter = lookupFilter(S.filterId)?.cssFilter || 'none';
+
+  host.onclick = e => {
+    const id = e.target.closest('.filter-option')?.dataset.filter;
+    if (!id) return;
+    S.filterId = id;
+    preview.style.filter = lookupFilter(id)?.cssFilter || 'none';
+    renderTiles();
+  };
+
+  $('#filter-next').onclick = () => finalizeFilterSelection();
+};
+
 /* ------------------------------------------------------------- capture */
+
+/** The chosen angle's own preferredLabels/excludeLabels/constraints (if any)
+ *  point pickDevice() at that physical camera instead of the default one;
+ *  anything the angle doesn't override just falls back to booth.config.json. */
+function applyCameraAngleCfg(cam) {
+  const angle = cameraAngles().find(a => a.id === S.cameraAngle);
+  const base = S.cfg.camera;
+  cam.cfg.preferredLabels = angle?.preferredLabels || base.preferredLabels;
+  cam.cfg.excludeLabels = angle?.excludeLabels || base.excludeLabels;
+  cam.cfg.constraints = angle?.constraints || base.constraints;
+  // A different physical camera has its own device list; re-enumerate rather
+  // than trust whatever was cached from the last angle picked this session.
+  cam.devices = [];
+}
 
 ON_ENTER.capture = async () => {
   S.angleCameras.forEach(({ camera }) => camera.stop());
@@ -873,18 +1042,7 @@ ON_ENTER.capture = async () => {
     $('#cam-status').textContent = s.message;
     if (s.level === 'error') toast(s.message, true);
   };
-
-  // The chosen angle's own preferredLabels/excludeLabels/constraints (if any)
-  // point pickDevice() at that physical camera instead of the default one;
-  // anything the angle doesn't override just falls back to booth.config.json.
-  const angle = cameraAngles().find(a => a.id === S.cameraAngle);
-  const base = S.cfg.camera;
-  cam.cfg.preferredLabels = angle?.preferredLabels || base.preferredLabels;
-  cam.cfg.excludeLabels = angle?.excludeLabels || base.excludeLabels;
-  cam.cfg.constraints = angle?.constraints || base.constraints;
-  // A different physical camera has its own device list; re-enumerate rather
-  // than trust whatever was cached from the last angle picked this session.
-  cam.devices = [];
+  applyCameraAngleCfg(cam);
 
   try {
     await cam.start($('#preview'));
@@ -924,7 +1082,10 @@ async function runShootSequence() {
 
   $('#countdown').textContent = '';
   S.camera.stop();
-  go('decorate');
+  // The filter picker works on the actual shot just taken, so it only makes
+  // sense after this point; skip straight to finalizing (with S.filterId
+  // untouched, i.e. "Original") when it's off/unconfigured.
+  if (filtersEnabled()) go('filter'); else finalizeFilterSelection();
 }
 
 function countdown(seconds, prefix) {
@@ -965,7 +1126,7 @@ ON_ENTER.decorate = () => {
   // a retake — must not silently reroll a rarity the customer already saw.
   if (!S.previewCard || S.previewCard.frameId !== S.frameId) {
     S.previewCard = mintCard({
-      frame: lookupFrame(S.frameId), frameId: S.frameId,
+      frame: currentFrame(), frameId: S.frameId,
       seasonId: S.cfg.collection.seasonId, mint: 1,
       product: S.product,
     });
@@ -1025,7 +1186,7 @@ function buildDecorateUI() {
   const refreshDecName = () => {
     const el = $('#dec-name');
     const typedName = S.personal.name.trim();
-    const defaultName = lookupFrame(S.frameId)?.name || '';
+    const defaultName = currentFrame()?.name || '';
     el.textContent = typedName || defaultName;
     el.classList.toggle('is-empty', !typedName && !defaultName);
     renderNameSuggestions($('#dec-name-suggest'), S.personal.name, name => {
@@ -1044,7 +1205,7 @@ function buildDecorateUI() {
   });
 
   $('#dec-gen-name').addEventListener('click', async e => {
-    const theme = energy(lookupFrame(S.frameId)?.energyType)?.name;
+    const theme = energy(currentFrame()?.energyType)?.name;
     S.personal.name = await surpriseName(e.currentTarget, theme);
     refreshDecName();
   });
@@ -1071,8 +1232,9 @@ function buildKeyboard(host, { max = 14, get, set, onChange }) {
     if (k === 'DEL') v = v.slice(0, -1);
     else if (k === 'SPACE') { if (v.length < max) v += ' '; }
     else if (v.length < max) {
-      // Title case as they type — nobody wants CAPS on a keepsake.
-      v += (v.length === 0 || v.endsWith(' ')) ? k : k.toLowerCase();
+      // Keys are always uppercase (KB_ROWS) — type it as pressed, don't
+      // force every letter but the first of a word to lowercase.
+      v += k;
     }
     set(v);
     onChange();
@@ -1087,7 +1249,7 @@ function buildShotGrid() {
     `<div class="shot ${i === S.heroIndex ? 'on' : ''}" data-shot="${i}"><i>${i + 1}</i><canvas width="220" height="124"></canvas></div>`).join('');
   S.shots.forEach((shot, i) => {
     const cv = grid.querySelector(`[data-shot="${i}"] canvas`);
-    cv.getContext('2d').drawImage(shot, 0, 0, cv.width, cv.height);
+    cv.getContext('2d').drawImage(S.filteredShots[i] || shot, 0, 0, cv.width, cv.height);
   });
   grid.onclick = e => {
     const idx = e.target.closest('.shot')?.dataset.shot;
@@ -1129,7 +1291,7 @@ function buildSwatches() {
     S.frameId = pick;
     $$('#frame-swatches .swatch').forEach(el => el.classList.toggle('on', el.dataset.swatch === pick));
     S.previewCard = mintCard({
-      frame: lookupFrame(S.frameId), frameId: S.frameId,
+      frame: currentFrame(), frameId: S.frameId,
       seasonId: S.cfg.collection.seasonId, mint: 1, product: S.product,
     });
     drawDecorate();
@@ -1164,7 +1326,7 @@ function syncTray() {
 
 function drawDecorate() {
   const cv = $('#dec-canvas');
-  const f = lookupFrame(S.frameId);
+  const f = currentFrame();
   const box = boxFor(f, 500);
   if (cv.width !== box.W || cv.height !== box.H) { cv.width = box.W; cv.height = box.H; }
   const meta = renderCard(cv.getContext('2d'), {
@@ -1356,7 +1518,7 @@ async function buildOutputs() {
   const seasonId = S.cfg.collection.seasonId;
   const mint = await window.booth.cards.nextMint({ seasonId, frameId: S.frameId });
 
-  const frameDef = lookupFrame(S.frameId);
+  const frameDef = currentFrame();
   S.card = mintCard({
     frame: frameDef, frameId: S.frameId, seasonId, mint,
     boothId: S.cfg.booth.id, boothName: S.cfg.booth.displayName,
@@ -1375,12 +1537,12 @@ async function buildOutputs() {
   // throws away most of the frame and pushes the subject off-centre. Hand the
   // renderer the full frame and let drawCover fit whatever window the template
   // actually has.
-  const heroImg = await canvasToImage(S.shots[S.heroIndex] || S.shots[0]);
+  const heroImg = await canvasToImage(S.filteredShots[S.heroIndex] || S.filteredShots[0]);
 
   const usesCompanion = ['party', 'kawaii'].includes(frameDef.template);
   S.cardCanvas = document.createElement('canvas');
   S.cardCanvas.width = W; S.cardCanvas.height = H;
-  const heroImgs = stripStyle ? await Promise.all(S.shots.map(canvasToImage)) : [];
+  const heroImgs = stripStyle ? await Promise.all(S.filteredShots.map(canvasToImage)) : [];
   renderCard(S.cardCanvas.getContext('2d'), {
     frame: frameDef, frameId: S.frameId, W, H,
     photo: stripStyle ? null : heroImg,
@@ -1407,16 +1569,21 @@ async function buildOutputs() {
     const s = printSize('strip', dpi);
     S.stripCanvas = document.createElement('canvas');
     S.stripCanvas.width = s.W; S.stripCanvas.height = s.H;
-    const imgs = await Promise.all(S.shots.map(canvasToImage));
-    const stripFrame = lookupFrame(S.stripFrameId) || stripChoices()[0];
+    const imgs = await Promise.all(S.filteredShots.map(canvasToImage));
+    const stripFrame = currentStripFrame();
     renderStrip(S.stripCanvas.getContext('2d'), {
       W: s.W, H: s.H, photos: imgs, card: S.card, frame: stripFrame,
+      // Not personalizationPayload() — it falls back to S.frameId's name when
+      // nothing's typed, which is the *card's* frame here, not the strip's
+      // own theme (S.stripFrameId). Pass the raw typed name only, so an empty
+      // one correctly falls through to the strip theme's own name instead.
+      personalization: { name: S.personal.name.trim() },
       stickers: S.stickers, stickerImages: stickerImageMap(),
     });
   }
 
-  if (S.product.gif && S.burst.length) {
-    try { S.gifBlob = await encodeGif(S.burst, S.cfg.delivery.gif); }
+  if (S.product.gif && S.filteredBurst.length) {
+    try { S.gifBlob = await encodeGif(S.filteredBurst, S.cfg.delivery.gif); }
     catch (e) { console.warn('gif encode failed', e); }
   }
 
@@ -1428,13 +1595,13 @@ async function buildOutputs() {
 }
 
 async function uploadMedia() {
-  const primaryIsStrip = isStrip(lookupFrame(S.frameId));
+  const primaryIsStrip = isStrip(currentFrame());
   const files = [{
     name: primaryIsStrip ? 'strip.png' : `card-${S.card.serial.replace(/[^\w]+/g, '_')}.png`,
     dataUrl: S.cardCanvas.toDataURL('image/png'),
   }];
   if (S.stripCanvas) files.push({ name: 'strip.png', dataUrl: S.stripCanvas.toDataURL('image/png') });
-  S.shots.forEach((c, i) => files.push({ name: `photo-${i + 1}.jpg`, dataUrl: c.toDataURL('image/jpeg', 0.9) }));
+  S.filteredShots.forEach((c, i) => files.push({ name: `photo-${i + 1}.jpg`, dataUrl: c.toDataURL('image/jpeg', 0.9) }));
   if (S.gifBlob) files.push({ name: 'boomerang.gif', dataUrl: await blobToDataUrl(S.gifBlob) });
 
   const res = await fetch(S.cfg.delivery.uploadUrl, {
@@ -1457,7 +1624,7 @@ ON_ENTER.reveal = () => {
   el.textContent = r.label;
   el.style.color = r.color;
   $('#rarity-burst').style.setProperty('--burst', r.color);
-  const pfr = lookupFrame(S.frameId);
+  const pfr = currentFrame();
   const named = S.personal.name.trim();
   $('#pull-name').textContent = named ? S.personal.name.trim() : pfr.name;
   $('#pull-serial').textContent = `${pfr.collectorNumber}  ·  ${S.card.serial}`;
@@ -1496,7 +1663,7 @@ ON_ENTER.reveal = () => {
 
 async function retake() {
   S.retakes++;
-  S.shots = []; S.burst = [];
+  S.shots = []; S.filteredShots = []; S.burst = []; S.filteredBurst = [];
   S.stickers = [];
   go('capture');
 }
@@ -1516,17 +1683,31 @@ async function retake() {
  * two copies side by side exactly fill a 4x6 sheet, which is the same
  * layout DNP's own "2x6 (4x6 divided)" media mode expects — the two
  * copies aren't a bonus, they're what makes the page size valid.
+ *
+ * sheet.rotateForCutter (the DS40 strip sheet): the printer's own auto-cutter
+ * only slices along the sheet's short/feed axis, not along whichever axis the
+ * unit image happens to be tall on. So each unit gets pre-rotated 90 and
+ * tiled by its rotated footprint — a 2x6 strip occupies a 6-wide x 2-tall
+ * spot — so that the cutter's slices land on the strip's own boundaries and
+ * the cut-apart piece reads right-side up once turned upright.
  */
 function buildGangSheet(unitCanvas, count, sheet, unit) {
   const dpi = unitCanvas.width / unit.widthIn;
-  const unitW = unitCanvas.width, unitH = unitCanvas.height;
-  const cols = Math.max(1, Math.floor(sheet.widthIn / unit.widthIn));
-  const rows = Math.max(1, Math.floor(sheet.heightIn / unit.heightIn));
+  const rotate = !!sheet.rotateForCutter;
+  const unitW = rotate ? unitCanvas.height : unitCanvas.width;
+  const unitH = rotate ? unitCanvas.width : unitCanvas.height;
+  const effUnitWidthIn = rotate ? unit.heightIn : unit.widthIn;
+  const effUnitHeightIn = rotate ? unit.widthIn : unit.heightIn;
+  const cols = Math.max(1, Math.floor(sheet.widthIn / effUnitWidthIn));
+  const rows = Math.max(1, Math.floor(sheet.heightIn / effUnitHeightIn));
   const perSheet = cols * rows;
   const sheetW = Math.round(sheet.widthIn * dpi);
   const sheetH = Math.round(sheet.heightIn * dpi);
-  const marginX = (sheetW - cols * unitW) / 2;
-  const marginY = (sheetH - rows * unitH) / 2;
+  // Centered by default; sheet.offsetXIn/offsetYIn (inches, +down/+right)
+  // nudge that off-center when a printer's real registration doesn't match
+  // its declared page geometry exactly — tune per-printer, no code change.
+  const marginX = (sheetW - cols * unitW) / 2 + (sheet.offsetXIn || 0) * dpi;
+  const marginY = (sheetH - rows * unitH) / 2 + (sheet.offsetYIn || 0) * dpi;
 
   const sheets = [];
   for (let remaining = count; remaining > 0; remaining -= perSheet) {
@@ -1539,7 +1720,16 @@ function buildGangSheet(unitCanvas, count, sheet, unit) {
     for (let i = 0; i < onThisSheet; i++) {
       const x = marginX + (i % cols) * unitW;
       const y = marginY + Math.floor(i / cols) * unitH;
-      ctx.drawImage(unitCanvas, x, y);
+      if (rotate) {
+        ctx.save();
+        ctx.translate(x + unitW / 2, y + unitH / 2);
+        // Confirmed on a real DS40: +90° came out backwards once cut apart.
+        ctx.rotate(-Math.PI / 2);
+        ctx.drawImage(unitCanvas, -unitCanvas.width / 2, -unitCanvas.height / 2);
+        ctx.restore();
+      } else {
+        ctx.drawImage(unitCanvas, x, y);
+      }
     }
     if (sheet.cutMarks) drawSheetCutMarks(ctx, sheetW, sheetH, marginX, marginY, unitW, unitH, cols, rows);
     sheets.push(canvas);
@@ -1575,9 +1765,12 @@ async function doPrint() {
   const p = S.cfg.printing;
 
   /** Send one already-composed page. Shared by every print call below so a
-   *  rejection always surfaces the same way regardless of which item it was. */
-  const sendPage = async (dataUrl, widthIn, heightIn, printerName, copies, label) => {
-    const r = await window.booth.printers.print({ dataUrl, widthIn, heightIn, printerName, copies, silent: p.silent });
+   *  rejection always surfaces the same way regardless of which item it was.
+   *  pageSize (e.g. "dnp6x4") picks the printer's own named media instead of
+   *  an arbitrary Custom.WxHin the driver may not recognize; lpOptions are
+   *  extra per-job -o flags (e.g. the DS40's Cutter=2Inch for strip sheets). */
+  const sendPage = async (dataUrl, widthIn, heightIn, printerName, copies, label, pageSize, lpOptions) => {
+    const r = await window.booth.printers.print({ dataUrl, widthIn, heightIn, printerName, copies, silent: p.silent, pageSize, lpOptions });
     if (!r.ok) throw new Error(r.reason || `${label} print was rejected`);
   };
 
@@ -1585,24 +1778,30 @@ async function doPrint() {
   const printGanged = async (unitCanvas, count, sheet, unit, printerName, label) => {
     if (sheet?.enabled) {
       for (const page of buildGangSheet(unitCanvas, count, sheet, unit)) {
-        await sendPage(page.toDataURL('image/jpeg', 0.95), sheet.widthIn, sheet.heightIn, printerName, 1, label);
+        await sendPage(page.toDataURL('image/jpeg', 0.95), sheet.widthIn, sheet.heightIn, printerName, 1, label, sheet.pageSize, sheet.lpOptions);
       }
     } else {
       // JPEG, not PNG: the Pi wraps this straight into a PDF via /DCTDecode to
       // get exact physical sizing out of CUPS, and dye-sub is continuous tone
       // anyway so q95 is indistinguishable from lossless on paper.
-      await sendPage(unitCanvas.toDataURL('image/jpeg', 0.95), unit.widthIn, unit.heightIn, printerName, count, label);
+      await sendPage(unitCanvas.toDataURL('image/jpeg', 0.95), unit.widthIn, unit.heightIn, printerName, count, label, unit.pageSize, unit.lpOptions);
     }
   };
 
   try {
-    if (S.product.prints.card) {
-      st.textContent = `Printing ${S.product.prints.card} card${S.product.prints.card > 1 ? 's' : ''}…`;
-      const cardIsStrip = isStrip(lookupFrame(S.frameId));
+    // Normally S.cardCanvas holds a card and its count is prints.card. But when
+    // the customer's chosen frame is itself a strip style (e.g. the "2 Photo
+    // Strips" product), renderCard() draws the strip straight into
+    // S.cardCanvas and prints.card is 0 — the print count to use is
+    // prints.strip instead, since that's what was actually paid for.
+    const cardIsStrip = isStrip(currentFrame());
+    const cardCount = cardIsStrip ? S.product.prints.strip : S.product.prints.card;
+    if (cardCount) {
+      st.textContent = `Printing ${cardCount} ${cardIsStrip ? 'strip' : 'card'}${cardCount > 1 ? 's' : ''}…`;
       const geo = cardIsStrip ? p.strip : p.card;
       const sheet = cardIsStrip ? p.stripSheet : p.sheet;
       const printerName = cardIsStrip ? (p.stripPrinterName || p.cardPrinterName) : p.cardPrinterName;
-      await printGanged(S.cardCanvas, S.product.prints.card, sheet, geo, printerName, cardIsStrip ? 'Strip' : 'Card');
+      await printGanged(S.cardCanvas, cardCount, sheet, geo, printerName, cardIsStrip ? 'Strip' : 'Card');
     }
 
     if (S.product.prints.strip && S.stripCanvas) {

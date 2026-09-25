@@ -49,10 +49,23 @@
           "sub": "GoPro overhead",
           "icon": "🔝",
           "//": "The second camera: a GoPro in USB webcam mode, so it enumerates as its own UVC device with 'GoPro' in the label — no second capture card needed.",
-          "preferredLabels": ["GoPro HERO10", "GoPro HERO 10", "HERO10", "HERO 10", "GoPro Webcam", "GoPro"]
+          "preferredLabels": ["GoPro HERO10", "GoPro HERO 10", "HERO10", "HERO 10", "GoPro Webcam", "GoPro"],
+          "//constraints": "Without this, the GoPro inherits the capture card's 1080p60 ideal — most GoPro webcam-mode firmware can't do 60fps at full FOV and silently switches to a narrower digital crop to hit it instead of failing, which looks like the image not filling the frame. 1080p30 is well within every GoPro webcam mode's full-FOV range. If it's still cropped in, check the GoPro's own on-device webcam FOV setting (Wide/Linear/Narrow) — that's a camera-side setting this app can't reach.",
+          "constraints": { "width": 1920, "height": 1080, "frameRate": 30 }
         }
       ]
     }
+  },
+  "filters": {
+    "//": "Optional camera-look picker shown right before the shoot (after the camera angle picker, if any). cssFilter is a plain CSS filter() string (see developer.mozilla.org/en-US/docs/Web/CSS/filter) applied live in the preview and baked into every captured shot — not just a screen effect, it's what prints and gets delivered. vignette/grain are optional 0-1 intensities layered on top (grain needs a real photo behind it to look right; it's subtle at low values). Set enabled:false, or leave list with just one entry, to skip the picker and always shoot at 'none'.",
+    "enabled": true,
+    "default": "none",
+    "list": [
+      { "id": "none", "label": "Original", "sub": "Straight off the sensor", "icon": "📷", "cssFilter": "none" },
+      { "id": "vintage", "label": "Vintage Film", "sub": "Warm, faded, a little grainy", "icon": "🎞️", "cssFilter": "sepia(0.35) saturate(1.3) contrast(0.92) brightness(1.05) hue-rotate(-6deg)", "vignette": 0.35, "grain": 0.12 },
+      { "id": "g7x", "label": "Canon G7X Mk II", "sub": "Punchy point-and-shoot color", "icon": "📸", "cssFilter": "saturate(1.35) contrast(1.12) brightness(1.03) hue-rotate(-2deg)" },
+      { "id": "pro", "label": "Professional", "sub": "Neutral, studio-flat", "icon": "🎬", "cssFilter": "contrast(1.08) saturate(1.05) brightness(1.02)" }
+    ]
   },
   "capture": {
     "countdownSeconds": 5,
@@ -83,6 +96,16 @@
         "rarityBoost": 1.0
       },
       {
+        "id": "two_cards",
+        "name": "2 Pokémon Cards",
+        "blurb": "Two printed Pokémon cards + digital copies",
+        "amount": 1200,
+        "prints": { "card": 2, "strip": 0 },
+        "digital": true,
+        "gif": false,
+        "rarityBoost": 1.0
+      },
+      {
         "id": "digital_card",
         "name": "Digital Pokémon Card",
         "blurb": "Digital card delivered by QR code",
@@ -97,7 +120,7 @@
         "name": "Digital Photo Strip",
         "blurb": "One digital photo strip delivered by QR code",
         "amount": 500,
-        "prints": { "card": 0, "strip": 1 },
+        "prints": { "card": 0, "strip": 0 },
         "digital": true,
         "gif": false,
         "rarityBoost": 1.0
@@ -145,7 +168,7 @@
   "payments": {
     "//": "provider: 'stripe-terminal' | 'stripe-qr' | 'mock'. Use 'mock' for development with no hardware.",
     "//stripe-terminal": "Reader is an M2, which is Bluetooth-only — the kiosk can't drive it directly. A phone running the companion app (companion-app/) pairs with the M2 and does the actual collecting; the kiosk only creates the sale and polls for it to be paid. See server/index.js's /sessions and /booths/:boothId/pending, and companion-app/README.md for pairing the phone. Set COMPANION_APP_KEY on the server and give the same value to the phone app so random devices can't poll your booth's payments.",
-    "provider": "stripe-terminal",
+    "provider": "mock",
     "serverUrl": "http://192.168.1.11:4242",
     "stripe": {
       "publishableKey": "pk_live_51UC0PHGZUT57A45HuaGS9jqtRee5v0TtKo9FDVVpqca7qVkBpRDEFEka9llzsNmsbxchERupMKPVuQcpoolVCo5o00evnae4cG",
@@ -179,19 +202,27 @@
       "heightIn": 6.0,
       "bleedIn": 0.06
     },
-    "//sheet": "Most dye-subs print 4x6. 'sheet' gangs card prints onto a 4x6 so you cut/perforate after.",
+    "//sheet": "Most dye-subs print 4x6. 'sheet' gangs card prints onto a 4x6 so you cut/perforate after. pageSize is the printer's own named media (see `lpoptions -p NAME -l`, the PageSize/Media Size line) — set it whenever your driver has one, since a Custom.WxHin size the driver doesn't recognize is what caused off-center, crooked cards on a real DNP DS40 (its PageSize list is fixed presets like dnp6x4, no arbitrary custom sizes).",
     "sheet": {
       "enabled": true,
       "widthIn": 6.0,
       "heightIn": 4.0,
-      "cutMarks": true
+      "cutMarks": true,
+      "pageSize": "dnp6x4",
+      "//orientation": "orientation-requested: 3=portrait 4=landscape 5=reverse-landscape 6=reverse-portrait. 3 was confirmed wrong on a real DS40, 4 (pi/print.mjs's default) didn't fix the card either — trying 6 next. If still wrong, change to 5. offsetYIn/offsetXIn nudge the image within the sheet in inches (+down/+right) if it's still off-center once the rotation is right — no rebuild needed, just edit and reload.",
+      "lpOptions": ["orientation-requested=6"],
+      "offsetYIn": -0.15
     },
-    "//stripSheet": "A 2x6 strip can't be sent as its own page on a 4x6-only printer either — two copies side by side exactly fill a 4x6 sheet, which is also the layout DNP calls '2x6 (4x6 divided)' media: the driver's own cutter splits it into two strips. Set enabled:false only if your printer takes true 2x6 media directly.",
+    "//stripSheet": "Two 2x6 strips, printed so the DNP's own auto-cutter physically separates them — confirmed on a real DS40. Its Cutter option only cuts along the sheet's short (feed) axis, so this is a 6x4 sheet (matching PageSize dnp6x4, same as the card sheet) with each strip pre-rotated 90 and stacked top/bottom (rotateForCutter) rather than side by side — Cutter=2Inch then slices the 4in feed length into two 2in-tall halves, each 6in wide, which is the strip's own 6in length once you turn the cut piece back upright. If your printer takes true 2x6 media directly, or has no such cutter mode, set enabled:false and rotateForCutter/lpOptions become irrelevant.",
     "stripSheet": {
       "enabled": true,
-      "widthIn": 4.0,
-      "heightIn": 6.0,
-      "cutMarks": true
+      "widthIn": 6.0,
+      "heightIn": 4.0,
+      "cutMarks": true,
+      "pageSize": "dnp6x4",
+      "rotateForCutter": true,
+      "//orientation": "Same dnp6x4 media as the card sheet, which needed orientation-requested=6 (not pi/print.mjs's default of 4) on a real DS40 — trying 6 here too, since flipping the in-canvas pre-rotation direction made no visible difference (a sign the whole sheet's CUPS orientation dominates, same as the card). If still wrong, try 5.",
+      "lpOptions": ["Cutter=2Inch", "orientation-requested=6"]
     },
     "silent": true,
     "copiesMax": 4,

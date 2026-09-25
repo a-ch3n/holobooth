@@ -69,7 +69,21 @@ export class Camera {
     if (explicitId && this.devices.some(d => d.deviceId === explicitId)) return explicitId;
     const ranked = [...this.devices].sort((a, b) => this.score(b) - this.score(a));
     const best = ranked[0];
-    if (!best) throw new Error('No video input devices found. Is the capture card plugged in?');
+    if (!best) {
+      // The on-screen toast is brief and customer-facing — the operator
+      // checking this needs the actual troubleshooting steps, which belong
+      // in the console, not a 4-second banner.
+      console.error(
+        '[camera] No video input devices found. Check: the capture card/camera is ' +
+        'plugged in; on Windows, Settings > Privacy & security > Camera has camera ' +
+        'access AND "Let desktop apps access your camera" both turned on (Chromium ' +
+        'can enumerate zero devices with either off, even with hardware connected); ' +
+        'and no other app (OBS, Windows Camera, a leftover previous run of this app) ' +
+        'already has the capture card open — most HDMI capture dongles only allow one ' +
+        'app at a time.'
+      );
+      throw new Error('No video input devices found. Is the capture card plugged in? (See console for more.)');
+    }
     if (this.score(best) <= 0) {
       this.onStatus({
         level: 'warn',
@@ -214,5 +228,67 @@ export class Camera {
     out.width = Math.round(cw); out.height = Math.round(ch);
     out.getContext('2d').drawImage(source, sx, sy, cw, ch, 0, 0, out.width, out.height);
     return out;
+  }
+}
+
+/**
+ * Applies a camera-look filter (from booth.config.json's filters.list) to an
+ * already-captured photo, returning a new canvas — source is left untouched.
+ * Non-destructive on purpose: the filter is chosen *after* the shoot, on the
+ * actual photos, so picking "Original" (a falsy/none filter) just means every
+ * caller re-derives from the same untouched S.shots instead of a baked-in one.
+ */
+export function applyPhotoFilter(source, filter) {
+  const out = document.createElement('canvas');
+  out.width = source.width; out.height = source.height;
+  const ctx = out.getContext('2d');
+  ctx.filter = filter?.cssFilter || 'none';
+  ctx.drawImage(source, 0, 0);
+  ctx.filter = 'none';
+  applyFilterExtras(out, filter);
+  return out;
+}
+
+/** A CSS filter() string alone can't do grain, so this is the manual part of
+ *  a "vintage film" look: a tileable noise pattern generated once and reused
+ *  (cheap enough not to matter for an occasional photo, expensive to redo
+ *  per-pixel on every shot) plus a radial vignette, both optional per filter. */
+let _noiseTile = null;
+function noiseTile(size = 160) {
+  if (_noiseTile) return _noiseTile;
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d');
+  const img = ctx.createImageData(size, size);
+  for (let i = 0; i < img.data.length; i += 4) {
+    const v = Math.random() * 255;
+    img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
+    img.data[i + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  _noiseTile = c;
+  return c;
+}
+
+function applyFilterExtras(canvas, filter) {
+  if (!filter) return;
+  const ctx = canvas.getContext('2d');
+  const { width: w, height: h } = canvas;
+  if (filter.vignette) {
+    const g = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.35, w / 2, h / 2, Math.max(w, h) * 0.72);
+    g.addColorStop(0, 'rgba(0,0,0,0)');
+    g.addColorStop(1, `rgba(0,0,0,${filter.vignette})`);
+    ctx.save();
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+    ctx.restore();
+  }
+  if (filter.grain) {
+    ctx.save();
+    ctx.globalAlpha = filter.grain;
+    ctx.globalCompositeOperation = 'overlay';
+    ctx.fillStyle = ctx.createPattern(noiseTile(), 'repeat');
+    ctx.fillRect(0, 0, w, h);
+    ctx.restore();
   }
 }
