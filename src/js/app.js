@@ -261,6 +261,10 @@ async function boot() {
   // Dev conveniences, harmless in production (nobody has a keyboard at a kiosk).
   window.addEventListener('keydown', e => {
     if (e.key === 'd') window.__forceDecline = true;
+    // Simulated smart reader: T taps a working card, D a declining one.
+    if (S.screen === 'pay' && (e.key === 't' || e.key === 'd')) {
+      S.pay?.simulateTap?.(e.key === 'd').catch(err => toast(`Simulated tap failed: ${err.message}`, true));
+    }
     if (e.key === 'Escape') abandon();
     if (e.key === '`') document.body.classList.toggle('debug');
   });

@@ -170,12 +170,14 @@
     "//": "provider: 'stripe-smart-reader' | 'stripe-terminal' | 'stripe-qr' | 'mock'. Use 'mock' for development with no hardware.",
     "//stripe-smart-reader": "Reader is a WisePOS E or S700 — has its own Wi-Fi/Ethernet, so server/index.js drives it directly over the internet. No phone, no companion app: just this PC and the reader. Register it once with `npm run reader:register` (see README > Payments), which gives you the reader id to put in reader.id below.",
     "//stripe-terminal": "Reader is an M2, which is Bluetooth-only — the kiosk can't drive it directly. A phone running the companion app (companion-app/) pairs with the M2 and does the actual collecting; the kiosk only creates the sale and polls for it to be paid. See server/index.js's /sessions and /booths/:boothId/pending, and companion-app/README.md for pairing the phone. Set COMPANION_APP_KEY on the server and give the same value to the phone app so random devices can't poll your booth's payments.",
-    "provider": "mock",
-    "serverUrl": "http://192.168.1.11:4242",
+    "provider": "stripe-smart-reader",
+    "//serverUrl": "127.0.0.1 when the server runs on this same PC (smart reader, QR). The M2's phone needs the PC's LAN IP instead, e.g. http://192.168.1.11:4242.",
+    "serverUrl": "http://127.0.0.1:4242",
     "stripe": {
       "publishableKey": "pk_live_51UC0PHGZUT57A45HuaGS9jqtRee5v0TtKo9FDVVpqca7qVkBpRDEFEka9llzsNmsbxchERupMKPVuQcpoolVCo5o00evnae4cG",
       "locationId": "tml_Gqwbw5yrW85LOz",
-      "simulated": false
+      "//simulated": "stripe-smart-reader + a test key (sk_test_...): the server creates a simulated reader by itself at boot, no registration needed. Press T on the pay screen to tap a card, D to decline. Set false for the real reader and a live key.",
+      "simulated": true
     },
     "reader": {
       "//": "stripe-smart-reader only. The tmr_... id `npm run reader:register` prints. STRIPE_READER_ID on the server overrides this.",

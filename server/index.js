@@ -45,7 +45,39 @@ const APP_KEY = process.env.COMPANION_APP_KEY || null;
  * the config so a second booth can share one config file.
  */
 const SMART_READER = CONFIG.payments?.provider === 'stripe-smart-reader';
-const READER_ID = process.env.STRIPE_READER_ID || CONFIG.payments?.reader?.id || null;
+const SIMULATED = SMART_READER && !!CONFIG.payments?.stripe?.simulated;
+// `let`: in simulated mode ensureSimulatedReader() fills this in at boot.
+let READER_ID = process.env.STRIPE_READER_ID || CONFIG.payments?.reader?.id || null;
+
+/**
+ * payments.stripe.simulated + a test key: find or create a simulated
+ * WisePOS E at boot, so testing needs no registration step at all. Test and
+ * live mode don't share objects, so a live Location id from the config
+ * doesn't exist here — fall back to a dedicated test Location instead.
+ */
+async function ensureSimulatedReader() {
+  if (!SIMULATED || !stripe || READER_ID) return;
+  if (!process.env.STRIPE_SECRET_KEY.startsWith('sk_test_')) {
+    throw new Error('payments.stripe.simulated is on, but STRIPE_SECRET_KEY is a live key — simulated readers only exist in test mode.');
+  }
+  let location = CONFIG.payments?.stripe?.locationId || null;
+  if (location) {
+    try { await stripe.terminal.locations.retrieve(location); } catch { location = null; }
+  }
+  if (!location) {
+    const TEST_LOCATION = 'HoloBooth (test)';
+    const { data } = await stripe.terminal.locations.list({ limit: 100 });
+    location = data.find(l => l.display_name === TEST_LOCATION)?.id || (await stripe.terminal.locations.create({
+      display_name: TEST_LOCATION,
+      address: { line1: '1 Test Street', city: 'San Francisco', state: 'CA', postal_code: '94103', country: 'US' },
+    })).id;
+  }
+  const { data: readers } = await stripe.terminal.readers.list({ location, device_type: 'simulated_wisepos_e', limit: 1 });
+  const reader = readers[0] || await stripe.terminal.readers.create({
+    registration_code: 'simulated-wpe', label: 'HoloBooth simulated reader', location,
+  });
+  READER_ID = reader.id;
+}
 
 /**
  * M2 reader sessions. The phone (not this server) drives the reader over
@@ -546,12 +578,14 @@ setInterval(() => {
   }
 }, 6 * 3600e3).unref();
 
-app.listen(PORT, () => {
-  console.log(`HoloBooth server on http://127.0.0.1:${PORT}`);
-  console.log(`  stripe:  ${stripe ? 'configured' : 'NOT configured (set STRIPE_SECRET_KEY)'}`);
-  if (SMART_READER) {
-    console.log(`  reader:  ${READER_ID || 'NOT registered — run `npm run reader:register`'}`);
-  }
-  console.log(`  catalog: ${Object.keys(STRIPE_CATALOG).length ? `${Object.keys(STRIPE_CATALOG).length} products synced` : 'not synced — run `npm run stripe:sync`'}`);
-  console.log(`  media:   ${MEDIA_DIR}`);
-});
+ensureSimulatedReader()
+  .catch(e => console.error(`  reader:  simulated setup failed — ${e.message}`))
+  .finally(() => app.listen(PORT, () => {
+    console.log(`HoloBooth server on http://127.0.0.1:${PORT}`);
+    console.log(`  stripe:  ${stripe ? 'configured' : 'NOT configured (set STRIPE_SECRET_KEY)'}`);
+    if (SMART_READER) {
+      console.log(`  reader:  ${READER_ID ? `${READER_ID}${SIMULATED ? ' (simulated — press T/D on the pay screen)' : ''}` : 'NOT registered — run `npm run reader:register`'}`);
+    }
+    console.log(`  catalog: ${Object.keys(STRIPE_CATALOG).length ? `${Object.keys(STRIPE_CATALOG).length} products synced` : 'not synced — run `npm run stripe:sync`'}`);
+    console.log(`  media:   ${MEDIA_DIR}`);
+  }));

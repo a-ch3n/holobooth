@@ -417,17 +417,12 @@ STRIPE_SECRET_KEY=sk_test_... npm run server
    `"reader": { "id": "tmr_..." }`, then restart the server. Its startup log
    shows which reader it's driving.
 
-**No hardware yet?** With an `sk_test_` key, register the code
-`simulated-wpe` to get a simulated WisePOS E, run a sale on the kiosk, then
-"tap" a card from another terminal:
-
-```bash
-curl -X POST http://127.0.0.1:4242/terminal/simulate-tap                 # approves
-curl -X POST http://127.0.0.1:4242/terminal/simulate-tap \
-  -H 'content-type: application/json' -d '{"card":"4000000000000002"}'   # declines
-```
-
-`simulate-tap` refuses to run with a live key.
+**No hardware yet?** Set `payments.stripe.simulated: true` and start the
+server with an `sk_test_` key — it finds or creates a test Location and a
+simulated WisePOS E by itself on boot, no registration step. On the kiosk's
+pay screen, press **T** to tap a working card or **D** for a decline
+(Stripe's `4000000000000002` test card). Refuses to run with a live key,
+and never creates anything in your live account.
 
 ### Product catalog
 

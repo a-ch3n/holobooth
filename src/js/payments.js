@@ -74,9 +74,17 @@ class StripeTerminalProvider extends BaseProvider {
     super(cfg, onStatus);
     this.base = cfg.serverUrl;
     this.boothId = cfg.boothId;
-    this.waitingMessage = cfg.provider === 'stripe-smart-reader'
-      ? 'Tap, insert or swipe your card on the reader'
+    this.simulated = cfg.provider === 'stripe-smart-reader' && !!cfg.stripe?.simulated;
+    this.waitingMessage = this.simulated ? 'Simulated reader — press T to tap a card, D to decline'
+      : cfg.provider === 'stripe-smart-reader' ? 'Tap, insert or swipe your card on the reader'
       : 'Waiting on the phone paired to the reader…';
+  }
+
+  /** Test mode only: stands in for a customer tapping the simulated reader. */
+  simulateTap(decline = false) {
+    if (!this.simulated) return Promise.resolve();
+    // 4000000000000002 is Stripe's always-declines test card.
+    return this.api('POST', '/terminal/simulate-tap', decline ? { card: '4000000000000002' } : {});
   }
 
   async collect(product, meta = {}) {
@@ -88,7 +96,7 @@ class StripeTerminalProvider extends BaseProvider {
       productId: product.id, boothId: this.boothId, metadata: meta,
     });
 
-    this.onStatus({ phase: 'ready', message: 'Tap, insert or swipe your card on the reader' });
+    this.onStatus({ phase: 'ready', message: this.simulated ? this.waitingMessage : 'Tap, insert or swipe your card on the reader' });
 
     const deadline = Date.now() + 120000;
     while (Date.now() < deadline) {
