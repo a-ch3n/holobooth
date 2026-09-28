@@ -11,6 +11,8 @@ const os = require('node:os');
 
 const ROOT = path.join(__dirname, '..');
 const CONFIG_PATH = path.join(ROOT, 'config', 'booth.config.json');
+const LOCAL_CONFIG_PATH = path.join(ROOT, 'config', 'booth.config.local.json');
+const { readLocal, applyLocal, stripLocal } = require('./local-config');
 const DATA_DIR = path.join(app.getPath('userData'), 'holobooth');
 const DEV = !!process.env.HOLOBOOTH_DEV;
 
@@ -20,7 +22,7 @@ let config = loadConfig();
 
 /* ------------------------------------------------------------- config */
 
-function loadConfig() {
+function readBaseConfig() {
   try {
     return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
   } catch (e) {
@@ -29,9 +31,18 @@ function loadConfig() {
   }
 }
 
+/** booth.config.json plus this booth's gitignored booth.config.local.json. */
+function loadConfig() {
+  const local = readLocal(LOCAL_CONFIG_PATH);
+  if (local) console.log(`[config] using booth.config.local.json${local.server?.url ? ` — server ${local.server.url}` : ''}`);
+  return applyLocal(readBaseConfig(), local);
+}
+
 function saveConfig(next) {
   config = next;
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(next, null, 2));
+  // Never write the local file's values (the kiosk key) into the committed config.
+  const clean = stripLocal(next, readBaseConfig(), readLocal(LOCAL_CONFIG_PATH));
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(clean, null, 2));
   return true;
 }
 

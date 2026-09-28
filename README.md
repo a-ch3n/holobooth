@@ -439,7 +439,60 @@ receipts show the product by name) instead of an inline, unnamed line item.
 Re-run it any time a price or product name changes in the config — it
 updates in place rather than creating duplicates, archiving the old Price
 if the amount changed. Both payment endpoints look the amount up server-side
-from `productId`; the kiosk's own `amount` is never trusted.
+from `productId`; the kiosk's own `amount` is never trusted. The kiosk does
+send the price it showed, and the server refuses the sale (409, "Price
+mismatch") if the two copies of the config disagree, so update the server
+whenever you change a price.
+
+### Cloud server (download links that work on any phone)
+
+Run locally, the download QR points at `127.0.0.1`, which is the customer's
+own phone, so it can't work. It also dies when the booth PC is packed away.
+Put `server/index.js` on a ~$5/month VPS instead (DigitalOcean, Hetzner,
+Vultr, Lightsail: Ubuntu 24.04, 1 GB RAM). One script sets up Node, HTTPS
+(Caddy + Let's Encrypt), a systemd service and the keys:
+
+```bash
+ssh root@YOUR.SERVER.IP
+curl -fsSL https://raw.githubusercontent.com/a-ch3n/holobooth/main/deploy/setup-vps.sh -o setup-vps.sh
+sudo bash setup-vps.sh
+```
+
+With no domain it uses `https://<ip-with-dashes>.sslip.io`. With a domain,
+point an A record at the server and run `sudo DOMAIN=photos.example.com bash
+setup-vps.sh`. It asks for the Stripe secret key, which is stored in
+`/etc/holobooth.env` on the server and nowhere else. At the end it prints
+two lines for the booth PC. Put them in **`config/booth.config.local.json`**,
+which is gitignored:
+
+```json
+{ "server": { "url": "https://203-0-113-5.sslip.io", "kioskKey": "…" } }
+```
+
+`server.url` points payments, AI names and photo uploads at the VPS, so the
+booth PC no longer runs `npm run server` at all. With a smart reader, the
+reader and the kiosk both just need internet.
+
+- **The kiosk key.** Everything that takes money, refunds, uploads or spends
+  API quota requires the `x-kiosk-key` header once `PUBLIC_URL` is set, and
+  the server won't start without one. Download pages, `/qr` and `/health`
+  stay open. The key never goes in `booth.config.json`, because this repo is
+  public.
+- **Download links** are 128-bit random ids, so they can't be guessed, and
+  expire after `delivery.retentionDays`. Each sale is roughly 5–10 MB, so a
+  25 GB disk holds a few thousand sales.
+- **Going live on the server:** put `sk_live_…` in `/etc/holobooth.env`, and
+  put the reader id and `"stripe": { "simulated": false }` in the server's
+  own `/opt/holobooth/config/booth.config.local.json`, e.g.
+  `{ "payments": { "stripe": { "simulated": false }, "reader": { "id": "tmr_…" } } }`,
+  then `systemctl restart holobooth`.
+- **Webhooks** are optional. Without `STRIPE_WEBHOOK_SECRET` the server
+  checks every webhook against Stripe before believing it.
+- **Update:** re-run `sudo bash setup-vps.sh`. It pulls, reinstalls and
+  restarts, and keeps the keys and photos. Logs: `journalctl -u holobooth -f`.
+- **Trade-off:** the upload now crosses the venue's internet before the
+  download QR appears. On weak Wi-Fi, that's a few seconds on the reveal
+  screen.
 
 ---
 
@@ -545,7 +598,8 @@ Honest list of what needs real work before an event:
 
 - **Collector dex identity.** `collection.identifyBy` is set to `phone` but the
   kiosk never asks for one — cards record `collectorId: null`. The server
-  endpoint (`GET /dex?id=`) works; the phone-entry screen doesn't exist.
+  endpoint (`GET /dex?id=`, kiosk key required) works; the phone-entry
+  screen doesn't exist.
 - **Fonts.** The card faces fall back to system fonts until you drop real files
   into `src/assets/fonts/` and add `@font-face` rules. The layouts hold either
   way, but a rounded display face is a big part of the genre's feel.

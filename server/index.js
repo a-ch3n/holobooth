@@ -24,8 +24,30 @@ const fs = require('node:fs');
 const path = require('node:path');
 const QRCode = require('qrcode');
 
-const CONFIG = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'config', 'booth.config.json'), 'utf8'));
+// booth.config.local.json (gitignored) lets a cloud server go live — reader
+// id, simulated: false — without committing any of it to the public repo.
+const { readLocal, applyLocal } = require('../electron/local-config');
+const CONFIG = applyLocal(
+  JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'config', 'booth.config.json'), 'utf8')),
+  readLocal(path.join(__dirname, '..', 'config', 'booth.config.local.json')),
+);
 const PORT = Number(process.env.PORT || 4242);
+// On the VPS: 127.0.0.1, so only Caddy (TLS) reaches it. Locally: all
+// interfaces, because the M2's phone connects over the LAN.
+const HOST = process.env.HOST || '0.0.0.0';
+/** e.g. https://203-0-113-5.sslip.io — set when this runs somewhere public. Download links are built from it. */
+const PUBLIC_URL = (process.env.PUBLIC_URL || '').replace(/\/+$/, '') || null;
+/**
+ * Shared secret the kiosk sends as x-kiosk-key. Everything that creates,
+ * cancels or refunds a sale, uploads files or spends API quota needs it.
+ * Optional for local dev; required (see the boot check) once PUBLIC_URL is
+ * set, because an open /terminal/refund on the internet is not an option.
+ */
+const KIOSK_KEY = process.env.KIOSK_KEY || null;
+if (PUBLIC_URL && !KIOSK_KEY) {
+  console.error('PUBLIC_URL is set but KIOSK_KEY is not — refusing to start with open payment and upload endpoints.');
+  process.exit(1);
+}
 const MEDIA_DIR = process.env.MEDIA_DIR || path.join(__dirname, '..', 'out', 'media');
 const RETENTION_DAYS = CONFIG.delivery?.retentionDays || 30;
 const PRODUCTS_BY_ID = new Map((CONFIG.pricing?.products || []).map(p => [p.id, p]));
@@ -109,6 +131,14 @@ function requireProduct(req, res) {
     res.status(400).json({ error: `Unknown productId: ${req.body?.productId}` });
     return null;
   }
+  // The kiosk and a cloud server each read their own copy of the config. If a
+  // price was changed on one and not the other, stop before the reader shows
+  // the customer a different number than the screen did.
+  const shown = req.body?.expectedAmount;
+  if (shown != null && Number(shown) !== product.amount) {
+    res.status(409).json({ error: `Price mismatch: the kiosk shows ${shown} but the server charges ${product.amount} for ${product.id} — update config/booth.config.json on the server.` });
+    return null;
+  }
   return product;
 }
 
@@ -124,7 +154,7 @@ app.use(cors());
  * Stripe webhooks need the raw request body to verify the signature, so this
  * has to be mounted before the app-wide express.json() below swallows it.
  */
-app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), (req, res) => {
+app.post('/webhooks/stripe', express.raw({ type: 'application/json', limit: '1mb' }), async (req, res) => {
   if (!stripe) return res.status(503).end();
   let event;
   try {
@@ -136,12 +166,22 @@ app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), (req, re
     return res.status(400).send(`Webhook Error: ${e.message}`);
   }
 
-  const pi = event.data?.object;
-  const boothSession = pi && terminalSessions.get(pi.id);
+  let pi = event.data?.object;
+  const boothSession = pi?.id && terminalSessions.get(pi.id);
+  if (boothSession && !STRIPE_WEBHOOK_SECRET) {
+    // Unsigned, so anyone who can reach this URL could post "succeeded" for
+    // a pending sale and get a free print. Believe Stripe, not the body.
+    try { pi = await stripe.paymentIntents.retrieve(pi.id, { expand: ['latest_charge'] }); } catch { return res.status(400).end(); }
+    const real = { succeeded: 'payment_intent.succeeded', canceled: 'payment_intent.canceled' }[pi.status];
+    if (event.type !== real && !(event.type === 'payment_intent.payment_failed' && pi.status === 'requires_payment_method' && pi.last_payment_error)) {
+      return res.json({ received: true, ignored: 'does not match Stripe' });
+    }
+  }
   if (boothSession) {
     if (event.type === 'payment_intent.succeeded') {
       boothSession.status = 'paid';
-      const card = pi.charges?.data?.[0]?.payment_method_details?.card_present;
+      const charge = pi.charges?.data?.[0] || (typeof pi.latest_charge === 'object' ? pi.latest_charge : null);
+      const card = charge?.payment_method_details?.card_present;
       if (card) { boothSession.brand = card.brand; boothSession.last4 = card.last4; }
       if (pendingByBooth.get(boothSession.boothId) === pi.id) pendingByBooth.delete(boothSession.boothId);
     } else if (event.type === 'payment_intent.payment_failed' || event.type === 'payment_intent.canceled') {
@@ -153,7 +193,11 @@ app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), (req, re
   res.json({ received: true });
 });
 
-app.use(express.json({ limit: '40mb' }));
+// 40 MB is for the kiosk's photo upload only, and only after its key checks
+// out (see POST /media) — nobody else gets to make this server parse that much.
+const jsonMedia = express.json({ limit: '40mb' });
+const jsonSmall = express.json({ limit: '1mb' });
+app.use((req, res, next) => (req.path === '/media' ? next() : jsonSmall(req, res, next)));
 
 /* =============================================================== health */
 
@@ -177,7 +221,7 @@ app.get('/health', (_req, res) => res.json({
  * this only makes the result more varied when a key is configured and the
  * venue's connection answers in time. Never required for the booth to work.
  */
-app.post('/ai/name', async (req, res) => {
+app.post('/ai/name', requireKioskKey, async (req, res) => {
   if (!GEMINI_API_KEY) {
     return res.status(503).json({ error: 'GEMINI_API_KEY is not set on the server.' });
   }
@@ -239,6 +283,17 @@ function requireStripe(res) {
   return true;
 }
 
+/** The kiosk sends this on every call it makes; see KIOSK_KEY. */
+function requireKioskKey(req, res, next) {
+  if (!KIOSK_KEY) return next();
+  const given = Buffer.from(String(req.get('x-kiosk-key') || ''));
+  const want = Buffer.from(KIOSK_KEY);
+  if (given.length !== want.length || !crypto.timingSafeEqual(given, want)) {
+    return res.status(401).json({ error: 'bad or missing x-kiosk-key' });
+  }
+  next();
+}
+
 /** The companion app sends this on every call; keeps randoms from polling client secrets off your booth. */
 function requireAppKey(req, res, next) {
   if (!APP_KEY) return next(); // no key configured — fine for local dev, set COMPANION_APP_KEY for a real event
@@ -256,7 +311,7 @@ app.post('/terminal/connection_token', requireAppKey, async (_req, res) => {
 });
 
 /** HoloBooth creates the sale here — a productId and a boothId, never an amount. */
-app.post('/sessions', async (req, res) => {
+app.post('/sessions', requireKioskKey, async (req, res) => {
   if (!requireStripe(res)) return;
   const product = requireProduct(req, res);
   if (!product) return;
@@ -317,7 +372,7 @@ app.get('/booths/:boothId/pending', requireAppKey, async (req, res) => {
 });
 
 /** HoloBooth polls this — same shape as the QR flow's session poll — until status flips to "paid". */
-app.get('/sessions/:id', async (req, res) => {
+app.get('/sessions/:id', requireKioskKey, async (req, res) => {
   if (!requireStripe(res)) return;
   const cached = terminalSessions.get(req.params.id);
   try {
@@ -385,7 +440,7 @@ async function clearReader(piId) {
 }
 
 /** Customer walked away, or HoloBooth timed out waiting — free up the booth for the next one. */
-app.post('/sessions/:id/cancel', async (req, res) => {
+app.post('/sessions/:id/cancel', requireKioskKey, async (req, res) => {
   if (!requireStripe(res)) return;
   const session = terminalSessions.get(req.params.id);
   try {
@@ -415,7 +470,7 @@ setInterval(() => {
 }, 30000).unref();
 
 /** Refund the last sale — the operator panel's "print jammed, give it back" button. */
-app.post('/terminal/refund', async (req, res) => {
+app.post('/terminal/refund', requireKioskKey, async (req, res) => {
   if (!requireStripe(res)) return;
   try {
     const refund = await stripe.refunds.create({ payment_intent: req.body.paymentIntentId });
@@ -429,7 +484,7 @@ app.post('/terminal/refund', async (req, res) => {
  * run before the hardware arrives. Pass { card: '4000000000000002' } to
  * simulate a decline instead. Refuses outright with a live key.
  */
-app.post('/terminal/simulate-tap', async (req, res) => {
+app.post('/terminal/simulate-tap', requireKioskKey, async (req, res) => {
   if (!requireStripe(res)) return;
   if (!process.env.STRIPE_SECRET_KEY.startsWith('sk_test_')) {
     return res.status(403).json({ error: 'simulate-tap only works with a test-mode key.' });
@@ -447,7 +502,7 @@ app.post('/terminal/simulate-tap', async (req, res) => {
 
 const sessions = new Map();
 
-app.post('/checkout/session', async (req, res) => {
+app.post('/checkout/session', requireKioskKey, async (req, res) => {
   if (!requireStripe(res)) return;
   const product = requireProduct(req, res);
   if (!product) return;
@@ -478,7 +533,7 @@ app.post('/checkout/session', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.get('/checkout/session/:id', async (req, res) => {
+app.get('/checkout/session/:id', requireKioskKey, async (req, res) => {
   if (!requireStripe(res)) return;
   try {
     const s = await stripe.checkout.sessions.retrieve(req.params.id);
@@ -491,16 +546,32 @@ app.get('/checkout/done', (_req, res) =>
 
 /* ================================================================ media */
 
+/**
+ * The download link's id is the only thing standing between a stranger and
+ * someone's photos (often kids, at a party booth), so it's 128 random bits
+ * — not guessable by scanning. Older 8-character ids still resolve. Anything
+ * else is rejected before it gets near a filesystem path: an id is spliced
+ * into one, and `../` in it would otherwise read files outside MEDIA_DIR.
+ */
+const MEDIA_ID = /^[a-f0-9]{8,32}$/;
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
+
+function readMeta(id) {
+  if (!MEDIA_ID.test(id)) return null;
+  try { return JSON.parse(fs.readFileSync(path.join(MEDIA_DIR, id, 'meta.json'), 'utf8')); } catch { return null; }
+}
+
 /** Kiosk uploads the finished card / strip / GIF and gets back a short link. */
-app.post('/media', (req, res) => {
+app.post('/media', requireKioskKey, jsonMedia, (req, res) => {
   const { files = [], collectorId = null, card = null } = req.body;
-  const id = crypto.randomBytes(4).toString('hex');
+  const id = crypto.randomBytes(16).toString('hex');
   const dir = path.join(MEDIA_DIR, id);
   fs.mkdirSync(dir, { recursive: true });
 
   const saved = [];
   for (const f of files) {
     const safe = String(f.name).replace(/[^a-z0-9._-]/gi, '_');
+    if (safe === 'meta.json' || safe.startsWith('.')) continue;
     const b64 = String(f.dataUrl).split(',')[1] || '';
     fs.writeFileSync(path.join(dir, safe), Buffer.from(b64, 'base64'));
     saved.push(safe);
@@ -508,14 +579,14 @@ app.post('/media', (req, res) => {
   fs.writeFileSync(path.join(dir, 'meta.json'),
     JSON.stringify({ id, collectorId, card, files: saved, at: new Date().toISOString() }, null, 2));
 
-  const base = CONFIG.delivery?.downloadBaseUrl || `${req.protocol}://${req.get('host')}/d`;
+  const base = PUBLIC_URL ? `${PUBLIC_URL}/d`
+    : CONFIG.delivery?.downloadBaseUrl || `${req.protocol}://${req.get('host')}/d`;
   res.json({ id, url: `${base}/${id}`, files: saved });
 });
 
 app.get('/d/:id', (req, res) => {
-  const dir = path.join(MEDIA_DIR, req.params.id);
-  if (!fs.existsSync(dir)) return res.status(404).send('This link has expired.');
-  const meta = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8'));
+  const meta = readMeta(req.params.id);
+  if (!meta) return res.status(404).send('This link has expired.');
   const items = meta.files.map(f =>
     `<a class="tile" href="/d/${meta.id}/${f}" download>
        ${/\.(png|jpg|gif)$/i.test(f) ? `<img src="/d/${meta.id}/${f}" alt="">` : ''}
@@ -534,14 +605,16 @@ app.get('/d/:id', (req, res) => {
   </style>
   <h1>Your pull is ready</h1>
   <p>Tap any image to save it. Links expire after ${RETENTION_DAYS} days.</p>
-  ${meta.card ? `<div class="card">${meta.card.rarityLabel} · <b>${meta.card.serial}</b><br>${meta.card.seasonId}</div>` : ''}
+  ${meta.card ? `<div class="card">${esc(meta.card.rarityLabel)} · <b>${esc(meta.card.serial)}</b><br>${esc(meta.card.seasonId)}</div>` : ''}
   <div class="grid">${items}</div>`);
 });
 
 app.get('/d/:id/:file', (req, res) => {
-  const f = path.join(MEDIA_DIR, req.params.id, path.basename(req.params.file));
-  if (!fs.existsSync(f)) return res.sendStatus(404);
-  res.sendFile(f);
+  const meta = readMeta(req.params.id);
+  // Only files the kiosk actually uploaded — never meta.json, which holds
+  // collector ids, and never anything a crafted name might point at.
+  if (!meta || !meta.files.includes(req.params.file)) return res.sendStatus(404);
+  res.sendFile(path.join(MEDIA_DIR, req.params.id, req.params.file));
 });
 
 app.get('/qr', async (req, res) => {
@@ -554,7 +627,7 @@ app.get('/qr', async (req, res) => {
 /* ================================================================== dex */
 
 /** "Collect them all" — what this collector has pulled this season. */
-app.get('/dex', (req, res) => {
+app.get('/dex', requireKioskKey, (req, res) => {
   const who = req.query.id;
   const rows = [];
   for (const id of fs.readdirSync(MEDIA_DIR)) {
@@ -580,8 +653,10 @@ setInterval(() => {
 
 ensureSimulatedReader()
   .catch(e => console.error(`  reader:  simulated setup failed — ${e.message}`))
-  .finally(() => app.listen(PORT, () => {
-    console.log(`HoloBooth server on http://127.0.0.1:${PORT}`);
+  .finally(() => app.listen(PORT, HOST, () => {
+    console.log(`HoloBooth server on http://127.0.0.1:${PORT}${HOST === '127.0.0.1' ? ' (local only — behind Caddy)' : ''}`);
+    console.log(`  public:  ${PUBLIC_URL || 'none — download links point at this machine'}`);
+    console.log(`  kiosk:   ${KIOSK_KEY ? 'x-kiosk-key required' : 'open (no KIOSK_KEY set)'}`);
     console.log(`  stripe:  ${stripe ? 'configured' : 'NOT configured (set STRIPE_SECRET_KEY)'}`);
     if (SMART_READER) {
       console.log(`  reader:  ${READER_ID ? `${READER_ID}${SIMULATED ? ' (simulated — press T/D on the pay screen)' : ''}` : 'NOT registered — run `npm run reader:register`'}`);

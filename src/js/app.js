@@ -18,7 +18,7 @@ import { loadPack, packFrames } from './frames/assetpack.mjs';
 import { stickerCatalog, stickerCanvas, newPlacement, stickerAt, DECOS } from './frames/stickers.mjs';
 import { renderCard, renderStrip, mintCard, printSize } from './frames/render.mjs';
 import { Camera, applyPhotoFilter } from './camera.js';
-import { createPaymentProvider } from './payments.js';
+import { createPaymentProvider, kioskHeaders } from './payments.js';
 import { encodeGif } from './gif.js';
 
 import { installBridge, PLATFORMS } from './bridge.js';
@@ -127,7 +127,7 @@ async function aiCharacterName(theme) {
     const timer = setTimeout(() => ac.abort(), ai.timeoutMs || 6000);
     const res = await fetch(`${ai.serverUrl}/ai/name`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: kioskHeaders(S.cfg.server?.kioskKey),
       body: JSON.stringify({ theme: theme || '' }),
       signal: ac.signal,
     });
@@ -866,7 +866,7 @@ ON_ENTER.pay = async () => {
   status.classList.remove('err');
 
   S.pay = createPaymentProvider(
-    { ...S.cfg.payments, currency: S.cfg.booth.currency, boothId: S.cfg.booth.id },
+    { ...S.cfg.payments, currency: S.cfg.booth.currency, boothId: S.cfg.booth.id, kioskKey: S.cfg.server?.kioskKey },
     {
       onStatus: s => {
         status.textContent = s.message || '';
@@ -1609,9 +1609,10 @@ async function uploadMedia() {
   if (S.gifBlob) files.push({ name: 'boomerang.gif', dataUrl: await blobToDataUrl(S.gifBlob) });
 
   const res = await fetch(S.cfg.delivery.uploadUrl, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
+    method: 'POST', headers: kioskHeaders(S.cfg.server?.kioskKey),
     body: JSON.stringify({ files, card: S.card, collectorId: null }),
   });
+  if (!res.ok) throw new Error(`upload: ${res.status} ${await res.text()}`);
   const { url } = await res.json();
   S.downloadUrl = url;
 

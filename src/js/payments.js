@@ -10,6 +10,13 @@
  * venue wifi is flaky because the reader retries.
  */
 
+/**
+ * Once the server is on the internet it only takes orders from a kiosk that
+ * knows its KIOSK_KEY (config/booth.config.local.json → server.kioskKey,
+ * never the committed config — the repo is public).
+ */
+export const kioskHeaders = key => ({ 'content-type': 'application/json', ...(key ? { 'x-kiosk-key': key } : {}) });
+
 export function createPaymentProvider(cfg, { onStatus = () => {} } = {}) {
   switch (cfg?.provider) {
     case 'stripe-terminal':
@@ -93,7 +100,7 @@ class StripeTerminalProvider extends BaseProvider {
     // The server looks the price up by productId from its own copy of
     // booth.config.json — it doesn't trust amount/description from here.
     const session = await this.api('POST', '/sessions', {
-      productId: product.id, boothId: this.boothId, metadata: meta,
+      productId: product.id, expectedAmount: product.amount, boothId: this.boothId, metadata: meta,
     });
 
     this.onStatus({ phase: 'ready', message: this.simulated ? this.waitingMessage : 'Tap, insert or swipe your card on the reader' });
@@ -123,7 +130,7 @@ class StripeTerminalProvider extends BaseProvider {
   async api(method, path, body) {
     const res = await fetch(this.base + path, {
       method,
-      headers: { 'content-type': 'application/json' },
+      headers: kioskHeaders(this.cfg.kioskKey),
       body: body ? JSON.stringify(body) : undefined,
     });
     if (!res.ok) throw new Error(`${path}: ${res.status} ${await res.text()}`);
@@ -139,9 +146,10 @@ class StripeQrProvider extends BaseProvider {
     this.cancelled = false;
     const res = await fetch(this.cfg.serverUrl + '/checkout/session', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ productId: product.id, meta }),
+      headers: kioskHeaders(this.cfg.kioskKey),
+      body: JSON.stringify({ productId: product.id, expectedAmount: product.amount, meta }),
     });
+    if (!res.ok) throw new Error(`/checkout/session: ${res.status} ${await res.text()}`);
     const { sessionId, url } = await res.json();
 
     this.onStatus({ phase: 'qr', message: 'Scan to pay with your phone', qrUrl: url });
@@ -150,7 +158,7 @@ class StripeQrProvider extends BaseProvider {
     while (Date.now() < deadline) {
       if (this.cancelled) return { ok: false, error: 'cancelled' };
       await sleep(this.cfg.qr?.pollIntervalMs || 1500);
-      const st = await (await fetch(`${this.cfg.serverUrl}/checkout/session/${sessionId}`)).json();
+      const st = await (await fetch(`${this.cfg.serverUrl}/checkout/session/${sessionId}`, { headers: kioskHeaders(this.cfg.kioskKey) })).json();
       if (st.paid) return { ok: true, method: 'qr', paymentId: sessionId, amount: product.amount };
       if (st.expired) return { ok: false, error: 'Checkout expired' };
     }
