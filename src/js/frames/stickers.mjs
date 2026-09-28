@@ -35,6 +35,11 @@ export const DECOS = [
   { id: 'note',     name: 'Music',    color: '#59d9c4' },
   { id: 'speech',   name: 'Speech',   color: '#ffffff' },
   { id: 'paw',      name: 'Paw',      color: '#c39a6b' },
+  { id: 'skull',       name: 'Skull',       color: '#f4f1ea' },
+  { id: 'fire',        name: 'Fire',        color: '#ff6b35' },
+  { id: 'hundred',     name: '100',         color: '#ff3b30' },
+  { id: 'eyes',        name: 'Eyes',        color: '#ffffff' },
+  { id: 'sunglasses',  name: 'Sunglasses',  color: '#22262e' },
 ];
 
 const imageUrl = filename => new URL(`../../../images/${filename}`, import.meta.url).href;
@@ -279,6 +284,109 @@ export function drawDeco(ctx, id, x, y, s) {
         ctx.beginPath();
         ctx.ellipse(cx + dx * r, cy + dy * r, r * 0.22, r * 0.28, dx * 0.4, 0, TAU);
         ctx.fill(); ctx.stroke();
+      });
+      break;
+
+    case 'skull':
+      // Dome cranium over a rounded jaw.
+      ctx.beginPath();
+      ctx.arc(cx, cy - r * 0.05, r * 0.95, Math.PI, 0, false);
+      ctx.lineTo(cx + r * 0.72, cy + r * 0.55);
+      ctx.quadraticCurveTo(cx, cy + r * 0.95, cx - r * 0.72, cy + r * 0.55);
+      ctx.closePath();
+      ctx.fill(); ctx.stroke();
+      ctx.fillStyle = INK;
+      [-1, 1].forEach(side => {
+        ctx.beginPath();
+        ctx.ellipse(cx + side * r * 0.38, cy - r * 0.08, r * 0.24, r * 0.30, 0, 0, TAU);
+        ctx.fill();
+      });
+      ctx.beginPath();
+      ctx.moveTo(cx, cy + r * 0.16);
+      ctx.lineTo(cx - r * 0.13, cy + r * 0.42);
+      ctx.lineTo(cx + r * 0.13, cy + r * 0.42);
+      ctx.closePath();
+      ctx.fill();
+      ctx.lineWidth = s * 0.035;
+      for (let i = -2; i <= 2; i++) {
+        ctx.beginPath();
+        ctx.moveTo(cx + i * r * 0.20, cy + r * 0.58);
+        ctx.lineTo(cx + i * r * 0.20, cy + r * 0.80);
+        ctx.stroke();
+      }
+      break;
+
+    case 'fire': {
+      const flamePath = scale => {
+        ctx.beginPath();
+        ctx.moveTo(cx, cy + r * 1.05 * scale);
+        ctx.quadraticCurveTo(cx - r * 0.85 * scale, cy + r * 0.35 * scale, cx - r * 0.45 * scale, cy - r * 0.35 * scale);
+        ctx.quadraticCurveTo(cx - r * 0.55 * scale, cy - r * 0.85 * scale, cx - r * 0.05 * scale, cy - r * 1.10 * scale);
+        ctx.quadraticCurveTo(cx - r * 0.25 * scale, cy - r * 0.55 * scale, cx + r * 0.15 * scale, cy - r * 0.55 * scale);
+        ctx.quadraticCurveTo(cx + r * 0.65 * scale, cy - r * 0.35 * scale, cx + r * 0.55 * scale, cy + r * 0.15 * scale);
+        ctx.quadraticCurveTo(cx + r * 0.85 * scale, cy - r * 0.05 * scale, cx + r * 0.75 * scale, cy + r * 0.45 * scale);
+        ctx.quadraticCurveTo(cx + r * 0.55 * scale, cy + r * 0.95 * scale, cx, cy + r * 1.05 * scale);
+        ctx.closePath();
+      };
+      flamePath(1);
+      ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#ffd23f';
+      flamePath(0.55);
+      ctx.fill();
+      break;
+    }
+
+    case 'hundred':
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(-0.08);
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.font = font(900, r * 1.05, 'Nunito, system-ui, sans-serif');
+      ctx.lineWidth = s * 0.05;
+      ctx.strokeStyle = INK;
+      ctx.strokeText('100', 0, 0);
+      ctx.fillStyle = d.color;
+      ctx.fillText('100', 0, 0);
+      ctx.strokeStyle = d.color;
+      [0.60, 0.76].forEach(k => {
+        ctx.beginPath();
+        ctx.moveTo(-r * 0.95, r * k);
+        ctx.lineTo(r * 0.95, r * k);
+        ctx.stroke();
+      });
+      ctx.restore();
+      break;
+
+    case 'eyes':
+      [-1, 1].forEach(side => {
+        const ex = cx + side * r * 0.52;
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.ellipse(ex, cy, r * 0.46, r * 0.56, 0, 0, TAU);
+        ctx.fill(); ctx.stroke();
+        ctx.fillStyle = INK;
+        ctx.beginPath();
+        ctx.arc(ex + side * r * 0.14, cy + r * 0.08, r * 0.20, 0, TAU);
+        ctx.fill();
+      });
+      break;
+
+    case 'sunglasses':
+      ctx.fillStyle = d.color;
+      [-1, 1].forEach(side => {
+        roundRect(ctx, cx + side * r * 0.62 - r * 0.42, cy - r * 0.30, r * 0.84, r * 0.60, r * 0.16);
+        ctx.fill(); ctx.stroke();
+      });
+      ctx.lineWidth = s * 0.06;
+      ctx.beginPath();
+      ctx.moveTo(cx - r * 0.20, cy - r * 0.02);
+      ctx.lineTo(cx + r * 0.20, cy - r * 0.02);
+      ctx.stroke();
+      [-1, 1].forEach(side => {
+        ctx.beginPath();
+        ctx.moveTo(cx + side * (r * 0.62 + r * 0.42), cy - r * 0.10);
+        ctx.lineTo(cx + side * r * 1.15, cy - r * 0.30);
+        ctx.stroke();
       });
       break;
 

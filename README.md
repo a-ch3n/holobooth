@@ -168,7 +168,8 @@ Previously the booth just used the first frame, which is rarely the best one.
 **Name** — an on-screen keyboard to name the card. Works on every style, not
 just party cards; leave it blank to keep the style's own name.
 
-**Stickers** — 26 originals (12 mascots + 14 decorations), tap to place, then
+**Stickers** — 31 originals (12 mascots + 19 decorations, including a small
+GenZ/meme set — skull, fire, "100", eyes, sunglasses), tap to place, then
 **drag to move, pinch to scale, twist to rotate** directly on the card preview.
 Two-finger gestures on the touchscreen, mouse-wheel scaling on a desktop. A tray
 shows what's placed; tap one to take it off.
