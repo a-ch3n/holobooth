@@ -68,7 +68,7 @@ is a card you refund.
 src/js/app.js         the state machine: attract → pick → pay → shoot → reveal
 src/js/bridge.js      one window.booth API, three backends (see below)
 src/js/camera.js      HDMI capture card detection, capture, burst
-src/js/payments.js    stripe-terminal | stripe-qr | mock, one interface
+src/js/payments.js    stripe-smart-reader | stripe-terminal | stripe-qr | mock, one interface
 src/js/gif.js         GIF89a encoder (median-cut + LZW), no dependencies
 src/js/frames/
   energy.mjs          the 14 types: colours, glyphs, pips, weakness chart
@@ -378,16 +378,21 @@ signal drops, and the next customer gets a black card.
 
 ## Payments
 
-Three providers behind one interface, chosen by `payments.provider`:
+Four providers behind one interface, chosen by `payments.provider`:
 
 - **`mock`** — approves after a beat. Develop against this.
-- **`stripe-terminal`** — the real thing, for a Stripe **M2** reader. The M2 is
-  Bluetooth-only, so the kiosk can't drive it directly: the server creates a
-  PaymentIntent and hands it off, a **phone running `companion-app/`** pairs
-  with the M2 over Bluetooth and actually collects the tap, and the kiosk
-  polls the server until that session flips to paid. Capture happens as soon
-  as the tap is approved, same as before — see `companion-app/README.md` for
-  the full flow and `server/index.js`'s `/sessions` endpoints.
+- **`stripe-smart-reader`** — a **WisePOS E** or **S700**. These have their own
+  Wi-Fi/Ethernet, so `server/index.js` drives the reader directly over the
+  internet: the kiosk creates a sale, the server pushes it to the reader's
+  screen (`process_payment_intent`), the customer taps there, and the kiosk
+  polls until it's paid. **Just this PC and the reader — no phone, no
+  companion app.** Declines and walk-aways are read off the reader's own
+  action status, so it works without webhooks configured.
+- **`stripe-terminal`** — for a Stripe **M2** reader. The M2 is Bluetooth-only,
+  so the kiosk can't drive it directly: the server creates a PaymentIntent
+  and hands it off, a **phone running `companion-app/`** pairs with the M2
+  over Bluetooth and actually collects the tap, and the kiosk polls the
+  server until that session flips to paid — see `companion-app/README.md`.
 - **`stripe-qr`** — customer pays on their phone from an on-screen QR. No
   hardware, slower line.
 
@@ -397,9 +402,32 @@ The secret key lives only in `server/index.js`:
 STRIPE_SECRET_KEY=sk_test_... npm run server
 ```
 
-Set `payments.stripe.locationId`, register the reader in the Stripe dashboard,
-and the app finds it on boot. Leave `stripe.simulated: true` to test the whole
-flow against Stripe's simulated reader before hardware arrives.
+### Smart reader setup (once per reader)
+
+1. Create a Location in the Stripe Dashboard (Terminal → Locations) and put
+   its `tml_...` id in `payments.stripe.locationId`.
+2. On the reader: **Settings → Generate pairing code** (three words).
+3. Register it:
+   ```bash
+   STRIPE_SECRET_KEY=sk_live_... npm run reader:register -- sepia-cerulean-aqua
+   ```
+   It prints a `tmr_...` reader id. (Run it with no code to list readers
+   already registered at the location.)
+4. In `booth.config.json` set `"provider": "stripe-smart-reader"` and
+   `"reader": { "id": "tmr_..." }`, then restart the server. Its startup log
+   shows which reader it's driving.
+
+**No hardware yet?** With an `sk_test_` key, register the code
+`simulated-wpe` to get a simulated WisePOS E, run a sale on the kiosk, then
+"tap" a card from another terminal:
+
+```bash
+curl -X POST http://127.0.0.1:4242/terminal/simulate-tap                 # approves
+curl -X POST http://127.0.0.1:4242/terminal/simulate-tap \
+  -H 'content-type: application/json' -d '{"card":"4000000000000002"}'   # declines
+```
+
+`simulate-tap` refuses to run with a live key.
 
 ### Product catalog
 

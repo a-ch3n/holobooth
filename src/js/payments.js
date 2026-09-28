@@ -12,7 +12,8 @@
 
 export function createPaymentProvider(cfg, { onStatus = () => {} } = {}) {
   switch (cfg?.provider) {
-    case 'stripe-terminal': return new StripeTerminalProvider(cfg, onStatus);
+    case 'stripe-terminal':
+    case 'stripe-smart-reader': return new StripeTerminalProvider(cfg, onStatus);
     case 'stripe-qr': return new StripeQrProvider(cfg, onStatus);
     default: return new MockProvider(cfg, onStatus);
   }
@@ -62,12 +63,20 @@ class MockProvider extends BaseProvider {
  * An M2 is Bluetooth-only, so the kiosk can't talk to it directly — that's
  * why a phone is in the loop at all. The secret key still never reaches
  * either the kiosk or the phone; both only ever hold ids.
+ *
+ * 'stripe-smart-reader' (WisePOS E / S700) uses this exact same class: from
+ * the kiosk's side the flow is identical — create a session, poll it. The
+ * only difference is on the server, which pushes the sale straight to the
+ * internet-connected reader instead of waiting for a phone to pick it up.
  */
 class StripeTerminalProvider extends BaseProvider {
   constructor(cfg, onStatus) {
     super(cfg, onStatus);
     this.base = cfg.serverUrl;
     this.boothId = cfg.boothId;
+    this.waitingMessage = cfg.provider === 'stripe-smart-reader'
+      ? 'Tap, insert or swipe your card on the reader'
+      : 'Waiting on the phone paired to the reader…';
   }
 
   async collect(product, meta = {}) {
@@ -97,7 +106,7 @@ class StripeTerminalProvider extends BaseProvider {
         };
       }
       if (st.status === 'failed') return { ok: false, error: st.error || 'Card declined' };
-      this.onStatus({ phase: 'waiting', message: 'Waiting on the phone paired to the reader…' });
+      this.onStatus({ phase: 'waiting', message: this.waitingMessage });
     }
     await this.api('POST', `/sessions/${session.sessionId}/cancel`).catch(() => {});
     return { ok: false, error: 'Timed out waiting for the card reader' };

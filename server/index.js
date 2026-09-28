@@ -39,6 +39,15 @@ const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || null;
 const APP_KEY = process.env.COMPANION_APP_KEY || null;
 
 /**
+ * Smart reader mode (WisePOS E / S700): the reader has its own internet
+ * connection, so this server drives it directly — no phone, no companion
+ * app. Registered once with `npm run reader:register`; the env var wins over
+ * the config so a second booth can share one config file.
+ */
+const SMART_READER = CONFIG.payments?.provider === 'stripe-smart-reader';
+const READER_ID = process.env.STRIPE_READER_ID || CONFIG.payments?.reader?.id || null;
+
+/**
  * M2 reader sessions. The phone (not this server) drives the reader over
  * Bluetooth — this server only ever creates the PaymentIntent, hands the
  * phone whatever it needs to collect it, and tracks the result. keyed by
@@ -122,6 +131,7 @@ app.get('/health', (_req, res) => res.json({
   stripeCatalogSynced: Object.keys(STRIPE_CATALOG).length,
   ai: !!GEMINI_API_KEY,
   provider: CONFIG.payments?.provider,
+  reader: SMART_READER ? READER_ID : undefined,
   season: CONFIG.collection?.seasonId,
   uptime: process.uptime(),
 }));
@@ -220,23 +230,42 @@ app.post('/sessions', async (req, res) => {
   if (!product) return;
   const { boothId, metadata = {} } = req.body;
   if (!boothId) return res.status(400).json({ error: 'boothId is required' });
+  if (SMART_READER && !READER_ID) {
+    return res.status(503).json({ error: 'No smart reader registered — run `npm run reader:register` and set payments.reader.id.' });
+  }
   const currency = CONFIG.booth?.currency || 'usd';
+  let pi;
   try {
-    const pi = await stripe.paymentIntents.create({
+    pi = await stripe.paymentIntents.create({
       amount: product.amount,
       currency,
       description: `${product.name} — HoloBooth`,
       metadata: { productId: product.id, boothId, ...metadata },
       payment_method_types: ['card_present'],
-      capture_method: 'manual', // capture only once the phone confirms the tap succeeded
+      // M2: capture only once the phone confirms the tap. A smart reader has
+      // no phone step in between, so let Stripe capture the moment it's approved.
+      capture_method: SMART_READER ? 'automatic' : 'manual',
     });
     terminalSessions.set(pi.id, {
       boothId, productId: product.id, amount: product.amount, currency,
       status: 'pending', createdAt: Date.now(),
     });
     pendingByBooth.set(boothId, pi.id);
+
+    // Puts the amount on the reader's own screen and waits for a tap there.
+    if (SMART_READER) await stripe.terminal.readers.processPaymentIntent(READER_ID, { payment_intent: pi.id });
+
     res.json({ sessionId: pi.id, amount: product.amount });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    // Reader offline or busy with a previous sale: don't leave an orphaned
+    // PaymentIntent sitting in pendingByBooth for the next customer.
+    if (pi) {
+      stripe.paymentIntents.cancel(pi.id).catch(() => {});
+      terminalSessions.delete(pi.id);
+      if (pendingByBooth.get(boothId) === pi.id) pendingByBooth.delete(boothId);
+    }
+    res.status(500).json({ error: e.message });
+  }
 });
 
 /** The companion app polls this to find the sale it should collect on the M2. */
@@ -262,13 +291,25 @@ app.get('/sessions/:id', async (req, res) => {
   try {
     const pi = await stripe.paymentIntents.retrieve(req.params.id);
     const card = pi.charges?.data?.[0]?.payment_method_details?.card_present;
+    let status = cached?.status === 'paid' || pi.status === 'succeeded' ? 'paid'
+      : cached?.status === 'failed' || pi.status === 'canceled' ? 'failed'
+      : 'pending';
+    let error = cached?.error || pi.last_payment_error?.message || null;
+
+    // A decline on a smart reader leaves the PaymentIntent reusable
+    // (requires_payment_method), not failed — the reader's action is what
+    // actually reports it, so this works with or without webhooks set up.
+    if (SMART_READER && status === 'pending') {
+      const reader = await stripe.terminal.readers.retrieve(READER_ID);
+      const action = reader.action;
+      if (action?.process_payment_intent?.payment_intent === pi.id && action.status === 'failed') {
+        status = 'failed';
+        error = action.failure_message || 'Card declined';
+      }
+    }
+
     res.json({
-      id: pi.id,
-      status: cached?.status === 'paid' || pi.status === 'succeeded' ? 'paid'
-        : cached?.status === 'failed' || pi.status === 'canceled' ? 'failed'
-        : 'pending',
-      amount: pi.amount,
-      error: cached?.error || pi.last_payment_error?.message || null,
+      id: pi.id, status, amount: pi.amount, error,
       brand: cached?.brand || card?.brand || null,
       last4: cached?.last4 || card?.last4 || null,
     });
@@ -297,11 +338,26 @@ app.post('/sessions/:id/capture', requireAppKey, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+/**
+ * Takes an abandoned sale off the smart reader's screen — only if the reader
+ * is still showing *that* sale. A late cancel (or the stale sweep below)
+ * must never wipe the next customer's amount mid-tap. No-op in M2 mode.
+ */
+async function clearReader(piId) {
+  if (!SMART_READER || !READER_ID) return;
+  try {
+    const reader = await stripe.terminal.readers.retrieve(READER_ID);
+    if (reader.action?.process_payment_intent?.payment_intent !== piId) return;
+    await stripe.terminal.readers.cancelAction(READER_ID);
+  } catch { /* already idle, or reader offline — nothing to clear */ }
+}
+
 /** Customer walked away, or HoloBooth timed out waiting — free up the booth for the next one. */
 app.post('/sessions/:id/cancel', async (req, res) => {
   if (!requireStripe(res)) return;
   const session = terminalSessions.get(req.params.id);
   try {
+    await clearReader(req.params.id);
     await stripe.paymentIntents.cancel(req.params.id).catch(() => {}); // already captured/canceled is fine
     if (session) {
       session.status = 'failed';
@@ -317,6 +373,7 @@ setInterval(() => {
   const cutoff = Date.now() - STALE_SESSION_MS;
   for (const [id, session] of terminalSessions) {
     if (session.status === 'pending' && session.createdAt < cutoff) {
+      if (stripe) clearReader(id);
       stripe?.paymentIntents.cancel(id).catch(() => {});
       session.status = 'failed';
       session.error = 'timed out';
@@ -331,6 +388,26 @@ app.post('/terminal/refund', async (req, res) => {
   try {
     const refund = await stripe.refunds.create({ payment_intent: req.body.paymentIntentId });
     res.json({ id: refund.id, status: refund.status });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+/**
+ * Test mode only: "tap" a card on a simulated smart reader (one registered
+ * with registration code `simulated-wpe`), so the whole kiosk flow can be
+ * run before the hardware arrives. Pass { card: '4000000000000002' } to
+ * simulate a decline instead. Refuses outright with a live key.
+ */
+app.post('/terminal/simulate-tap', async (req, res) => {
+  if (!requireStripe(res)) return;
+  if (!process.env.STRIPE_SECRET_KEY.startsWith('sk_test_')) {
+    return res.status(403).json({ error: 'simulate-tap only works with a test-mode key.' });
+  }
+  if (!READER_ID) return res.status(400).json({ error: 'No reader id configured.' });
+  try {
+    const cardNumber = req.body?.card;
+    const reader = await stripe.testHelpers.terminal.readers.presentPaymentMethod(
+      READER_ID, cardNumber ? { card_present: { number: cardNumber } } : {});
+    res.json({ action: reader.action?.status || null });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -472,6 +549,9 @@ setInterval(() => {
 app.listen(PORT, () => {
   console.log(`HoloBooth server on http://127.0.0.1:${PORT}`);
   console.log(`  stripe:  ${stripe ? 'configured' : 'NOT configured (set STRIPE_SECRET_KEY)'}`);
+  if (SMART_READER) {
+    console.log(`  reader:  ${READER_ID || 'NOT registered — run `npm run reader:register`'}`);
+  }
   console.log(`  catalog: ${Object.keys(STRIPE_CATALOG).length ? `${Object.keys(STRIPE_CATALOG).length} products synced` : 'not synced — run `npm run stripe:sync`'}`);
   console.log(`  media:   ${MEDIA_DIR}`);
 });
