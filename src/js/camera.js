@@ -209,6 +209,34 @@ export class Camera {
     videoEl.playsInline = true;
     videoEl.style.transform = this.cfg.mirrorPreview ? 'scaleX(-1)' : 'none';
     await videoEl.play().catch(() => {});
+    this._watch?.();
+  }
+
+  /**
+   * Some capture cards stall instead of disconnecting: the track stays
+   * "live", no 'ended' fires, and the picture just freezes. Count frames
+   * actually presented and reconnect if none arrive for 4 s while the
+   * preview is on screen (hidden <video>s legitimately get no frames).
+   */
+  _watch() {
+    clearInterval(this._watchdog);
+    const v = this.video;
+    if (!v?.requestVideoFrameCallback) return;
+    let last = performance.now();
+    const tick = () => { last = performance.now(); if (this.video === v && this._wanted) v.requestVideoFrameCallback(tick); };
+    v.requestVideoFrameCallback(tick);
+    this._watchdog = setInterval(() => {
+      if (!this._wanted || this.video !== v) return clearInterval(this._watchdog);
+      if (this._reconnecting) return;
+      if (document.hidden || !v.isConnected || !v.getClientRects().length) { last = performance.now(); return; }
+      if (performance.now() - last > 4000) {
+        console.warn('[camera] picture froze — reconnecting');
+        this._lost = true;
+        this.onStatus({ level: 'warn', message: 'Camera picture froze — reconnecting…' });
+        this._release();
+        this._reconnect();
+      }
+    }, 1000);
   }
 
   /**
@@ -256,6 +284,7 @@ export class Camera {
 
   stop() {
     this._wanted = false;
+    clearInterval(this._watchdog);
     this._release();
   }
 

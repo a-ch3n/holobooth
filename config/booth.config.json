@@ -26,10 +26,11 @@
       "Integrated",
       "Built-in"
     ],
+    "//constraints": "30 fps, not 60: generic USB 3.0 HDMI capture cards (\"USB Video 3.0\") can start at 1080p60 and then stall, especially on a USB 2 port, and a booth gains nothing from 60.",
     "constraints": {
       "width": 1920,
       "height": 1080,
-      "frameRate": 60
+      "frameRate": 30
     },
     "mirrorPreview": true,
     "cropToPortrait": true,
