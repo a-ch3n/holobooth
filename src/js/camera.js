@@ -179,7 +179,9 @@ export class Camera {
     } catch (error) {
       if (BUSY.includes(error.name)) {
         // Name the program holding it, if it's one we know (Windows).
-        const holders = await globalThis.window?.booth?.app?.cameraHolders?.().catch(() => []) || [];
+        let holders = await globalThis.window?.booth?.app?.cameraHolders?.().catch(() => []) || [];
+        // Opening OBS's own Virtual Camera: OBS running is the point, not the culprit.
+        if (/obs virtual camera/i.test(picked?.label || '')) holders = holders.filter(h => h !== 'OBS Studio');
         console.error(
           `[camera] Can't open the camera (${error.name}: ${error.message}). ` +
           (holders.length ? `Running now and able to hold it: ${holders.join(', ')}. ` : '') +

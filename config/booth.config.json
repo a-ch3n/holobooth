@@ -59,6 +59,8 @@
       "gphoto2": { "bin": "gphoto2" }
     },
     "angles": {
+      "//livePreviews": "false (default): the angle picker shows tiles and only checks each camera is plugged in; the shoot opens just the chosen one. true: live preview in every tile, which means all cameras streaming at once. On some Windows PCs opening a second camera kills the first, so leave this off unless you've tested it.",
+      "livePreviews": false,
       "//": "Optional: two (or more) physical cameras. When 2+ entries are listed here, the customer picks one on a screen shown right after paying, before the shoot starts. Each entry's preferredLabels/excludeLabels/constraints override the defaults above for that angle only — fields left out fall back to the defaults. Leave this as a single entry (or remove it) to skip the picker and keep the single-camera flow exactly as it was.",
       "list": [
         {

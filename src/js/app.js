@@ -973,13 +973,19 @@ function finalizeFilterSelection() {
 
 ON_ENTER.angle = () => {
   const host = $('#angle-options');
+  // Off by default: live previews mean every angle's camera streaming at once,
+  // and on some Windows PCs opening a second camera kills the first (seen:
+  // opening "GoPro Webcam" ended the main camera's stream, and it couldn't
+  // reopen while the GoPro one was held). Without previews, the tiles only
+  // check each camera is present; the shoot opens just the one picked.
+  const livePreviews = S.cfg.camera?.angles?.livePreviews === true;
   host.innerHTML = cameraAngles().map(a => `
     <div class="angle-option${a.id === S.cameraAngle ? ' on' : ''}" data-angle="${a.id}">
-      <video class="angle-preview" data-angle-video="${a.id}" autoplay muted playsinline></video>
+      ${livePreviews ? `<video class="angle-preview" data-angle-video="${a.id}" autoplay muted playsinline></video>` : ''}
       <div class="ic">${a.icon || '📷'}</div>
       <div class="lbl">${a.label}</div>
       ${a.sub ? `<div class="sub">${a.sub}</div>` : ''}
-      <div class="angle-status" data-angle-status="${a.id}">Connecting preview…</div>
+      <div class="angle-status" data-angle-status="${a.id}">${livePreviews ? 'Connecting preview…' : 'Checking…'}</div>
     </div>`).join('');
   S.angleCameras = cameraAngles().map(a => ({ id: a.id, camera: makeCamera(a.id), ready: null, missing: false }));
   const setStatus = (id, text) => { const el = host.querySelector(`[data-angle-status="${id}"]`); if (el) el.textContent = text; };
@@ -1004,12 +1010,14 @@ ON_ENTER.angle = () => {
       return;
     }
     taken.add(deviceId);
+    if (!livePreviews) { setStatus(id, 'Ready'); return; }
     await camera.start(videoFor(id), deviceId);
   }
   const opening = (async () => {
     for (const entry of S.angleCameras) {
       entry.ready = (async () => {
         if (!entry.camera.stills) return startVideoAngle(entry);
+        if (!livePreviews) { setStatus(entry.id, 'Ready — real photos with flash'); return; }
         entry.camera.onStatus = status => setStatus(entry.id, status.message || '');
         try {
           await entry.camera.start(videoFor(entry.id));
