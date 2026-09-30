@@ -35,6 +35,17 @@ if (process.platform === 'win32' && config.camera?.windowsCaptureApi !== 'mediaf
   app.commandLine.appendSwitch('disable-features', 'MediaFoundationVideoCapture,MediaFoundationD3D11VideoCapture');
 }
 
+/**
+ * These cards send MJPEG, and Chromium decodes it on the graphics chip
+ * ("Hardware MFT"). On some GPUs that decoder stalls after a few seconds,
+ * freezing the preview, while the Windows Camera app, which doesn't use it,
+ * runs fine. Decoding 1080p30 MJPEG in software is cheap on any booth PC.
+ * camera.windowsHardwareMjpeg: true to use the GPU decoder again.
+ */
+if (process.platform === 'win32' && config.camera?.windowsHardwareMjpeg !== true) {
+  app.commandLine.appendSwitch('disable-accelerated-mjpeg-decode');
+}
+
 /* ------------------------------------------------------------- config */
 
 function readBaseConfig() {
