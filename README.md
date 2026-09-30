@@ -381,6 +381,13 @@ camera focuses, fires its shutter **and flash**, and the full-resolution
 photo goes on the card and strip instead of a video frame. The same USB
 cable also carries the live view the customer poses to.
 
+**The camera must support USB remote shooting.** The **Canon EOS M50
+does not**: over USB it only gives live view, so it can't fire its shutter
+or flash from a computer, in HoloBooth or anything else. Use the M50 as a
+video camera instead (EOS Webcam Utility or HDMI, above), with constant
+lighting. Canon bodies that do tether well and are common in booths
+include the Rebel T6/T7/T7i and SL2/SL3 (2000D/4000D/800D/200D/250D).
+
 **Windows: digiCamControl** (free, [digicamcontrol.com](https://digicamcontrol.com)).
 It talks to Canon cameras through Canon's own SDK, the same way Lumabooth does.
 

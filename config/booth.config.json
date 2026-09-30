@@ -35,7 +35,8 @@
     "warmupMs": 1200,
     "stills": {
       "//": "Real photos like Lumabooth: the camera autofocuses, fires its shutter and flash, and the full-resolution JPEG is used for the print. Instead of a video frame. Windows: install digiCamControl (digicamcontrol.com), turn on File > Settings > Webserver (port 5513) and leave it running. Mac/Linux/Pi: install gphoto2. Only one program can hold the camera, so close Lumabooth, EOS Webcam Utility and OBS. If the camera can't be reached the booth falls back to the video feed (preferredLabels above) so a paid session still happens. Test it from the operator screen: Take a test photo.",
-      "enabled": true,
+      "//enabled": "Off: the Canon M50 only allows live view over USB, not remote shooting, so it can't be tethered. Turn on with a body that supports USB remote shooting (e.g. Canon Rebel T6/T7/T7i/SL2/SL3). The M50 works as a video camera instead via EOS Webcam Utility or HDMI.",
+      "enabled": false,
       "//backend": "auto = digicamcontrol on Windows, gphoto2 on Mac/Linux/Pi.",
       "backend": "auto",
       "//preview": "liveview = the camera's own live view over the same USB cable (no extra hardware). video = show a capture card's HDMI feed instead (smoother), still shooting over USB.",
