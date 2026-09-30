@@ -230,12 +230,23 @@ export class Camera {
     let last = performance.now();
     const tick = () => { last = performance.now(); if (this.video === v && this._wanted) v.requestVideoFrameCallback(tick); };
     v.requestVideoFrameCallback(tick);
+    // A second, independent frame counter. Only when BOTH say no new frames
+    // is it a real freeze — one quiet signal alone (a window behind DevTools,
+    // a driver quirk) mustn't make the booth drop a working camera.
+    const decoded = () => v.getVideoPlaybackQuality?.().totalVideoFrames ?? null;
+    let lastDecoded = decoded(), decodedAt = performance.now();
     this._watchdog = setInterval(() => {
       if (!this._wanted || this.video !== v) return clearInterval(this._watchdog);
       if (this._reconnecting) return;
-      if (document.hidden || !v.isConnected || !v.getClientRects().length) { last = performance.now(); return; }
-      if (performance.now() - last > 4000) {
-        console.warn('[camera] picture froze — reconnecting');
+      const now = performance.now();
+      const d = decoded();
+      if (d !== lastDecoded) { lastDecoded = d; decodedAt = now; }
+      if (document.hidden || !v.isConnected || !v.getClientRects().length) { last = decodedAt = now; return; }
+      const quietFor = Math.min(now - last, d === null ? Infinity : now - decodedAt);
+      if (quietFor > 4000) {
+        console.warn(`[camera] picture froze — no new frames for ${(quietFor / 1000).toFixed(1)}s ` +
+          `(painted ${((now - last) / 1000).toFixed(1)}s ago, decoded count ${d} unchanged ${d === null ? 'n/a' : ((now - decodedAt) / 1000).toFixed(1) + 's'}, ` +
+          `track ${this.stream?.getVideoTracks()[0]?.readyState}, muted ${this.stream?.getVideoTracks()[0]?.muted}) — reconnecting`);
         this._lost = true;
         this.onStatus({ level: 'warn', message: 'Camera picture froze — reconnecting…' });
         this._release();
