@@ -20,6 +20,21 @@ let win = null;
 let printWin = null;
 let config = loadConfig();
 
+/**
+ * Windows camera API. Chromium defaults to Media Foundation, which fails with
+ * some generic HDMI capture cards ("USB Video 3.0"): the preview runs for a
+ * few seconds, stops, and every reopen fails with "Hardware MFT failed to
+ * start streaming due to lack of hardware resources". DirectShow, the API
+ * OBS uses for the same cards, doesn't have that problem. Turning the Media
+ * Foundation feature off makes Chromium fall back to its DirectShow capture
+ * code (checked present in Electron 32's Windows build). Must be set before
+ * the app is ready. camera.windowsCaptureApi: "directshow" (default) or
+ * "mediafoundation".
+ */
+if (process.platform === 'win32' && config.camera?.windowsCaptureApi !== 'mediafoundation') {
+  app.commandLine.appendSwitch('disable-features', 'MediaFoundationVideoCapture,MediaFoundationD3D11VideoCapture');
+}
+
 /* ------------------------------------------------------------- config */
 
 function readBaseConfig() {
