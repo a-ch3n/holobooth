@@ -370,6 +370,26 @@ Camera HDMI → capture card → USB. The card enumerates as a UVC webcam, so
 4. `warmupMs` exists because capture cards output black for a beat while they
    lock onto the signal. Don't set it to 0.
 
+**If a capture card works in OBS (or the Windows Camera app) but the
+preview keeps freezing or dropping in HoloBooth,** let OBS hold the card
+and pass the picture on:
+1. In OBS: **Sources → + → Video Capture Device**, and pick the card.
+   Right-click the source → **Transform → Fit to screen**. Set
+   **Settings → Video** to 1920×1080 at 30 fps.
+2. Click **Start Virtual Camera**.
+3. Start HoloBooth. While OBS is running, it picks **OBS Virtual Camera**
+   by itself (first in `preferredLabels`). With OBS closed, it skips it and
+   uses the card directly.
+
+To start OBS with the virtual camera already on, use a shortcut:
+`"C:\Program Files\obs-studio\bin\64bit\obs64.exe" --startvirtualcam --minimize-to-tray`
+(set the shortcut's "Start in" to that `64bit` folder).
+
+**Camera log:** the operator panel (tap the bottom-left corner 5 times)
+has a **Camera log** of everything the camera did: devices seen, what was
+opened at what size, drops, freezes and reconnects, and screen changes.
+**Copy camera log** puts it on the clipboard to send to whoever is helping.
+
 Cameras with a **micro** HDMI port need a locking or right-angle cable. This is
 the single most common failure at an event: someone brushes the cable, the
 signal drops, and the next customer gets a black card.

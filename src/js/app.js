@@ -17,7 +17,7 @@ import { COMPANIONS, companionById, companionCanvas } from './frames/companions.
 import { loadPack, packFrames } from './frames/assetpack.mjs';
 import { stickerCatalog, stickerCanvas, newPlacement, stickerAt, DECOS } from './frames/stickers.mjs';
 import { renderCard, renderStrip, mintCard, printSize } from './frames/render.mjs';
-import { Camera, StillsCamera, applyPhotoFilter } from './camera.js';
+import { Camera, StillsCamera, applyPhotoFilter, cameraLog, clog } from './camera.js';
 import { createPaymentProvider, kioskHeaders } from './payments.js';
 import { encodeGif } from './gif.js';
 
@@ -188,6 +188,7 @@ function renderNameSuggestions(host, query, onPick) {
 /* ---------------------------------------------------------- navigation */
 
 function go(name) {
+  if (name !== S.screen) clog(`screen: ${S.screen || '-'} → ${name}`);
   S.screen = name;
   $$('.screen').forEach(el => (el.hidden = el.dataset.screen !== name));
   resetIdle();
@@ -225,6 +226,9 @@ async function boot() {
   S.platform = await installBridge();
   document.body.dataset.platform = S.platform;
   S.cfg = await window.booth.config.get();
+  clog(`boot: ${navigator.userAgent.match(/(Chrome|Electron)\/[\d.]+/g)?.join(' ') || navigator.userAgent}, ` +
+    `windowsCaptureApi=${S.cfg.camera?.windowsCaptureApi || 'mediafoundation'}, hwMjpeg=${!!S.cfg.camera?.windowsHardwareMjpeg}, ` +
+    `constraints=${JSON.stringify(S.cfg.camera?.constraints)}`);
 
   // Physical buttons (Pi only): an arcade shutter button drives the same flow
   // as a screen tap, so the booth works with the lid closed.
@@ -1971,6 +1975,15 @@ ON_ENTER.admin = async () => {
         Add part of the capture card's name to <code>camera.preferredLabels</code> in booth.config.json.</p>
     </div>
 
+    <div class="card-panel" style="grid-column:1/-1">
+      <h3>Camera log</h3>
+      <p style="color:var(--ink-dim);font-size:13px;margin:0 0 8px">Everything the camera did this run. When the preview misbehaves, reproduce it, come back here and copy this.</p>
+      <pre id="cam-log" style="max-height:260px;overflow:auto;font-size:11px;line-height:1.35;white-space:pre-wrap;background:rgba(0,0,0,.25);padding:10px;border-radius:8px;margin:0">${escapeHtml(cameraLog.slice(-120).join('\n') || '(nothing yet — open the camera screen first)')}</pre>
+      <div style="display:flex;gap:10px;margin-top:10px">
+        <button class="btn btn-ghost" id="cam-log-copy">Copy camera log</button>
+      </div>
+    </div>
+
     ${stillsOn ? `<div class="card-panel">
       <h3>Photo camera (USB, with flash)</h3>
       <div class="kv"><span>Status</span><b id="stills-status">checking…</b></div>
@@ -2036,11 +2049,24 @@ ON_ENTER.admin = async () => {
     });
   }
 
+  $('#cam-log-copy')?.addEventListener('click', async e => {
+    const text = cameraLog.join('\n');
+    try { await navigator.clipboard.writeText(text); e.currentTarget.textContent = 'Copied ✓ — paste it to support'; }
+    catch {
+      // Clipboard blocked: select the text so Ctrl+C works.
+      const r = document.createRange(); r.selectNodeContents($('#cam-log'));
+      getSelection().removeAllRanges(); getSelection().addRange(r);
+      e.currentTarget.textContent = 'Selected — press Ctrl+C';
+    }
+  });
+
   $('#admin-reload')?.addEventListener('click', () => window.booth.app.reload());
   $('#admin-quit')?.addEventListener('click', () => window.booth.app.quit());
 };
 
 /* --------------------------------------------------------------- utils */
+
+const escapeHtml = str => String(str).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
 
 function canvasToImage(canvas) {
   return new Promise((resolve, reject) => {

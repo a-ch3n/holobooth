@@ -10,8 +10,10 @@
     "sessionTimeoutMs": 240000
   },
   "camera": {
+    "//obs": "OBS Virtual Camera is first, but only picked while OBS is running (checked on Windows). Then OBS holds the capture card and passes the picture on. Start OBS, add the capture card as a Video Capture Device, and press Start Virtual Camera. With OBS closed it's skipped and the card is used directly.",
     "//": "HDMI capture cards present themselves as UVC webcams. Put distinctive substrings of your device label here, highest priority first. Run `Settings > Camera` in-app to see the live device list.",
     "preferredLabels": [
+      "OBS Virtual Camera",
       "Cam Link",
       "Elgato",
       "HDMI",
@@ -65,7 +67,7 @@
           "sub": "Eye level",
           "icon": "📷",
           "//": "The main camera: the Canon M50 over HDMI into a capture card (preferred), or over USB via Canon's EOS Webcam Utility. EOS Webcam is last because once installed it lists a virtual camera even when the M50 is on HDMI, and would otherwise win with a blank picture.",
-          "preferredLabels": ["Capture Card", "Cam Link", "Elgato", "HDMI", "USB Video", "USB3", "UVC", "Capture", "EOS Webcam"]
+          "preferredLabels": ["OBS Virtual Camera", "Capture Card", "Cam Link", "Elgato", "HDMI", "USB Video", "USB3", "UVC", "Capture", "EOS Webcam"]
         },
         {
           "id": "high",

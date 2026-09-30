@@ -30,6 +30,19 @@ async function probeOnce() {
   return probing;
 }
 
+/**
+ * Everything the cameras do, timestamped, for the operator panel's "Copy
+ * camera log" — so a problem on the booth PC can be read, not guessed at.
+ */
+export const cameraLog = [];
+export function clog(msg) {
+  const t = new Date();
+  const line = `${t.toTimeString().slice(0, 8)}.${String(t.getMilliseconds()).padStart(3, '0')} ${msg}`;
+  cameraLog.push(line);
+  if (cameraLog.length > 300) cameraLog.shift();
+  console.log(`[camera] ${msg}`);
+}
+
 // Chromium's names for "the device exists but won't open" — almost always
 // another app (or another stream in this one) already holding it.
 const BUSY = ['NotReadableError', 'AbortError', 'TrackStartError'];
@@ -55,6 +68,11 @@ export class Camera {
     this._lost = false;
   }
 
+  _status(st) {
+    clog(`${st.level}: ${st.message}`);
+    this.onStatus(st);
+  }
+
   /* ------------------------------------------------------------ devices */
 
   /**
@@ -74,6 +92,11 @@ export class Camera {
       devices = await video();
     }
     this.devices = devices;
+    // OBS's Virtual Camera exists as a device even when OBS is closed, and
+    // then shows only a placeholder. Only let it be picked while OBS runs.
+    const holders = await globalThis.window?.booth?.app?.cameraHolders?.().catch(() => null);
+    this._obsRunning = Array.isArray(holders) && holders.includes('OBS Studio');
+    clog(`devices: ${devices.map(d => `"${d.label || '?'}"`).join(', ') || 'none'}${this._obsRunning ? ' (OBS running)' : ''}`);
     return this.devices;
   }
 
@@ -81,6 +104,7 @@ export class Camera {
   score(device) {
     const label = (device.label || '').toLowerCase();
     if (this.cfg.excludeLabels.some(x => label.includes(x.toLowerCase()))) return -1000;
+    if (label.includes('obs virtual camera') && !this._obsRunning) return -1000;
     const idx = this.cfg.preferredLabels.findIndex(x => label.includes(x.toLowerCase()));
     return idx === -1 ? 0 : 1000 - idx;
   }
@@ -108,7 +132,7 @@ export class Camera {
       throw new Error('No video input devices found. Is the capture card plugged in? (See console for more.)');
     }
     if (this.score(best) <= 0) {
-      this.onStatus({
+      this._status({
         level: 'warn',
         message: `No HDMI capture device matched. Falling back to "${best.label || 'unnamed camera'}". ` +
                  `Add part of its name to camera.preferredLabels in booth.config.json.`,
@@ -148,6 +172,8 @@ export class Camera {
 
     this._release();
     this._wanted = true;
+    const picked = this.devices.find(d => d.deviceId === this.deviceId);
+    clog(`open "${picked?.label || (useGenericStream ? 'default camera' : this.deviceId)}" asking ${c.width}x${c.height}@${c.frameRate}`);
     try {
       this.stream = await openWithRetry(constraints);
     } catch (error) {
@@ -182,10 +208,13 @@ export class Camera {
     const track = this.stream.getVideoTracks()[0];
     this._lost = false;
     this._label = track.label;
+    track.addEventListener('mute', () => clog(`track muted (no frames from "${track.label}")`));
+    track.addEventListener('unmute', () => clog(`track unmuted ("${track.label}")`));
     track.addEventListener('ended', () => {
+      clog(`track ended by the device ("${track.label}")`);
       if (this.stream?.getVideoTracks()[0] !== track) return; // already replaced
       this._lost = true;
-      this.onStatus({ level: 'warn', message: 'Camera signal dropped — reconnecting…' });
+      this._status({ level: 'warn', message: 'Camera signal dropped — reconnecting…' });
       this._reconnect();
     });
 
@@ -194,7 +223,7 @@ export class Camera {
     await new Promise(r => setTimeout(r, this.cfg.warmupMs));
 
     const s = track.getSettings();
-    this.onStatus({
+    this._status({
       level: 'ok',
       message: `${track.label} — ${s.width}x${s.height} @ ${Math.round(s.frameRate || 0)}fps`,
       settings: s,
@@ -244,11 +273,11 @@ export class Camera {
       if (document.hidden || !v.isConnected || !v.getClientRects().length) { last = decodedAt = now; return; }
       const quietFor = Math.min(now - last, d === null ? Infinity : now - decodedAt);
       if (quietFor > 4000) {
-        console.warn(`[camera] picture froze — no new frames for ${(quietFor / 1000).toFixed(1)}s ` +
+        clog(`picture froze — no new frames for ${(quietFor / 1000).toFixed(1)}s ` +
           `(painted ${((now - last) / 1000).toFixed(1)}s ago, decoded count ${d} unchanged ${d === null ? 'n/a' : ((now - decodedAt) / 1000).toFixed(1) + 's'}, ` +
           `track ${this.stream?.getVideoTracks()[0]?.readyState}, muted ${this.stream?.getVideoTracks()[0]?.muted}) — reconnecting`);
         this._lost = true;
-        this.onStatus({ level: 'warn', message: 'Camera picture froze — reconnecting…' });
+        this._status({ level: 'warn', message: 'Camera picture froze — reconnecting…' });
         this._release();
         this._reconnect();
       }
@@ -276,11 +305,11 @@ export class Camera {
           const same = (await this.listDevices()).find(d => d.label === want);
           if (!same) continue;
           await this.start(this.video, same.deviceId);
-          console.warn(`[camera] reconnected after ${i + 1} attempt(s)`);
+          clog(`reconnected after ${i + 1} attempt(s)`);
           return;
         } catch { /* still re-locking onto the signal */ }
       }
-      if (this._wanted) this.onStatus({ level: 'error', message: 'Camera signal lost. Check the HDMI cable, and that the camera is on with auto power off and eco mode disabled.' });
+      if (this._wanted) this._status({ level: 'error', message: 'Camera signal lost. Check the HDMI cable, and that the camera is on with auto power off and eco mode disabled.' });
     } finally {
       this._reconnecting = false;
     }
@@ -299,6 +328,7 @@ export class Camera {
   }
 
   stop() {
+    if (this.stream) clog(`stop (app closed "${this._label}")`);
     this._wanted = false;
     clearInterval(this._watchdog);
     this._release();
@@ -436,6 +466,7 @@ async function openWithRetry(constraints, tries = 4) {
     try {
       return await navigator.mediaDevices.getUserMedia(constraints);
     } catch (error) {
+      clog(`getUserMedia failed (try ${i}/${tries}): ${error.name}: ${error.message}`);
       if (!BUSY.includes(error.name) || i >= tries) throw error;
       await new Promise(r => setTimeout(r, 600 * i));
     }
@@ -485,13 +516,18 @@ export class StillsCamera {
     this._gen = 0;
   }
 
+  _status(st) {
+    clog(`${st.level}: ${st.message}`);
+    this.onStatus(st);
+  }
+
   async start(videoEl) {
     if (!this.api) throw new Error('Tethered camera isn\'t available on this platform (camera.stills).');
     const st = await this.api.status();
     if (!st?.ok) throw new Error(st?.error || 'Tethered camera not ready');
 
     if (this.previewCam) {
-      this.previewCam.onStatus = s => this.onStatus(s.level === 'ok' ? { ...s, message: `${st.message} — photos over USB, preview: ${s.message}` } : s);
+      this.previewCam.onStatus = s => this._status(s.level === 'ok' ? { ...s, message: `${st.message} — photos over USB, preview: ${s.message}` } : s);
       await this.previewCam.start(videoEl);
       this.video = videoEl;
       this.stream = this.previewCam.stream;
@@ -515,7 +551,7 @@ export class StillsCamera {
     // Created after the first frame, so the stream starts at the live view's real size.
     this.stream = this.canvas.captureStream(this.cfg.fps);
     await this.attach(videoEl);
-    this.onStatus({ level: 'ok', message: `${st.message} — live view ${this.canvas.width}x${this.canvas.height}, photos at full resolution with flash` });
+    this._status({ level: 'ok', message: `${st.message} — live view ${this.canvas.width}x${this.canvas.height}, photos at full resolution with flash` });
     return this.resolution;
   }
 
@@ -543,7 +579,7 @@ export class StillsCamera {
           } catch { /* a torn frame — skip it */ }
         } else if (r && !r.ok) {
           this._lastError = r.error;
-          if (++fails === 15) this.onStatus({ level: 'error', message: `Camera live view lost: ${r.error}` });
+          if (++fails === 15) this._status({ level: 'error', message: `Camera live view lost: ${r.error}` });
           await sleep(Math.min(2000, 100 * fails));
         }
       }
@@ -564,7 +600,9 @@ export class StillsCamera {
   async shoot() {
     this._paused = true;
     try {
+      const t0 = performance.now();
       const r = await this.api.capture();
+      clog(r?.ok ? `photo taken in ${((performance.now() - t0) / 1000).toFixed(1)}s (${r.file})` : `photo failed: ${r?.error}`);
       if (!r?.ok) throw new Error(r?.error || 'capture failed');
       const bmp = await createImageBitmap(jpegBlob(r.jpeg), { imageOrientation: 'from-image' });
       const k = Math.min(1, this.cfg.maxDimension / Math.max(bmp.width, bmp.height));
