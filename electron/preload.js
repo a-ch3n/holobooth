@@ -37,5 +37,6 @@ contextBridge.exposeInMainWorld('booth', {
     info: () => ipcRenderer.invoke('app:info'),
     quit: () => ipcRenderer.invoke('app:quit'),
     reload: () => ipcRenderer.invoke('app:reload'),
+    cameraHolders: () => ipcRenderer.invoke('app:cameraHolders'),
   },
 });

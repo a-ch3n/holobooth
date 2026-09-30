@@ -296,7 +296,41 @@ ipcMain.handle('app:info', () => ({
 ipcMain.handle('app:quit', () => app.quit());
 ipcMain.handle('app:reload', () => win?.reload());
 
+/**
+ * Which known camera-grabbing programs are running (Windows). A capture card
+ * serves one program at a time, and "camera is busy" is useless without
+ * knowing who has it. Names only — no process is touched.
+ */
+const CAMERA_HOLDERS = [
+  [/^obs(64|32)?\.exe$/i, 'OBS Studio'],
+  [/lumabooth/i, 'Lumabooth'],
+  [/^WindowsCamera\.exe$/i, 'Windows Camera app'],
+  [/^(ms-)?teams\.exe$/i, 'Microsoft Teams'],
+  [/^zoom\.exe$/i, 'Zoom'],
+  [/^discord\.exe$/i, 'Discord'],
+  [/^CameraControl\.exe$/i, 'digiCamControl'],
+  [/EOS.?Webcam/i, 'EOS Webcam Utility'],
+  [/dslrbooth/i, 'dslrBooth'],
+  [/^Skype/i, 'Skype'],
+];
+ipcMain.handle('app:cameraHolders', () => new Promise(resolve => {
+  if (process.platform !== 'win32') return resolve([]);
+  require('node:child_process').execFile('tasklist', ['/FO', 'CSV', '/NH'], { timeout: 5000 }, (err, out) => {
+    if (err) return resolve([]);
+    const names = new Set(String(out).split(/\r?\n/).map(l => l.split('","')[0].replace(/^"/, '')).filter(Boolean));
+    resolve([...new Set([...names].flatMap(n => CAMERA_HOLDERS.filter(([re]) => re.test(n)).map(([, label]) => label)))]);
+  });
+}));
+
 /* ----------------------------------------------------------- lifecycle */
+
+// One HoloBooth at a time: a second copy (an old run still open behind the
+// kiosk window, or npm run dev started twice) would fight over the camera.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
+}
 
 app.whenReady().then(() => {
   createWindow();

@@ -152,13 +152,18 @@ export class Camera {
       this.stream = await openWithRetry(constraints);
     } catch (error) {
       if (BUSY.includes(error.name)) {
+        // Name the program holding it, if it's one we know (Windows).
+        const holders = await globalThis.window?.booth?.app?.cameraHolders?.().catch(() => []) || [];
         console.error(
-          '[camera] The camera is busy (Windows: "Hardware MFT failed to start streaming"). ' +
-          'Another app has it open: quit Lumabooth, OBS, Zoom/Teams, the Windows Camera app and ' +
-          'EOS Webcam Utility\'s own preview window, then restart this app. Only one program can ' +
-          'use the camera at a time.'
+          `[camera] Can't open the camera (${error.name}: ${error.message}). ` +
+          (holders.length ? `Running now and able to hold it: ${holders.join(', ')}. ` : '') +
+          'Only one program can use a camera or capture card at a time: fully quit OBS (system ' +
+          'tray → Exit), Lumabooth, the Windows Camera app, Zoom/Teams and EOS Webcam Utility, ' +
+          'and check Task Manager for a leftover HoloBooth/Electron window. Then restart this app.'
         );
-        throw new Error('Camera is busy — close Lumabooth or any other app using it (see console).');
+        throw new Error(holders.length
+          ? `Camera is busy — close ${holders.join(', ')}`
+          : 'Camera is busy — another program has it open (see console)');
       }
       // A stale deviceId is common after a capture card reconnects. Retry once
       // without pinning the request to the old device.
