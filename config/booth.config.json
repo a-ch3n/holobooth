@@ -32,8 +32,8 @@
       "height": 1080,
       "frameRate": 30
     },
-    "//windowsCaptureApi": "Windows only. directshow (default): the camera API OBS uses; fixes generic HDMI capture cards whose preview dies after a few seconds with 'Hardware MFT failed to start streaming'. mediafoundation: Chromium's default, try it if a camera works in the Windows Camera app but not here.",
-    "windowsCaptureApi": "directshow",
+    "//windowsCaptureApi": "Windows only. mediafoundation (default): the same camera API the Windows Camera app uses. directshow: the API OBS uses; try it if a camera works in OBS but not here. Either way the capture card's MJPEG is decoded in software (windowsHardwareMjpeg), which is what fixed the few-seconds freeze.",
+    "windowsCaptureApi": "mediafoundation",
     "//windowsHardwareMjpeg": "Windows only. false (default): decode the capture card's MJPEG video in software. The GPU decoder froze a USB Video 3.0 card after a few seconds while the Windows Camera app ran fine.",
     "windowsHardwareMjpeg": false,
     "mirrorPreview": true,
