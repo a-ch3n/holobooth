@@ -348,3 +348,170 @@ async function openWithRetry(constraints, tries = 4) {
     }
   }
 }
+
+/* ================================================================ stills */
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const jpegBlob = b64 => new Blob([Uint8Array.from(atob(b64), ch => ch.charCodeAt(0))], { type: 'image/jpeg' });
+
+/**
+ * A tethered camera (camera.stills): the camera itself focuses, fires the
+ * shutter and the flash, and hands back its full-resolution JPEG. Driven by
+ * the main process over USB (electron/stills.js); this side only sees frames.
+ *
+ * Same surface as Camera — start/attach/stop/isLive/grab/burst — so the shoot
+ * screen, the angle picker and the GIF burst work unchanged, plus shoot() for
+ * the real photo. The live view is painted onto a canvas and fed to the
+ * preview <video> as a stream, so everything that reads that <video> still
+ * works, and every pixel stays same-origin (printable, uploadable).
+ *
+ * preview: "liveview" (default) uses the camera's own live view over the same
+ * USB cable. "video" shows a capture card's HDMI feed instead (smoother) and
+ * still takes the photos over USB.
+ */
+export class StillsCamera {
+  constructor(config = {}, api = globalThis.window?.booth?.stills) {
+    const st = config.stills || {};
+    this.api = api;
+    this.cfg = {
+      mirrorPreview: config.mirrorPreview !== false,
+      fps: st.liveviewFps || 12,
+      maxDimension: st.maxDimension || 3000,
+      warmupMs: config.warmupMs ?? 800,
+    };
+    this.previewCam = st.preview === 'video' ? new Camera(config) : null;
+    this.stills = true;
+    this.devices = [];
+    this.video = null;
+    this.stream = null;
+    this.onStatus = () => {};
+    this._running = false;
+    this._paused = false;
+    this._lastFrameAt = 0;
+    this._lastError = '';
+    this._gen = 0;
+  }
+
+  async start(videoEl) {
+    if (!this.api) throw new Error('Tethered camera isn\'t available on this platform (camera.stills).');
+    const st = await this.api.status();
+    if (!st?.ok) throw new Error(st?.error || 'Tethered camera not ready');
+
+    if (this.previewCam) {
+      this.previewCam.onStatus = s => this.onStatus(s.level === 'ok' ? { ...s, message: `${st.message} — photos over USB, preview: ${s.message}` } : s);
+      await this.previewCam.start(videoEl);
+      this.video = videoEl;
+      this.stream = this.previewCam.stream;
+      return this.previewCam.resolution;
+    }
+
+    this.stop();
+    this.canvas = document.createElement('canvas');
+    this.ctx = this.canvas.getContext('2d');
+    this._running = true;
+    this._lastFrameAt = 0;
+    this._loop();
+    const t0 = Date.now();
+    while (!this._lastFrameAt) {
+      if (Date.now() - t0 > 10000) {
+        this.stop();
+        throw new Error(`No live view from the camera${this._lastError ? ` — ${this._lastError}` : ''}`);
+      }
+      await sleep(100);
+    }
+    // Created after the first frame, so the stream starts at the live view's real size.
+    this.stream = this.canvas.captureStream(this.cfg.fps);
+    await this.attach(videoEl);
+    this.onStatus({ level: 'ok', message: `${st.message} — live view ${this.canvas.width}x${this.canvas.height}, photos at full resolution with flash` });
+    return this.resolution;
+  }
+
+  async _loop() {
+    // A generation, so a loop still awaiting a frame from before stop() exits
+    // instead of running alongside the one a restart begins.
+    const gen = ++this._gen;
+    const alive = () => this._running && gen === this._gen;
+    let fails = 0;
+    while (alive()) {
+      const t = performance.now();
+      if (!this._paused) {
+        const r = await this.api.liveview().catch(e => ({ ok: false, error: e.message }));
+        if (!alive()) break;
+        if (r?.ok && r.jpeg) {
+          try {
+            const bmp = await createImageBitmap(jpegBlob(r.jpeg));
+            if (this.canvas.width !== bmp.width || this.canvas.height !== bmp.height) {
+              this.canvas.width = bmp.width; this.canvas.height = bmp.height;
+            }
+            this.ctx.drawImage(bmp, 0, 0);
+            bmp.close();
+            this._lastFrameAt = Date.now();
+            fails = 0;
+          } catch { /* a torn frame — skip it */ }
+        } else if (r && !r.ok) {
+          this._lastError = r.error;
+          if (++fails === 15) this.onStatus({ level: 'error', message: `Camera live view lost: ${r.error}` });
+          await sleep(Math.min(2000, 100 * fails));
+        }
+      }
+      await sleep(Math.max(0, 1000 / this.cfg.fps - (performance.now() - t)));
+    }
+  }
+
+  attach(videoEl) {
+    if (this.previewCam) { this.video = videoEl; return this.previewCam.attach(videoEl); }
+    return Camera.prototype.attach.call(this, videoEl);
+  }
+
+  /**
+   * The real photo: autofocus, shutter, flash, full-res download. Live view
+   * pauses meanwhile (the camera can't do both). Scaled to maxDimension so
+   * four 24 MP shots don't each hold ~100 MB of canvas.
+   */
+  async shoot() {
+    this._paused = true;
+    try {
+      const r = await this.api.capture();
+      if (!r?.ok) throw new Error(r?.error || 'capture failed');
+      const bmp = await createImageBitmap(jpegBlob(r.jpeg), { imageOrientation: 'from-image' });
+      const k = Math.min(1, this.cfg.maxDimension / Math.max(bmp.width, bmp.height));
+      const c = document.createElement('canvas');
+      c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+      const ctx = c.getContext('2d');
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(bmp, 0, 0, c.width, c.height);
+      bmp.close();
+      return c;
+    } finally {
+      this._paused = false;
+      this._shotAt = Date.now();
+    }
+  }
+
+  grab(opts) { return Camera.prototype.grab.call(this, opts); }
+
+  /** The GIF comes from live view; wait for it to resume after a shot, or every frame is the same stale one. */
+  async burst(opts) {
+    const t0 = Date.now();
+    while (!this.previewCam && this._lastFrameAt <= (this._shotAt || 0) + 300 && Date.now() - t0 < 3000) await sleep(50);
+    return Camera.prototype.burst.call(this, opts);
+  }
+
+  stop() {
+    this._running = false;
+    this._gen++;
+    this.stream?.getTracks().forEach(t => t.stop());
+    this.stream = null;
+    this.previewCam?.stop();
+  }
+
+  get isLive() {
+    if (this.previewCam) return this.previewCam.isLive;
+    return this._running && (this._paused || Date.now() - this._lastFrameAt < 5000);
+  }
+
+  get resolution() {
+    if (this.previewCam) return this.previewCam.resolution;
+    return { width: this.canvas?.width || 0, height: this.canvas?.height || 0 };
+  }
+}

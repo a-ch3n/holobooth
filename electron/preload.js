@@ -27,6 +27,12 @@ contextBridge.exposeInMainWorld('booth', {
   media: {
     save: args => ipcRenderer.invoke('media:save', args),
   },
+  // Tethered camera (camera.stills): live view frames and full-res captures.
+  stills: {
+    status: () => ipcRenderer.invoke('stills:status'),
+    liveview: () => ipcRenderer.invoke('stills:liveview'),
+    capture: () => ipcRenderer.invoke('stills:capture'),
+  },
   app: {
     info: () => ipcRenderer.invoke('app:info'),
     quit: () => ipcRenderer.invoke('app:quit'),

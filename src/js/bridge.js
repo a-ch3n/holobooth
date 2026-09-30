@@ -78,6 +78,11 @@ function makeRpcBridge(apiBase) {
       summary: () => call('sales.summary'),
     },
     media: { save: args => call('media.save', args) },
+    stills: {
+      status: () => call('stills.status'),
+      liveview: () => call('stills.liveview'),
+      capture: () => call('stills.capture'),
+    },
     app: {
       info: () => call('app.info'),
       quit: () => call('app.quit'),

@@ -17,7 +17,7 @@ import { COMPANIONS, companionById, companionCanvas } from './frames/companions.
 import { loadPack, packFrames } from './frames/assetpack.mjs';
 import { stickerCatalog, stickerCanvas, newPlacement, stickerAt, DECOS } from './frames/stickers.mjs';
 import { renderCard, renderStrip, mintCard, printSize } from './frames/render.mjs';
-import { Camera, applyPhotoFilter } from './camera.js';
+import { Camera, StillsCamera, applyPhotoFilter } from './camera.js';
 import { createPaymentProvider, kioskHeaders } from './payments.js';
 import { encodeGif } from './gif.js';
 
@@ -921,6 +921,28 @@ function cameraAngles() {
   return S.cfg.camera?.angles?.list || [];
 }
 
+/**
+ * camera.stills: the main camera takes real photos over USB (focus, flash,
+ * full resolution) instead of grabbing video frames. With several angles it
+ * applies to stills.angle (default: the first one); the others stay video.
+ */
+function usesStills(angleId) {
+  const st = S.cfg.camera?.stills;
+  if (!st?.enabled || !window.booth?.stills) return false;
+  const angles = cameraAngles();
+  if (angles.length < 2) return true;
+  return (angleId || angles[0].id) === (st.angle || angles[0].id);
+}
+const makeCamera = angleId => (usesStills(angleId) ? new StillsCamera(S.cfg.camera) : new Camera(S.cfg.camera));
+
+/** A tethered camera that won't start shouldn't cost a paid customer their shoot: fall back to video. */
+function stillsFallback(error) {
+  console.error(`[stills] ${error.message} — falling back to the video feed. Check that digiCamControl ` +
+    '(Windows) is running with its web server on, or that gphoto2 sees the camera (Mac/Pi), and that ' +
+    'nothing else (Lumabooth, EOS Webcam Utility, OBS) has the camera.');
+  toast(`Photo camera unavailable (${error.message}) — using the video feed`, true);
+}
+
 /** Configured camera-look filters, or [] if the picker is off/unconfigured. */
 function filterChoices() {
   return S.cfg.filters?.list || [];
@@ -955,32 +977,45 @@ ON_ENTER.angle = () => {
       ${a.sub ? `<div class="sub">${a.sub}</div>` : ''}
       <div class="angle-status" data-angle-status="${a.id}">Connecting preview…</div>
     </div>`).join('');
-  S.angleCameras = cameraAngles().map(a => ({ id: a.id, camera: new Camera(S.cfg.camera), ready: null, missing: false }));
+  S.angleCameras = cameraAngles().map(a => ({ id: a.id, camera: makeCamera(a.id), ready: null, missing: false }));
   const setStatus = (id, text) => { const el = host.querySelector(`[data-angle-status="${id}"]`); if (el) el.textContent = text; };
   // One at a time, and each physical camera for one angle only. Opening the
   // same camera twice — e.g. the GoPro angle falling back to the main camera
   // when the GoPro isn't plugged in — is what Windows reports as "Hardware
   // MFT failed to start streaming due to lack of hardware resources".
   const taken = new Set();
+  const videoFor = id => host.querySelector(`[data-angle-video="${id}"]`);
+  async function startVideoAngle(entry) {
+    const { id, camera } = entry;
+    const angle = cameraAngles().find(a => a.id === id);
+    camera.cfg.preferredLabels = angle?.preferredLabels || S.cfg.camera.preferredLabels;
+    camera.cfg.excludeLabels = angle?.excludeLabels || S.cfg.camera.excludeLabels;
+    camera.cfg.constraints = angle?.constraints || S.cfg.camera.constraints;
+    camera.onStatus = status => setStatus(id, status.message || '');
+    const deviceId = await camera.pickDevice(null, { strict: true });
+    if (!deviceId || taken.has(deviceId)) {
+      entry.missing = true;
+      host.querySelector(`[data-angle="${id}"]`)?.classList.add('missing');
+      setStatus(id, 'Camera not connected');
+      return;
+    }
+    taken.add(deviceId);
+    await camera.start(videoFor(id), deviceId);
+  }
   const opening = (async () => {
     for (const entry of S.angleCameras) {
-      const { id, camera } = entry;
-      const angle = cameraAngles().find(a => a.id === id);
-      camera.cfg.preferredLabels = angle?.preferredLabels || S.cfg.camera.preferredLabels;
-      camera.cfg.excludeLabels = angle?.excludeLabels || S.cfg.camera.excludeLabels;
-      camera.cfg.constraints = angle?.constraints || S.cfg.camera.constraints;
-      camera.onStatus = status => setStatus(id, status.message || '');
       entry.ready = (async () => {
-        const deviceId = await camera.pickDevice(null, { strict: true });
-        if (!deviceId || taken.has(deviceId)) {
-          entry.missing = true;
-          host.querySelector(`[data-angle="${id}"]`)?.classList.add('missing');
-          setStatus(id, 'Camera not connected');
-          return;
+        if (!entry.camera.stills) return startVideoAngle(entry);
+        entry.camera.onStatus = status => setStatus(entry.id, status.message || '');
+        try {
+          await entry.camera.start(videoFor(entry.id));
+        } catch (error) {
+          stillsFallback(error);
+          entry.camera.stop();
+          entry.camera = new Camera(S.cfg.camera);
+          await startVideoAngle(entry);
         }
-        taken.add(deviceId);
-        await camera.start(host.querySelector(`[data-angle-video="${id}"]`), deviceId);
-      })().catch(error => setStatus(id, `Preview unavailable: ${error.message}`));
+      })().catch(error => setStatus(entry.id, `Preview unavailable: ${error.message}`));
       await entry.ready;
     }
   })();
@@ -1065,16 +1100,32 @@ ON_ENTER.capture = async () => {
   S.angleCameras.forEach(({ camera }) => camera !== handoff && camera.stop());
   S.angleCameras = [];
   if (handoff) { S.camera?.stop(); S.camera = handoff; }
-  const cam = (S.camera ||= new Camera(S.cfg.camera));
-  cam.onStatus = s => {
+  // Tethered for this angle or not — swap if last session used the other kind.
+  const wantStills = usesStills(S.cameraAngle);
+  if (!handoff && S.camera && !!S.camera.stills !== wantStills) { S.camera.stop(); S.camera = null; }
+  const onStatus = s => {
     $('#cam-status').textContent = s.message;
     if (s.level === 'error') toast(s.message, true);
   };
-  applyCameraAngleCfg(cam);
+  let cam = (S.camera ||= makeCamera(S.cameraAngle));
+  cam.onStatus = onStatus;
+  if (!cam.stills) applyCameraAngleCfg(cam);
 
   try {
     if (handoff) await cam.attach($('#preview'));
-    else await cam.start($('#preview'));
+    else {
+      try {
+        await cam.start($('#preview'));
+      } catch (error) {
+        if (!cam.stills) throw error;
+        stillsFallback(error);
+        cam.stop();
+        cam = S.camera = new Camera(S.cfg.camera);
+        cam.onStatus = onStatus;
+        applyCameraAngleCfg(cam);
+        await cam.start($('#preview'));
+      }
+    }
   } catch (e) {
     toast(`Camera problem: ${e.message}`, true);
     // Paid but can't shoot — do not strand them. Refund path is in the
@@ -1098,7 +1149,7 @@ async function runShootSequence() {
     await countdown(c.countdownSeconds, i === 0 ? 'GET READY' : null);
     if (c.flashScreen) { $('#flash').classList.add('go'); setTimeout(() => $('#flash').classList.remove('go'), 350); }
 
-    S.shots.push(S.camera.grab({ mirror: false }));
+    S.shots.push(await takeShot(i));
     $$('#shot-pips i')[i]?.classList.add('on');
 
     // Burst on the last shot only — keeps the session short.
@@ -1115,6 +1166,25 @@ async function runShootSequence() {
   // sense after this point; skip straight to finalizing (with S.filterId
   // untouched, i.e. "Original") when it's off/unconfigured.
   if (filtersEnabled()) go('filter'); else finalizeFilterSelection();
+}
+
+/**
+ * A real photo from the tethered camera (focus, shutter, flash), or a frame
+ * off the video feed. If the camera fails a shot — usually AF not locking —
+ * the live view frame stands in, so the session still finishes.
+ */
+async function takeShot(i) {
+  if (!S.camera.shoot) return S.camera.grab({ mirror: false });
+  $('#countdown').textContent = '📸';
+  try {
+    return await S.camera.shoot();
+  } catch (e) {
+    console.error(`[stills] shot ${i + 1}: ${e.message}`);
+    toast(`Photo ${i + 1}: ${e.message}`, true);
+    return S.camera.grab({ mirror: false });
+  } finally {
+    $('#countdown').textContent = '';
+  }
 }
 
 function countdown(seconds, prefix) {
@@ -1865,7 +1935,8 @@ ON_ENTER.admin = async () => {
     window.booth.cards.stats({ seasonId: S.cfg.collection.seasonId }),
     window.booth.printers.list(),
   ]);
-  const devices = S.camera?.devices || await new Camera(S.cfg.camera).listDevices().catch(() => []);
+  const devices = S.camera?.devices?.length ? S.camera.devices : await new Camera(S.cfg.camera).listDevices().catch(() => []);
+  const stillsOn = !!(S.cfg.camera?.stills?.enabled && window.booth.stills);
 
   $('#admin-body').innerHTML = `
     <div class="card-panel">
@@ -1890,6 +1961,16 @@ ON_ENTER.admin = async () => {
       <p style="color:var(--ink-dim);font-size:13px;margin-top:12px">
         Add part of the capture card's name to <code>camera.preferredLabels</code> in booth.config.json.</p>
     </div>
+
+    ${stillsOn ? `<div class="card-panel">
+      <h3>Photo camera (USB, with flash)</h3>
+      <div class="kv"><span>Status</span><b id="stills-status">checking…</b></div>
+      <div style="display:flex;gap:10px;margin-top:12px">
+        <button class="btn btn-ghost" id="stills-test">Take a test photo</button>
+      </div>
+      <div class="kv" id="stills-result" hidden></div>
+      <img id="stills-img" alt="" hidden style="width:100%;margin-top:10px;border-radius:8px">
+    </div>` : ''}
 
     <div class="card-panel">
       <h3>Printers</h3>
@@ -1921,6 +2002,30 @@ ON_ENTER.admin = async () => {
         <button class="btn btn-ghost" id="admin-quit">Quit</button>
       </div>
     </div>`;
+
+  if (stillsOn) {
+    // Status and a test shot, so focus and flash can be checked before the doors open.
+    window.booth.stills.status().then(st => {
+      const el = $('#stills-status');
+      if (el) { el.textContent = st.ok ? st.message : st.error; el.style.color = st.ok ? '' : 'var(--bad)'; }
+    });
+    $('#stills-test')?.addEventListener('click', async e => {
+      const btn = e.currentTarget, out = $('#stills-result'), img = $('#stills-img');
+      btn.disabled = true; out.hidden = false; out.textContent = 'Focusing and shooting…';
+      const t0 = performance.now();
+      const r = await window.booth.stills.capture().catch(err => ({ ok: false, error: err.message }));
+      const secs = ((performance.now() - t0) / 1000).toFixed(1);
+      if (r.ok) {
+        img.src = `data:image/jpeg;base64,${r.jpeg}`;
+        img.hidden = false;
+        img.onload = () => { out.textContent = `${img.naturalWidth}×${img.naturalHeight} in ${secs}s — saved to ${r.file}`; };
+      } else {
+        out.textContent = `Failed after ${secs}s: ${r.error}`;
+        out.style.color = 'var(--bad)';
+      }
+      btn.disabled = false;
+    });
+  }
 
   $('#admin-reload')?.addEventListener('click', () => window.booth.app.reload());
   $('#admin-quit')?.addEventListener('click', () => window.booth.app.quit());

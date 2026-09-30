@@ -246,6 +246,29 @@ ipcMain.handle('media:save', (_e, { name, dataUrl }) => {
   return file;
 });
 
+/* ------------------------------------------------------------- stills */
+
+// Real photos over USB (focus, shutter, flash) — see electron/stills.js.
+// Rebuilt whenever camera.stills changes, so a config reload takes effect.
+const { createStills } = require('./stills');
+let stills = null, stillsKey = '';
+function getStills() {
+  const cfg = config.camera?.stills || {};
+  const key = JSON.stringify(cfg);
+  if (!stills || key !== stillsKey) {
+    stills = createStills(cfg, { dir: path.join(DATA_DIR, 'stills', new Date().toISOString().slice(0, 10)) });
+    stillsKey = key;
+  }
+  return stills;
+}
+// Plain { ok, … } results: a thrown error loses its message crossing IPC.
+const stillsCall = fn => async () => {
+  try { return { ok: true, ...(await fn(getStills())) }; } catch (e) { return { ok: false, error: e.message }; }
+};
+ipcMain.handle('stills:status', stillsCall(async s => { const st = await s.status(); if (!st.ok) throw new Error(st.message); return st; }));
+ipcMain.handle('stills:liveview', stillsCall(async s => ({ jpeg: await s.liveview() })));
+ipcMain.handle('stills:capture', stillsCall(s => s.capture()));
+
 ipcMain.handle('app:info', () => ({
   version: app.getVersion(),
   platform: process.platform,

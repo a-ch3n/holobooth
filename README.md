@@ -374,23 +374,63 @@ Cameras with a **micro** HDMI port need a locking or right-angle cable. This is
 the single most common failure at an event: someone brushes the cable, the
 signal drops, and the next customer gets a black card.
 
-### A Canon EOS body (M50) that was set up for Lumabooth
+### Real photos with flash (Canon M50 and other DSLR/mirrorless bodies)
 
-Lumabooth drives Canon cameras over USB with Canon's SDK, taking full-res
-stills. HoloBooth doesn't use that SDK. It takes a video feed, so the M50
-needs one of these:
+With `camera.stills.enabled`, HoloBooth works the way Lumabooth does. The
+camera focuses, fires its shutter **and flash**, and the full-resolution
+photo goes on the card and strip instead of a video frame. The same USB
+cable also carries the live view the customer poses to.
 
-- **USB, no extra hardware:** install Canon's **EOS Webcam Utility**. Keep
-  the same USB cable and put the camera in movie mode. The camera then shows
-  up as "EOS Webcam Utility", which is first in `preferredLabels`. The free
-  version outputs at a reduced resolution. The Pro subscription gives 1080p,
-  which is what you want for 300 dpi prints.
-- **HDMI:** micro-HDMI → capture card (Cam Link or a generic USB dongle),
-  per the section above. Full 1080p, no Canon software.
+**Windows: digiCamControl** (free, [digicamcontrol.com](https://digicamcontrol.com)).
+It talks to Canon cameras through Canon's own SDK, the same way Lumabooth does.
 
-Either way: **quit Lumabooth first**, because only one app can hold the
-camera. Run the M50 on a dummy battery (ACK-E12), and set auto power-off
-and the eco/screen-off settings to disabled.
+1. Install digiCamControl, plug the camera in by USB and open the app.
+   Check that it shows the camera and can take a photo.
+2. **File → Settings → Webserver:** turn on "Use web server", port 5513,
+   then restart digiCamControl. Leave it running (minimised is fine).
+3. Start HoloBooth. Open the operator panel (tap the bottom-left corner 5
+   times) and press **Take a test photo**. It shows the photo, its size and
+   how long it took.
+
+**Mac, Linux or Raspberry Pi: gphoto2** (`brew install gphoto2` or
+`sudo apt install gphoto2`). Nothing else to set up. On a Mac, HoloBooth
+closes macOS's own camera daemon first, because it grabs the camera on plug-in.
+
+**Camera settings (M50):**
+- **Mode:** the dial on **M** or **Av**, not movie mode. Image quality
+  **JPEG** (L / Fine), not RAW only.
+- **Focus:** AF on, **One-Shot**, **Face + Tracking**. If focus can't
+  lock (too dark, nothing in frame), the camera refuses to shoot. HoloBooth
+  then uses the live view frame for that shot and keeps going.
+- **Flash:** pop up the built-in flash and set it to fire. Better: a
+  speedlight on the hot shoe, or a radio trigger (Godox X2T-C) to
+  off-camera strobes. Keep the shutter at **1/200 s or slower**, the M50's
+  flash sync limit. Lights also help autofocus.
+- **Wi-Fi/Bluetooth off**, because the M50 disables USB control while
+  they're on.
+- **Auto power off disabled.** Use a dummy battery (ACK-E12) for power.
+- **Only one program can hold the camera.** Quit Lumabooth, OBS and EOS
+  Webcam Utility.
+
+**What to expect:**
+- **Timing:** each photo takes about 1–3 s to focus, shoot and transfer,
+  with 📸 on screen meanwhile. Live view pauses during that.
+- **Live view** from digiCamControl runs at ~10–15 fps. From gphoto2 it's
+  only a few fps. For a smooth preview, set `camera.stills.preview` to
+  `"video"` and feed an HDMI capture card, while photos still go over USB.
+- **The GIF** is built from live view frames, so it's lower resolution
+  than the prints.
+- **Originals** are kept at full size: digiCamControl and gphoto2 save
+  them under the app's data folder in `stills/<date>/`. The kiosk uses a
+  copy scaled to `maxDimension` (3000 px), which is plenty for 300 dpi.
+- **Fallback:** if the camera can't be reached at the start of a session,
+  the booth falls back to the video camera (`preferredLabels`) and shows
+  why. A paid customer still gets a shoot.
+- **Camera angles:** with several angles, only `camera.stills.angle`
+  (default `standard`) uses the tethered camera. The others stay video.
+
+Set `camera.stills.enabled` to `false` to go back to video frames (EOS
+Webcam Utility or a capture card, see above).
 
 ---
 
