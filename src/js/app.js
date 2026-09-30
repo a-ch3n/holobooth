@@ -1174,7 +1174,16 @@ async function runShootSequence() {
  * the live view frame stands in, so the session still finishes.
  */
 async function takeShot(i) {
-  if (!S.camera.shoot) return S.camera.grab({ mirror: false });
+  if (!S.camera.shoot) {
+    // A capture card that dropped out mid-countdown is usually back within a
+    // second or two (Camera reconnects on its own) — wait rather than fail.
+    if (!S.camera.isLive) {
+      $('#countdown').textContent = '…';
+      await S.camera.waitLive?.(10000);
+      $('#countdown').textContent = '';
+    }
+    return S.camera.grab({ mirror: false });
+  }
   $('#countdown').textContent = '📸';
   try {
     return await S.camera.shoot();

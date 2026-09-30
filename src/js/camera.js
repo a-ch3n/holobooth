@@ -146,7 +146,8 @@ export class Camera {
       },
     };
 
-    this.stop();
+    this._release();
+    this._wanted = true;
     try {
       this.stream = await openWithRetry(constraints);
     } catch (error) {
@@ -175,9 +176,12 @@ export class Camera {
 
     const track = this.stream.getVideoTracks()[0];
     this._lost = false;
+    this._label = track.label;
     track.addEventListener('ended', () => {
+      if (this.stream?.getVideoTracks()[0] !== track) return; // already replaced
       this._lost = true;
-      this.onStatus({ level: 'error', message: 'Camera signal lost. Check the HDMI cable and that the camera is awake.' });
+      this.onStatus({ level: 'warn', message: 'Camera signal dropped — reconnecting…' });
+      this._reconnect();
     });
 
     // Capture cards often output black for the first few frames while they
@@ -207,9 +211,52 @@ export class Camera {
     await videoEl.play().catch(() => {});
   }
 
-  stop() {
+  /**
+   * Cheap HDMI capture cards drop off the USB bus for a moment whenever the
+   * camera's HDMI signal changes (the M50 dimming its screen, a mode change,
+   * a loose micro-HDMI plug). The card comes back a second later, often with
+   * a new deviceId, so reopen by label instead of just reporting it dead.
+   * Only the same device: while the card is gone, the next camera on the
+   * list is often EOS Webcam Utility's virtual camera, which is blank.
+   */
+  async _reconnect() {
+    if (this._reconnecting) return;
+    this._reconnecting = true;
+    const want = this._label;
+    try {
+      for (let i = 0; i < 30 && this._wanted; i++) {
+        await sleep(1000);
+        if (!this._wanted || !this.video) return; // stopped on purpose meanwhile
+        try {
+          this.devices = [];
+          const same = (await this.listDevices()).find(d => d.label === want);
+          if (!same) continue;
+          await this.start(this.video, same.deviceId);
+          console.warn(`[camera] reconnected after ${i + 1} attempt(s)`);
+          return;
+        } catch { /* still re-locking onto the signal */ }
+      }
+      if (this._wanted) this.onStatus({ level: 'error', message: 'Camera signal lost. Check the HDMI cable, and that the camera is on with auto power off and eco mode disabled.' });
+    } finally {
+      this._reconnecting = false;
+    }
+  }
+
+  /** Waits (briefly) for a live picture — e.g. while a dropped capture card reconnects. */
+  async waitLive(ms = 10000) {
+    const t0 = Date.now();
+    while (!(this.isLive && this.video?.videoWidth) && Date.now() - t0 < ms) await sleep(100);
+    return this.isLive;
+  }
+
+  _release() {
     this.stream?.getTracks().forEach(t => t.stop());
     this.stream = null;
+  }
+
+  stop() {
+    this._wanted = false;
+    this._release();
   }
 
   get isLive() {
