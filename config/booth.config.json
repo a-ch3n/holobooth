@@ -32,7 +32,7 @@
       "height": 1080,
       "frameRate": 30
     },
-    "//windowsCaptureApi": "Windows only. mediafoundation (default): the same camera API the Windows Camera app uses. directshow: the API OBS uses; try it if a camera works in OBS but not here. Either way the capture card's MJPEG is decoded in software (windowsHardwareMjpeg), which is what fixed the few-seconds freeze.",
+    "//windowsCaptureApi": "Windows only. mediafoundation (default): the same camera API the Windows Camera app uses. directshow: the API OBS uses; try it if a camera works in OBS but not here. Either way the capture card's MJPEG is decoded in software (see windowsHardwareMjpeg).",
     "windowsCaptureApi": "mediafoundation",
     "//windowsHardwareMjpeg": "Windows only. false (default): decode the capture card's MJPEG video in software. The GPU decoder froze a USB Video 3.0 card after a few seconds while the Windows Camera app ran fine.",
     "windowsHardwareMjpeg": false,
