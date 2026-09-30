@@ -955,25 +955,45 @@ ON_ENTER.angle = () => {
       ${a.sub ? `<div class="sub">${a.sub}</div>` : ''}
       <div class="angle-status" data-angle-status="${a.id}">Connecting preview…</div>
     </div>`).join('');
-  S.angleCameras = cameraAngles().map(a => ({ id: a.id, camera: new Camera(S.cfg.camera), ready: null }));
-  S.angleCameras.forEach(entry => {
-    const { id, camera } = entry;
-    const angle = cameraAngles().find(a => a.id === id);
-    camera.cfg.preferredLabels = angle?.preferredLabels || S.cfg.camera.preferredLabels;
-    camera.cfg.excludeLabels = angle?.excludeLabels || S.cfg.camera.excludeLabels;
-    camera.cfg.constraints = angle?.constraints || S.cfg.camera.constraints;
-    camera.onStatus = status => {
-      const el = host.querySelector(`[data-angle-status="${id}"]`);
-      if (el) el.textContent = status.message || '';
-    };
-    entry.ready = camera.start(host.querySelector(`[data-angle-video="${id}"]`)).catch(error => {
-      const el = host.querySelector(`[data-angle-status="${id}"]`);
-      if (el) el.textContent = `Preview unavailable: ${error.message}`;
-    });
-  });
+  S.angleCameras = cameraAngles().map(a => ({ id: a.id, camera: new Camera(S.cfg.camera), ready: null, missing: false }));
+  const setStatus = (id, text) => { const el = host.querySelector(`[data-angle-status="${id}"]`); if (el) el.textContent = text; };
+  // One at a time, and each physical camera for one angle only. Opening the
+  // same camera twice — e.g. the GoPro angle falling back to the main camera
+  // when the GoPro isn't plugged in — is what Windows reports as "Hardware
+  // MFT failed to start streaming due to lack of hardware resources".
+  const taken = new Set();
+  const opening = (async () => {
+    for (const entry of S.angleCameras) {
+      const { id, camera } = entry;
+      const angle = cameraAngles().find(a => a.id === id);
+      camera.cfg.preferredLabels = angle?.preferredLabels || S.cfg.camera.preferredLabels;
+      camera.cfg.excludeLabels = angle?.excludeLabels || S.cfg.camera.excludeLabels;
+      camera.cfg.constraints = angle?.constraints || S.cfg.camera.constraints;
+      camera.onStatus = status => setStatus(id, status.message || '');
+      entry.ready = (async () => {
+        const deviceId = await camera.pickDevice(null, { strict: true });
+        if (!deviceId || taken.has(deviceId)) {
+          entry.missing = true;
+          host.querySelector(`[data-angle="${id}"]`)?.classList.add('missing');
+          setStatus(id, 'Camera not connected');
+          return;
+        }
+        taken.add(deviceId);
+        await camera.start(host.querySelector(`[data-angle-video="${id}"]`), deviceId);
+      })().catch(error => setStatus(id, `Preview unavailable: ${error.message}`));
+      await entry.ready;
+    }
+  })();
   host.onclick = async e => {
     const id = e.target.closest('.angle-option')?.dataset.angle;
     if (!id) return;
+    await opening;
+    // A tile whose camera isn't plugged in can't be chosen, unless none are
+    // (then the shoot falls back to whatever camera there is, as before).
+    if (S.angleCameras.find(a => a.id === id)?.missing && S.angleCameras.some(a => !a.missing)) {
+      toast('That camera isn\'t connected — pick another one.', true);
+      return;
+    }
     S.cameraAngle = id;
     S.angleCameras.forEach(({ id: cameraId }) => {
       host.querySelector(`[data-angle="${cameraId}"]`)?.classList.toggle('on', cameraId === id);
@@ -1039,8 +1059,12 @@ function applyCameraAngleCfg(cam) {
 }
 
 ON_ENTER.capture = async () => {
-  S.angleCameras.forEach(({ camera }) => camera.stop());
+  // Carry the chosen angle's live preview straight into the shoot rather
+  // than closing the camera and reopening it a moment later.
+  const handoff = S.angleCameras.find(a => a.id === S.cameraAngle && a.camera.isLive)?.camera;
+  S.angleCameras.forEach(({ camera }) => camera !== handoff && camera.stop());
   S.angleCameras = [];
+  if (handoff) { S.camera?.stop(); S.camera = handoff; }
   const cam = (S.camera ||= new Camera(S.cfg.camera));
   cam.onStatus = s => {
     $('#cam-status').textContent = s.message;
@@ -1049,7 +1073,8 @@ ON_ENTER.capture = async () => {
   applyCameraAngleCfg(cam);
 
   try {
-    await cam.start($('#preview'));
+    if (handoff) await cam.attach($('#preview'));
+    else await cam.start($('#preview'));
   } catch (e) {
     toast(`Camera problem: ${e.message}`, true);
     // Paid but can't shoot — do not strand them. Refund path is in the

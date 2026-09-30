@@ -17,6 +17,24 @@
  */
 
 // 'EOS Webcam': a Canon EOS body (M50 etc.) over USB through Canon's free EOS Webcam Utility.
+/**
+ * One permission probe for the whole page. Two Camera instances probing at
+ * once (the angle picker starts one per angle) both open the default camera,
+ * and on Windows that second open fails: "Hardware MFT failed to start
+ * streaming due to lack of hardware resources".
+ */
+let probing = null;
+async function probeOnce() {
+  probing ||= navigator.mediaDevices.getUserMedia({ video: true })
+    .then(s => s.getTracks().forEach(t => t.stop()), () => {})
+    .finally(() => { probing = null; });
+  return probing;
+}
+
+// Chromium's names for "the device exists but won't open" — almost always
+// another app (or another stream in this one) already holding it.
+const BUSY = ['NotReadableError', 'AbortError', 'TrackStartError'];
+
 const DEFAULT_PREFERRED = ['EOS Webcam', 'Cam Link', 'Elgato', 'HDMI', 'USB Video', 'UVC', 'Capture'];
 
 export class Camera {
@@ -40,20 +58,21 @@ export class Camera {
 
   /**
    * Enumerating before permission returns devices with blank labels, which
-   * makes label matching impossible. So: take any camera, throw it away, then
-   * enumerate for real.
+   * makes label matching impossible. Only then: take any camera, throw it
+   * away, and enumerate again. Electron grants permission up front, so the
+   * kiosk normally never opens a camera just to read its name.
    */
   async listDevices() {
     if (!navigator.mediaDevices?.getUserMedia || !navigator.mediaDevices?.enumerateDevices) {
       throw new Error('Camera access is unavailable in this window. Open the booth from Electron or a local web server.');
     }
-    let probe = null;
-    try {
-      probe = await navigator.mediaDevices.getUserMedia({ video: true });
-    } catch { /* no camera at all — still worth enumerating */ }
-    const all = await navigator.mediaDevices.enumerateDevices();
-    probe?.getTracks().forEach(t => t.stop());
-    this.devices = all.filter(d => d.kind === 'videoinput');
+    const video = async () => (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+    let devices = await video();
+    if (!devices.length || devices.some(d => !d.label)) {
+      await probeOnce();
+      devices = await video();
+    }
+    this.devices = devices;
     return this.devices;
   }
 
@@ -65,11 +84,13 @@ export class Camera {
     return idx === -1 ? 0 : 1000 - idx;
   }
 
-  async pickDevice(explicitId = null) {
+  /** strict: return null instead of falling back to a camera that matches no preferred label. */
+  async pickDevice(explicitId = null, { strict = false } = {}) {
     if (!this.devices.length) await this.listDevices();
     if (explicitId && this.devices.some(d => d.deviceId === explicitId)) return explicitId;
     const ranked = [...this.devices].sort((a, b) => this.score(b) - this.score(a));
     const best = ranked[0];
+    if (strict) return best && this.score(best) > 0 ? best.deviceId : null;
     if (!best) {
       // The on-screen toast is brief and customer-facing — the operator
       // checking this needs the actual troubleshooting steps, which belong
@@ -126,8 +147,17 @@ export class Camera {
 
     this.stop();
     try {
-      this.stream = await navigator.mediaDevices.getUserMedia(constraints);
+      this.stream = await openWithRetry(constraints);
     } catch (error) {
+      if (BUSY.includes(error.name)) {
+        console.error(
+          '[camera] The camera is busy (Windows: "Hardware MFT failed to start streaming"). ' +
+          'Another app has it open: quit Lumabooth, OBS, Zoom/Teams, the Windows Camera app and ' +
+          'EOS Webcam Utility\'s own preview window, then restart this app. Only one program can ' +
+          'use the camera at a time.'
+        );
+        throw new Error('Camera is busy — close Lumabooth or any other app using it (see console).');
+      }
       // A stale deviceId is common after a capture card reconnects. Retry once
       // without pinning the request to the old device.
       if (!useGenericStream && ['NotFoundError', 'OverconstrainedError'].includes(error.name)) {
@@ -140,11 +170,7 @@ export class Camera {
         throw error;
       }
     }
-    videoEl.srcObject = this.stream;
-    videoEl.muted = true;
-    videoEl.playsInline = true;
-    videoEl.style.transform = this.cfg.mirrorPreview ? 'scaleX(-1)' : 'none';
-    await videoEl.play().catch(() => {});
+    await this.attach(videoEl);
 
     const track = this.stream.getVideoTracks()[0];
     this._lost = false;
@@ -164,6 +190,20 @@ export class Camera {
       settings: s,
     });
     return s;
+  }
+
+  /**
+   * Shows the already-open stream in another <video>. Used to carry the
+   * angle picker's live preview straight into the shoot: closing a camera
+   * and reopening it a moment later is exactly when Windows reports it busy.
+   */
+  async attach(videoEl) {
+    this.video = videoEl;
+    videoEl.srcObject = this.stream;
+    videoEl.muted = true;
+    videoEl.playsInline = true;
+    videoEl.style.transform = this.cfg.mirrorPreview ? 'scaleX(-1)' : 'none';
+    await videoEl.play().catch(() => {});
   }
 
   stop() {
@@ -291,5 +331,20 @@ function applyFilterExtras(canvas, filter) {
     ctx.fillStyle = ctx.createPattern(noiseTile(), 'repeat');
     ctx.fillRect(0, 0, w, h);
     ctx.restore();
+  }
+}
+
+/**
+ * Windows releases a camera a beat after the track stops, so opening it right
+ * after something else closed it can fail as "busy". Give it a few tries.
+ */
+async function openWithRetry(constraints, tries = 4) {
+  for (let i = 1; ; i++) {
+    try {
+      return await navigator.mediaDevices.getUserMedia(constraints);
+    } catch (error) {
+      if (!BUSY.includes(error.name) || i >= tries) throw error;
+      await new Promise(r => setTimeout(r, 600 * i));
+    }
   }
 }

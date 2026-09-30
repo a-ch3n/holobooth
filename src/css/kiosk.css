@@ -238,6 +238,7 @@ body.debug { cursor: auto; }
 }
 .angle-option:active { transform: scale(.97); }
 .angle-option.on { border-color: var(--accent); box-shadow: 0 0 0 4px rgba(255,215,110,.15); }
+.angle-option.missing { opacity: .45; }
 .angle-preview { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 12px; background: #080a0f; margin-bottom: 14px; }
 .angle-option .ic { font-size: 44px; margin-bottom: 14px; }
 .angle-option .lbl { font-size: 22px; font-weight: 800; }
