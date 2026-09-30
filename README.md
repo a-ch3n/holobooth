@@ -374,6 +374,24 @@ Cameras with a **micro** HDMI port need a locking or right-angle cable. This is
 the single most common failure at an event: someone brushes the cable, the
 signal drops, and the next customer gets a black card.
 
+### A Canon EOS body (M50) that was set up for Lumabooth
+
+Lumabooth drives Canon cameras over USB with Canon's SDK, taking full-res
+stills. HoloBooth doesn't use that SDK. It takes a video feed, so the M50
+needs one of these:
+
+- **USB, no extra hardware:** install Canon's **EOS Webcam Utility**. Keep
+  the same USB cable and put the camera in movie mode. The camera then shows
+  up as "EOS Webcam Utility", which is first in `preferredLabels`. The free
+  version outputs at a reduced resolution. The Pro subscription gives 1080p,
+  which is what you want for 300 dpi prints.
+- **HDMI:** micro-HDMI → capture card (Cam Link or a generic USB dongle),
+  per the section above. Full 1080p, no Canon software.
+
+Either way: **quit Lumabooth first**, because only one app can hold the
+camera. Run the M50 on a dummy battery (ACK-E12), and set auto power-off
+and the eco/screen-off settings to disabled.
+
 ---
 
 ## Payments

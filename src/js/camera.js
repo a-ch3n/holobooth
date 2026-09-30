@@ -16,7 +16,8 @@
  *  - Unplugging HDMI mid-event kills the track silently; we watch and recover.
  */
 
-const DEFAULT_PREFERRED = ['Cam Link', 'Elgato', 'HDMI', 'USB Video', 'UVC', 'Capture'];
+// 'EOS Webcam': a Canon EOS body (M50 etc.) over USB through Canon's free EOS Webcam Utility.
+const DEFAULT_PREFERRED = ['EOS Webcam', 'Cam Link', 'Elgato', 'HDMI', 'USB Video', 'UVC', 'Capture'];
 
 export class Camera {
   constructor(config = {}) {
