@@ -16,7 +16,6 @@
  *  - Unplugging HDMI mid-event kills the track silently; we watch and recover.
  */
 
-// 'EOS Webcam': a Canon EOS body (M50 etc.) over USB through Canon's free EOS Webcam Utility.
 /**
  * One permission probe for the whole page. Two Camera instances probing at
  * once (the angle picker starts one per angle) both open the default camera,
@@ -35,7 +34,9 @@ async function probeOnce() {
 // another app (or another stream in this one) already holding it.
 const BUSY = ['NotReadableError', 'AbortError', 'TrackStartError'];
 
-const DEFAULT_PREFERRED = ['EOS Webcam', 'Cam Link', 'Elgato', 'HDMI', 'USB Video', 'UVC', 'Capture'];
+// Capture cards first. 'EOS Webcam' (Canon's EOS Webcam Utility, camera over USB) is last:
+// once installed it lists a virtual camera even with nothing on USB, and would win with a blank picture.
+const DEFAULT_PREFERRED = ['Cam Link', 'Elgato', 'HDMI', 'USB Video', 'USB3', 'UVC', 'Capture', 'EOS Webcam'];
 
 export class Camera {
   constructor(config = {}) {

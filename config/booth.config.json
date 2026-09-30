@@ -12,13 +12,14 @@
   "camera": {
     "//": "HDMI capture cards present themselves as UVC webcams. Put distinctive substrings of your device label here, highest priority first. Run `Settings > Camera` in-app to see the live device list.",
     "preferredLabels": [
-      "EOS Webcam",
       "Cam Link",
       "Elgato",
       "HDMI",
       "USB Video",
+      "USB3",
       "UVC",
-      "Capture"
+      "Capture",
+      "EOS Webcam"
     ],
     "excludeLabels": [
       "FaceTime",
@@ -58,8 +59,8 @@
           "label": "Standard",
           "sub": "Eye level",
           "icon": "📷",
-          "//": "The main camera: a Canon EOS (e.g. M50) over USB via Canon's EOS Webcam Utility, or any camera over HDMI through a capture card.",
-          "preferredLabels": ["EOS Webcam", "Capture Card", "Cam Link", "Elgato", "HDMI", "USB Video", "UVC", "Capture"]
+          "//": "The main camera: the Canon M50 over HDMI into a capture card (preferred), or over USB via Canon's EOS Webcam Utility. EOS Webcam is last because once installed it lists a virtual camera even when the M50 is on HDMI, and would otherwise win with a blank picture.",
+          "preferredLabels": ["Capture Card", "Cam Link", "Elgato", "HDMI", "USB Video", "USB3", "UVC", "Capture", "EOS Webcam"]
         },
         {
           "id": "high",
