@@ -22,6 +22,7 @@ const cors = require('cors');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 const QRCode = require('qrcode');
 
 // booth.config.local.json (gitignored) lets a cloud server go live — reader
@@ -608,10 +609,34 @@ app.post('/media', requireKioskKey, jsonMedia, (req, res) => {
   fs.writeFileSync(path.join(dir, 'meta.json'),
     JSON.stringify({ id, collectorId, card, files: saved, at: new Date().toISOString() }, null, 2));
 
-  const base = PUBLIC_URL ? `${PUBLIC_URL}/d`
-    : CONFIG.delivery?.downloadBaseUrl || `${req.protocol}://${req.get('host')}/d`;
-  res.json({ id, url: `${base}/${id}`, files: saved });
+  res.json({ id, url: `${downloadBase(req)}/${id}`, files: saved });
 });
+
+/**
+ * Where a customer's phone can fetch their photos. The cloud server's public
+ * URL when there is one. Otherwise never 127.0.0.1 — on a phone that means
+ * the phone itself — but this PC's Wi-Fi/LAN address, which works for phones
+ * on the same network as the booth.
+ */
+const isLoopback = u => /\/\/(127\.|localhost\b|\[::1\])/i.test(u || '');
+function lanAddress() {
+  const virtual = /vEthernet|WSL|Hyper-V|VirtualBox|VMware|docker|Loopback|utun|tailscale|zerotier/i;
+  const found = [];
+  for (const [name, list] of Object.entries(os.networkInterfaces())) {
+    if (virtual.test(name)) continue;
+    for (const a of list || []) if ((a.family === 'IPv4' || a.family === 4) && !a.internal) found.push(a.address);
+  }
+  return found.find(a => a.startsWith('192.168.')) || found.find(a => a.startsWith('10.'))
+    || found.find(a => /^172\.(1[6-9]|2\d|3[01])\./.test(a)) || found[0] || null;
+}
+function downloadBase(req) {
+  if (PUBLIC_URL) return `${PUBLIC_URL}/d`;
+  const configured = CONFIG.delivery?.downloadBaseUrl;
+  if (configured && !isLoopback(configured)) return configured.replace(/\/+$/, '');
+  const lan = lanAddress();
+  return lan ? `http://${lan}:${PORT}/d` : `${req.protocol}://${req.get('host')}/d`;
+}
+
 
 app.get('/d/:id', (req, res) => {
   const meta = readMeta(req.params.id);
@@ -684,7 +709,7 @@ ensureSimulatedReader()
   .catch(e => console.error(`  reader:  simulated setup failed — ${e.message}`))
   .finally(() => app.listen(PORT, HOST, () => {
     console.log(`HoloBooth server on http://127.0.0.1:${PORT}${HOST === '127.0.0.1' ? ' (local only — behind Caddy)' : ''}`);
-    console.log(`  public:  ${PUBLIC_URL || 'none — download links point at this machine'}`);
+    console.log(`  public:  ${PUBLIC_URL || `none — download QR codes use http://${lanAddress() || '127.0.0.1'}:${PORT} (phones on this Wi-Fi only)`}`);
     console.log(`  kiosk:   ${KIOSK_KEY ? 'x-kiosk-key required' : 'open (no KIOSK_KEY set)'}`);
     console.log(`  stripe:  ${stripe ? 'configured' : 'NOT configured (set STRIPE_SECRET_KEY)'}`);
     if (SMART_READER) {

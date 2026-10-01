@@ -769,7 +769,9 @@ export class ObsSplitSource {
     const ctx = c.getContext('2d', { willReadFrequently: true });
     ctx.drawImage(v, 0, 0, w, h);
     const px = ctx.getImageData(0, 0, w, h).data;
-    const lit = (x, y) => { const o = (y * w + x) * 4; return px[o] + px[o + 1] + px[o + 2] > 36; };
+    // OBS's empty canvas is exact black; anything above ~4/255 is picture
+    // (a black backdrop still has some light on it).
+    const lit = (x, y) => { const o = (y * w + x) * 4; return px[o] + px[o + 1] + px[o + 2] > 12; };
     const n = this.single ? 1 : this.regions;
     const boxes = [], empty = [];
     for (let i = 0; i < n; i++) {
@@ -784,6 +786,27 @@ export class ObsSplitSource {
       while (r >= l && !colLit(r)) r--;
       while (t <= b && !rowLit(t)) t++;
       while (b >= t && !rowLit(b)) b--;
+      if (r >= l && b >= t) {
+        // The camera's OWN black bars (a GoPro or M50 sending a 4:3 or
+        // letterboxed picture over HDMI). HDMI black is often 16/255, not 0,
+        // so the pass above keeps them. Bars are flat and dark; they're only
+        // trimmed in matching pairs and when what's left is a normal photo
+        // shape — a dark backdrop at one edge of a real photo is not a bar.
+        const lum = (x, y) => { const o = (y * w + x) * 4; return (px[o] + px[o + 1] + px[o + 2]) / 3; };
+        const flat = vals => { let mn = 255, mx = 0; for (const v of vals) { if (v < mn) mn = v; if (v > mx) mx = v; } return mx < 48 && mx - mn <= 10; };
+        const col = x => { const v = []; for (let y = t; y <= b; y++) v.push(lum(x, y)); return v; };
+        const row = (y, L, R) => { const v = []; for (let x = L; x <= R; x++) v.push(lum(x, y)); return v; };
+        const pair = (a1, a2, span) => Math.abs(a1 - a2) <= Math.max(2, span * 0.03);
+        const shape = (ww, hh) => [16 / 9, 4 / 3, 3 / 2, 1, 3 / 4, 2 / 3, 9 / 16].some(ar => Math.abs(ww / hh - ar) / ar < 0.05);
+        let L = l, R = r;
+        while (L < R && flat(col(L))) L++;
+        while (R > L && flat(col(R))) R--;
+        if ((L > l || R < r) && pair(L - l, r - R, r - l) && shape(R - L + 1, b - t + 1)) { l = L; r = R; }
+        let T = t, B = b;
+        while (T < B && flat(row(T, l, r))) T++;
+        while (B > T && flat(row(B, l, r))) B--;
+        if ((T > t || B < b) && pair(T - t, b - B, b - t) && shape(r - l + 1, B - T + 1)) { t = T; b = B; }
+      }
       const area = (r - l + 1) * (b - t + 1), slotArea = (x1 - x0) * (y1 - y0);
       if (r < l || b < t || area < slotArea * 0.05) { empty[i] = true; boxes[i] = null; continue; }
       const box = { sx: l * k, sy: t * k, sw: Math.min(W - l * k, (r - l + 1) * k), sh: Math.min(H - t * k, (b - t + 1) * k) };
