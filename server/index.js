@@ -445,7 +445,19 @@ app.post('/sessions/:id/cancel', requireKioskKey, async (req, res) => {
   const session = terminalSessions.get(req.params.id);
   try {
     await clearReader(req.params.id);
-    await stripe.paymentIntents.cancel(req.params.id).catch(() => {}); // already captured/canceled is fine
+    const canceled = await stripe.paymentIntents.cancel(req.params.id).catch(() => null);
+    // Cancel loses the race against a card that was just approved: then the
+    // sale went through and must be reported as paid, not as cancelled.
+    const pi = canceled || await stripe.paymentIntents.retrieve(req.params.id, { expand: ['latest_charge'] }).catch(() => null);
+    if (pi?.status === 'succeeded') {
+      if (session) {
+        session.status = 'paid';
+        const card = pi.latest_charge?.payment_method_details?.card_present;
+        if (card) { session.brand = card.brand; session.last4 = card.last4; }
+        if (pendingByBooth.get(session.boothId) === req.params.id) pendingByBooth.delete(session.boothId);
+      }
+      return res.json({ ok: true, paid: true, brand: session?.brand || null, last4: session?.last4 || null });
+    }
     if (session) {
       session.status = 'failed';
       session.error = 'cancelled';
@@ -525,8 +537,11 @@ app.post('/checkout/session', requireKioskKey, async (req, res) => {
             quantity: 1,
           }],
       metadata: { productId: product.id, ...meta },
-      success_url: `${req.protocol}://${req.get('host')}/checkout/done`,
-      cancel_url: `${req.protocol}://${req.get('host')}/checkout/done`,
+      // The customer's phone lands here after paying, so it has to be a
+      // public address when there is one (a local 127.0.0.1 page won't load
+      // on their phone — the payment still completes either way).
+      success_url: `${PUBLIC_URL || `${req.protocol}://${req.get('host')}`}/checkout/done`,
+      cancel_url: `${PUBLIC_URL || `${req.protocol}://${req.get('host')}`}/checkout/done`,
     });
     sessions.set(s.id, { paid: false, createdAt: Date.now() });
     res.json({ sessionId: s.id, url: s.url });
@@ -537,7 +552,21 @@ app.get('/checkout/session/:id', requireKioskKey, async (req, res) => {
   if (!requireStripe(res)) return;
   try {
     const s = await stripe.checkout.sessions.retrieve(req.params.id);
-    res.json({ paid: s.payment_status === 'paid', expired: s.status === 'expired' });
+    res.json({ paid: s.payment_status === 'paid', expired: s.status === 'expired', paymentIntentId: s.payment_intent || null });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+/**
+ * Kills a QR checkout link (customer paid on the reader instead, or walked
+ * away) so it can't be paid afterwards. If it was paid in the meantime, the
+ * expire fails and this says so — the kiosk then refunds the duplicate.
+ */
+app.post('/checkout/session/:id/expire', requireKioskKey, async (req, res) => {
+  if (!requireStripe(res)) return;
+  await stripe.checkout.sessions.expire(req.params.id).catch(() => {});
+  try {
+    const s = await stripe.checkout.sessions.retrieve(req.params.id);
+    res.json({ paid: s.payment_status === 'paid', expired: s.status === 'expired', paymentIntentId: s.payment_intent || null });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

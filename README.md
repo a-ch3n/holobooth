@@ -486,6 +486,19 @@ Webcam Utility or a capture card, see above).
 On the mock reader, every sale approves after ~2 s. Press **D** on the pay
 screen to simulate a decline.
 
+**Card reader and QR together (`payments.offerQr`, on).** With a WisePOS E,
+S700 or M2, the pay screen also shows a QR code. The customer taps their
+card, or scans and pays on their phone (Apple Pay, Google Pay or card).
+The first payment to complete is the sale. The other is stopped: the
+reader is cleared, and the QR link is expired so it can't be paid later. A
+payment that lands at the same instant, or as the customer presses
+Cancel, is refunded automatically, so nobody is charged twice. After a
+declined card, a fresh sale goes back on the reader (up to 3 tries) while
+the QR stays up. If the reader is offline, the screen falls back to QR
+only. After paying by QR, the phone shows a confirmation page from the
+server. That page only loads when the server is public (the cloud server
+with `PUBLIC_URL`), but the payment goes through either way.
+
 Four providers behind one interface, chosen by `payments.provider`:
 
 - **`mock`** — approves after a beat. Develop against this.

@@ -213,6 +213,8 @@
     "//stripe-terminal": "Reader is an M2, which is Bluetooth-only — the kiosk can't drive it directly. A phone running the companion app (companion-app/) pairs with the M2 and does the actual collecting; the kiosk only creates the sale and polls for it to be paid. See server/index.js's /sessions and /booths/:boothId/pending, and companion-app/README.md for pairing the phone. Set COMPANION_APP_KEY on the server and give the same value to the phone app so random devices can't poll your booth's payments.",
     "//testing": "npm run dev always uses mock payments (TEST MODE badge on screen), whatever provider says. npm start uses provider below. npm run dev:live = dev window with real payments; npm run start:test = full-screen kiosk with mock payments (rehearsal).",
     "provider": "stripe-smart-reader",
+    "//offerQr": "true: the pay screen shows the card reader AND a QR code at the same time. The customer taps the WisePOS E or scans and pays on their phone; the first payment wins, the other is cancelled, and a payment that lands at the same instant is refunded automatically.",
+    "offerQr": true,
     "//serverUrl": "127.0.0.1 when the server runs on this same PC (smart reader, QR). The M2's phone needs the PC's LAN IP instead, e.g. http://192.168.1.11:4242.",
     "serverUrl": "http://127.0.0.1:4242",
     "stripe": {
