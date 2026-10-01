@@ -252,13 +252,16 @@ body.debug { cursor: auto; }
    button instead of the page's own overflow:hidden silently clipping it —
    the h2 + preview photo + tiles + button can add up to more than the
    viewport on some displays. */
-.filter-card { text-align: center; max-width: 720px; width: 100%; max-height: calc(100vh - 64px); overflow-y: auto; padding: 4px; }
+.filter-card { text-align: center; max-width: 960px; width: 100%; max-height: calc(100vh - 64px); overflow-y: auto; padding: 4px; }
 .filter-card h2 { font-size: 32px; margin: 0 0 20px; }
-.filter-preview {
-  display: block; width: 100%; max-width: 420px; margin: 0 auto 24px;
-  aspect-ratio: 3 / 4; object-fit: cover; border-radius: var(--radius);
-  background: #080a0f; transition: filter .15s ease;
+.filter-grid {
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin: 0 auto 22px;
+  /* Two rows of 16:9 photos are ~9/16 of the grid's width tall: size the grid
+     so it plus the title, filter buttons and Next all fit on one screen. */
+  width: min(100%, calc((100vh - 460px) * 16 / 9));
 }
+.filter-grid.single { grid-template-columns: 1fr; width: min(100%, 640px, calc((100vh - 460px) * 16 / 9)); }
+.filter-grid canvas { width: 100%; height: auto; display: block; border-radius: 12px; background: #000; box-shadow: 0 6px 24px rgba(0,0,0,.35); }
 .filter-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px; margin-bottom: 28px; }
 .filter-option {
   background: var(--panel); border: 2px solid var(--line); border-radius: var(--radius);

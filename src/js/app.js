@@ -1096,9 +1096,29 @@ ON_ENTER.angle = () => {
  */
 ON_ENTER.filter = () => {
   if (!lookupFilter(S.filterId)) S.filterId = filterChoices()[0]?.id || null;
-  const shot = S.shots[S.heroIndex] || S.shots[0];
-  const preview = $('#filter-preview');
-  preview.src = shot.toDataURL('image/jpeg', 0.92);
+  // Every photo from the shoot, each rendered through the real filter
+  // (grain and vignette included), so the preview is exactly what prints.
+  // Scaled-down copies keep re-rendering on each tap instant.
+  const grid = $('#filter-grid');
+  const PREVIEW_W = 720;
+  const smalls = S.shots.map(shot => {
+    const k = Math.min(1, PREVIEW_W / shot.width);
+    const c = document.createElement('canvas');
+    c.width = Math.round(shot.width * k); c.height = Math.round(shot.height * k);
+    c.getContext('2d').drawImage(shot, 0, 0, c.width, c.height);
+    return c;
+  });
+  grid.classList.toggle('single', smalls.length === 1);
+  grid.innerHTML = smalls.map((_, i) => `<canvas data-shot="${i}" data-w="${S.shots[i].width}" data-h="${S.shots[i].height}"></canvas>`).join('');
+  const renderPreviews = () => {
+    const filter = lookupFilter(S.filterId);
+    smalls.forEach((small, i) => {
+      const out = applyPhotoFilter(small, filter);
+      const c = grid.children[i];
+      c.width = out.width; c.height = out.height;
+      c.getContext('2d').drawImage(out, 0, 0);
+    });
+  };
 
   const host = $('#filter-options');
   const renderTiles = () => {
@@ -1110,13 +1130,13 @@ ON_ENTER.filter = () => {
       </div>`).join('');
   };
   renderTiles();
-  preview.style.filter = lookupFilter(S.filterId)?.cssFilter || 'none';
+  renderPreviews();
 
   host.onclick = e => {
     const id = e.target.closest('.filter-option')?.dataset.filter;
     if (!id) return;
     S.filterId = id;
-    preview.style.filter = lookupFilter(id)?.cssFilter || 'none';
+    renderPreviews();
     renderTiles();
   };
 
