@@ -58,6 +58,16 @@
       "digicamcontrol": { "url": "http://127.0.0.1:5513" },
       "gphoto2": { "bin": "gphoto2" }
     },
+    "obsSplit": {
+      "//": "Both cameras through OBS. OBS holds the two capture cards and shows them side by side in ONE scene (Settings > Video: Base and Output 3840x1080, 30 fps; camera 1 at x=0, camera 2 at x=1920, each 1920x1080). Start Virtual Camera with that scene. HoloBooth opens OBS Virtual Camera once and cuts it in two, so every angle tile gets a live preview and either can be picked, without ever opening two cameras (which kills the first one on the booth PC). If OBS isn't running, the shoot falls back to opening the camera directly.",
+      "enabled": true,
+      "//layout": "side-by-side (3840x1080, left/right) or stacked (1920x2160, top/bottom).",
+      "layout": "side-by-side",
+      "regions": 2,
+      "width": 3840,
+      "height": 1080,
+      "frameRate": 30
+    },
     "angles": {
       "//livePreviews": "false (default): the angle picker shows tiles and only checks each camera is plugged in; the shoot opens just the chosen one. true: live preview in every tile, which means all cameras streaming at once. On some Windows PCs opening a second camera kills the first, so leave this off unless you've tested it.",
       "livePreviews": false,
@@ -65,6 +75,8 @@
       "list": [
         {
           "id": "standard",
+          "//obsRegion": "With obsSplit: which part of the OBS picture this angle is. 0 = left (the M50), 1 = right (the GoPro).",
+          "obsRegion": 0,
           "label": "Standard",
           "sub": "Eye level",
           "icon": "📷",
@@ -73,6 +85,7 @@
         },
         {
           "id": "high",
+          "obsRegion": 1,
           "label": "High Angle",
           "sub": "GoPro overhead",
           "icon": "🔝",

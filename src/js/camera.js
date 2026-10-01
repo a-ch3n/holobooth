@@ -59,6 +59,7 @@ export class Camera {
       constraints: config.constraints || { width: 1920, height: 1080, frameRate: 30 },
       mirrorPreview: config.mirrorPreview !== false,
       warmupMs: config.warmupMs ?? 800,
+      watchdog: config.watchdog !== false,
     };
     this.stream = null;
     this.deviceId = null;
@@ -257,7 +258,7 @@ export class Camera {
   _watch() {
     clearInterval(this._watchdog);
     const v = this.video;
-    if (!v?.requestVideoFrameCallback) return;
+    if (!v?.requestVideoFrameCallback || !this.cfg.watchdog) return;
     let last = performance.now();
     const tick = () => { last = performance.now(); if (this.video === v && this._wanted) v.requestVideoFrameCallback(tick); };
     v.requestVideoFrameCallback(tick);
@@ -647,4 +648,179 @@ export class StillsCamera {
     if (this.previewCam) return this.previewCam.resolution;
     return { width: this.canvas?.width || 0, height: this.canvas?.height || 0 };
   }
+}
+
+/* ============================================================ OBS split */
+
+/**
+ * Two cameras through ONE device. OBS holds both capture cards and puts them
+ * side by side in a single scene (3840x1080: camera 1 left, camera 2 right);
+ * OBS Virtual Camera sends that one picture. Opening two capture cards at
+ * once is exactly what failed on the booth PC (the second open killed the
+ * first), and OBS Virtual Camera can only output one scene — so: one stream,
+ * cut into regions here.
+ *
+ * ObsSplitSource opens OBS Virtual Camera once and is shared (ref-counted);
+ * each SplitCamera shows one region in its own <video>, with the same surface
+ * as Camera, so the angle picker, the shoot and the GIF work unchanged.
+ */
+export class ObsSplitSource {
+  constructor(config = {}) {
+    const sp = config.obsSplit || {};
+    this.layout = sp.layout === 'stacked' ? 'stacked' : 'side-by-side';
+    this.regions = sp.regions || 2;
+    this.cam = new Camera({
+      ...config,
+      preferredLabels: [sp.deviceLabel || 'OBS Virtual Camera'],
+      excludeLabels: [],
+      constraints: {
+        width: sp.width || (this.layout === 'stacked' ? 1920 : 1920 * this.regions),
+        height: sp.height || (this.layout === 'stacked' ? 1080 * this.regions : 1080),
+        frameRate: sp.frameRate || 30,
+      },
+      // The source <video> is off-screen, so the on-screen freeze check doesn't apply;
+      // a dropped device still reconnects through the track's 'ended' event.
+      watchdog: false,
+    });
+    this.cam.onStatus = st => this.onStatus?.(st);
+    this.users = 0;
+    this._opening = null;
+  }
+
+  get video() { return this.cam.video; }
+  get isLive() { return this.cam.isLive && !!this.cam.video?.videoWidth; }
+
+  /** The rectangle of the source frame that region i occupies. */
+  rect(i) {
+    const v = this.cam.video, W = v.videoWidth, H = v.videoHeight, n = this.regions;
+    return this.layout === 'stacked'
+      ? { sx: 0, sy: Math.round(i * H / n), sw: W, sh: Math.round(H / n) }
+      : { sx: Math.round(i * W / n), sy: 0, sw: Math.round(W / n), sh: H };
+  }
+
+  async acquire() {
+    this.users++;
+    if (this.isLive) return;
+    try {
+      await (this._opening ||= this._open().finally(() => { this._opening = null; }));
+    } catch (e) {
+      this.users--;
+      throw e;
+    }
+  }
+
+  async _open() {
+    const id = await this.cam.pickDevice(null, { strict: true }).catch(() => null);
+    if (!id) {
+      this.cam.devices = [];
+      throw new Error('OBS Virtual Camera not available — start OBS and click Start Virtual Camera');
+    }
+    let v = this._el;
+    if (!v) {
+      v = this._el = document.createElement('video');
+      v.muted = true; v.playsInline = true; v.autoplay = true;
+      // Off-screen but in the page, so Chromium keeps decoding it.
+      v.style.cssText = 'position:fixed;left:-10000px;top:0;width:64px;height:36px;pointer-events:none';
+      document.body.appendChild(v);
+    }
+    const st = await this.cam.start(v, id);
+    const ratio = st.width / st.height;
+    const want = this.layout === 'stacked' ? 16 / 9 / this.regions : 16 / 9 * this.regions;
+    clog(`obs split: source ${st.width}x${st.height}, ${this.layout}, ${this.regions} regions of ${Math.round(this.rect(0).sw)}x${Math.round(this.rect(0).sh)}`);
+    if (Math.abs(ratio - want) / want > 0.15) {
+      clog(`warn: OBS Virtual Camera is ${st.width}x${st.height}, not ${this.layout === 'stacked' ? '1920x2160' : '3840x1080'} — ` +
+        'each camera will look squeezed. In OBS: Settings → Video, set Base and Output resolution to 3840x1080, ' +
+        'and put the two cameras side by side, 1920x1080 each.');
+    }
+  }
+
+  release() {
+    this.users = Math.max(0, this.users - 1);
+    if (!this.users) this.cam.stop();
+  }
+}
+
+export class SplitCamera {
+  constructor(source, region, config = {}) {
+    this.source = source;
+    this.region = region;
+    this.split = true;
+    this.cfg = { mirrorPreview: config.mirrorPreview !== false, warmupMs: config.warmupMs ?? 800, fps: config.obsSplit?.frameRate || 30 };
+    this.devices = [];
+    this.video = null;
+    this.stream = null;
+    this.onStatus = () => {};
+    this._held = false;
+    this._running = false;
+  }
+
+  _status(st) { clog(`${st.level}: ${st.message}`); this.onStatus(st); }
+
+  async start(videoEl) {
+    this.stop();
+    await this.source.acquire();
+    this._held = true;
+    this.canvas = document.createElement('canvas');
+    this.ctx = this.canvas.getContext('2d');
+    this._running = true;
+    this._drawn = false;
+    this._draw();
+    const t0 = Date.now();
+    while (!this._drawn) {
+      if (Date.now() - t0 > 8000) { this.stop(); throw new Error('No picture from OBS Virtual Camera'); }
+      await new Promise(r => setTimeout(r, 50));
+    }
+    this.stream = this.canvas.captureStream(this.cfg.fps);
+    await this.attach(videoEl);
+    const r = this.source.rect(this.region);
+    this._status({ level: 'ok', message: `OBS Virtual Camera — camera ${this.region + 1} (${r.sw}x${r.sh})` });
+    return this.resolution;
+  }
+
+  _draw() {
+    const gen = this._gen = (this._gen || 0) + 1;
+    const step = () => {
+      if (!this._running || gen !== this._gen) return;
+      const v = this.source.video;
+      if (v?.videoWidth) {
+        const { sx, sy, sw, sh } = this.source.rect(this.region);
+        if (this.canvas.width !== sw || this.canvas.height !== sh) { this.canvas.width = sw; this.canvas.height = sh; }
+        this.ctx.drawImage(v, sx, sy, sw, sh, 0, 0, sw, sh);
+        this._drawn = true;
+      }
+      setTimeout(step, 1000 / this.cfg.fps);
+    };
+    step();
+  }
+
+  attach(videoEl) { return Camera.prototype.attach.call(this, videoEl); }
+
+  /** Straight off the region canvas — the newest frame, at full size. */
+  grab({ mirror = false } = {}) {
+    if (!this.canvas?.width || !this.source.isLive) throw new Error('Camera not ready');
+    const c = document.createElement('canvas');
+    c.width = this.canvas.width; c.height = this.canvas.height;
+    const ctx = c.getContext('2d');
+    if (mirror) { ctx.translate(c.width, 0); ctx.scale(-1, 1); }
+    ctx.drawImage(this.canvas, 0, 0);
+    return c;
+  }
+
+  burst(opts) { return Camera.prototype.burst.call(this, opts); }
+
+  async waitLive(ms = 10000) {
+    const t0 = Date.now();
+    while (!this.isLive && Date.now() - t0 < ms) await new Promise(r => setTimeout(r, 100));
+    return this.isLive;
+  }
+
+  stop() {
+    this._running = false;
+    this.stream?.getTracks().forEach(t => t.stop());
+    this.stream = null;
+    if (this._held) { this._held = false; this.source.release(); }
+  }
+
+  get isLive() { return this._running && this.source.isLive; }
+  get resolution() { return { width: this.canvas?.width || 0, height: this.canvas?.height || 0 }; }
 }

@@ -370,19 +370,30 @@ Camera HDMI → capture card → USB. The card enumerates as a UVC webcam, so
 4. `warmupMs` exists because capture cards output black for a beat while they
    lock onto the signal. Don't set it to 0.
 
-**If a capture card works in OBS (or the Windows Camera app) but the
-preview keeps freezing or dropping in HoloBooth,** let OBS hold the card
-and pass the picture on:
-1. In OBS: **Sources → + → Video Capture Device**, and pick the card.
-   Right-click the source → **Transform → Fit to screen**. Set
-   **Settings → Video** to 1920×1080 at 30 fps.
-2. Click **Start Virtual Camera**.
-3. Start HoloBooth. While OBS is running, it picks **OBS Virtual Camera**
-   by itself (first in `preferredLabels`). With OBS closed, it skips it and
-   uses the card directly.
+**Two cameras through OBS (`camera.obsSplit`, on by default).** Opening
+two capture cards at once can make Windows cut off the first one, and OBS
+Virtual Camera only sends one picture. So OBS holds both cameras and puts
+them **side by side in one scene**. HoloBooth opens OBS Virtual Camera once
+and cuts it in two: each angle tile gets a live preview, and either can be
+picked and shot at full 1920×1080.
+
+1. **OBS → Settings → Video:** Base (Canvas) and Output (Scaled)
+   resolution both **3840x1080**, FPS **30**.
+2. Make a new scene, e.g. **Booth**. Add both cameras to it with
+   **Sources → + → Video Capture Device → Add Existing**:
+   - **M50 on the left half:** right-click → Transform → Edit Transform,
+     Position **0, 0**, Size **1920 × 1080**.
+   - **GoPro on the right half:** Position **1920, 0**, Size **1920 × 1080**.
+3. Select the **Booth** scene and click **Start Virtual Camera**.
+4. Start HoloBooth. Which half is which angle is `obsRegion` in each
+   `camera.angles.list` entry: 0 = left, 1 = right.
+
+Keep OBS running in the background. If it isn't running, the tiles say so
+and the shoot opens the camera directly instead. The camera log records
+the size OBS is actually sending, and warns if it isn't 3840x1080.
 
 To start OBS with the virtual camera already on, use a shortcut:
-`"C:\Program Files\obs-studio\bin\64bit\obs64.exe" --startvirtualcam --minimize-to-tray`
+`"C:\Program Files\obs-studio\bin\64bit\obs64.exe" --startvirtualcam --scene "Booth" --minimize-to-tray`
 (set the shortcut's "Start in" to that `64bit` folder).
 
 **Camera log:** the operator panel (tap the bottom-left corner 5 times)

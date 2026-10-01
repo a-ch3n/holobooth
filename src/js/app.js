@@ -17,7 +17,7 @@ import { COMPANIONS, companionById, companionCanvas } from './frames/companions.
 import { loadPack, packFrames } from './frames/assetpack.mjs';
 import { stickerCatalog, stickerCanvas, newPlacement, stickerAt, DECOS } from './frames/stickers.mjs';
 import { renderCard, renderStrip, mintCard, printSize } from './frames/render.mjs';
-import { Camera, StillsCamera, applyPhotoFilter, cameraLog, clog } from './camera.js';
+import { Camera, StillsCamera, ObsSplitSource, SplitCamera, applyPhotoFilter, cameraLog, clog } from './camera.js';
 import { createPaymentProvider, kioskHeaders } from './payments.js';
 import { encodeGif } from './gif.js';
 
@@ -937,7 +937,22 @@ function usesStills(angleId) {
   if (angles.length < 2) return true;
   return (angleId || angles[0].id) === (st.angle || angles[0].id);
 }
-const makeCamera = angleId => (usesStills(angleId) ? new StillsCamera(S.cfg.camera) : new Camera(S.cfg.camera));
+/**
+ * camera.obsSplit: every angle is a region of the one OBS Virtual Camera
+ * picture (angle.obsRegion, else its position in the list: 0 = left).
+ */
+const obsSplitOn = () => !!S.cfg.camera?.obsSplit?.enabled;
+function obsRegionFor(angleId) {
+  const angles = cameraAngles();
+  const a = angles.find(x => x.id === angleId);
+  return a?.obsRegion ?? Math.max(0, angles.indexOf(a));
+}
+function obsSource() {
+  return (S.obsSource ||= new ObsSplitSource(S.cfg.camera));
+}
+const makeCamera = angleId => (usesStills(angleId) ? new StillsCamera(S.cfg.camera)
+  : obsSplitOn() ? new SplitCamera(obsSource(), obsRegionFor(angleId), S.cfg.camera)
+  : new Camera(S.cfg.camera));
 
 /** A tethered camera that won't start shouldn't cost a paid customer their shoot: fall back to video. */
 function stillsFallback(error) {
@@ -978,7 +993,8 @@ ON_ENTER.angle = () => {
   // opening "GoPro Webcam" ended the main camera's stream, and it couldn't
   // reopen while the GoPro one was held). Without previews, the tiles only
   // check each camera is present; the shoot opens just the one picked.
-  const livePreviews = S.cfg.camera?.angles?.livePreviews === true;
+  // OBS split: every tile is a region of one stream, so live previews are safe.
+  const livePreviews = obsSplitOn() || S.cfg.camera?.angles?.livePreviews === true;
   host.innerHTML = cameraAngles().map(a => `
     <div class="angle-option${a.id === S.cameraAngle ? ' on' : ''}" data-angle="${a.id}">
       ${livePreviews ? `<video class="angle-preview" data-angle-video="${a.id}" autoplay muted playsinline></video>` : ''}
@@ -1016,6 +1032,10 @@ ON_ENTER.angle = () => {
   const opening = (async () => {
     for (const entry of S.angleCameras) {
       entry.ready = (async () => {
+        if (entry.camera.split) {
+          entry.camera.onStatus = status => setStatus(entry.id, status.message || '');
+          return entry.camera.start(videoFor(entry.id));
+        }
         if (!entry.camera.stills) return startVideoAngle(entry);
         if (!livePreviews) { setStatus(entry.id, 'Ready — real photos with flash'); return; }
         entry.camera.onStatus = status => setStatus(entry.id, status.message || '');
@@ -1115,13 +1135,15 @@ ON_ENTER.capture = async () => {
   // Tethered for this angle or not — swap if last session used the other kind.
   const wantStills = usesStills(S.cameraAngle);
   if (!handoff && S.camera && !!S.camera.stills !== wantStills) { S.camera.stop(); S.camera = null; }
+  // A split camera is tied to one region — make a fresh one for this angle.
+  if (!handoff && S.camera?.split) { S.camera.stop(); S.camera = null; }
   const onStatus = s => {
     $('#cam-status').textContent = s.message;
     if (s.level === 'error') toast(s.message, true);
   };
   let cam = (S.camera ||= makeCamera(S.cameraAngle));
   cam.onStatus = onStatus;
-  if (!cam.stills) applyCameraAngleCfg(cam);
+  if (!cam.stills && !cam.split) applyCameraAngleCfg(cam);
 
   try {
     if (handoff) await cam.attach($('#preview'));
@@ -1129,8 +1151,12 @@ ON_ENTER.capture = async () => {
       try {
         await cam.start($('#preview'));
       } catch (error) {
-        if (!cam.stills) throw error;
-        stillsFallback(error);
+        if (!cam.stills && !cam.split) throw error;
+        if (cam.split) {
+          // OBS not running / Virtual Camera not started: try the camera directly.
+          clog(`warn: OBS split unavailable (${error.message}) — opening the camera directly`);
+          toast(`${error.message} — using the camera directly`, true);
+        } else stillsFallback(error);
         cam.stop();
         cam = S.camera = new Camera(S.cfg.camera);
         cam.onStatus = onStatus;
@@ -2058,13 +2084,14 @@ ON_ENTER.admin = async () => {
   }
 
   $('#cam-log-copy')?.addEventListener('click', async e => {
+    const btn = e.currentTarget; // null once the await below returns
     const text = cameraLog.join('\n');
-    try { await navigator.clipboard.writeText(text); e.currentTarget.textContent = 'Copied ✓ — paste it to support'; }
+    try { await navigator.clipboard.writeText(text); btn.textContent = 'Copied ✓ — paste it to support'; }
     catch {
       // Clipboard blocked: select the text so Ctrl+C works.
       const r = document.createRange(); r.selectNodeContents($('#cam-log'));
       getSelection().removeAllRanges(); getSelection().addRange(r);
-      e.currentTarget.textContent = 'Selected — press Ctrl+C';
+      btn.textContent = 'Selected — press Ctrl+C';
     }
   });
 
