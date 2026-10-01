@@ -693,6 +693,8 @@ export class ObsSplitSource {
   /** The rectangle of the source frame that region i occupies. */
   rect(i) {
     const v = this.cam.video, W = v.videoWidth, H = v.videoHeight, n = this.regions;
+    // OBS sending one ordinary camera picture: never cut it in pieces.
+    if (this.single) return { sx: 0, sy: 0, sw: W, sh: H };
     return this.layout === 'stacked'
       ? { sx: 0, sy: Math.round(i * H / n), sw: W, sh: Math.round(H / n) }
       : { sx: Math.round(i * W / n), sy: 0, sw: Math.round(W / n), sh: H };
@@ -726,12 +728,17 @@ export class ObsSplitSource {
     const st = await this.cam.start(v, id);
     const ratio = st.width / st.height;
     const want = this.layout === 'stacked' ? 16 / 9 / this.regions : 16 / 9 * this.regions;
-    clog(`obs split: source ${st.width}x${st.height}, ${this.layout}, ${this.regions} regions of ${Math.round(this.rect(0).sw)}x${Math.round(this.rect(0).sh)}`);
-    if (Math.abs(ratio - want) / want > 0.15) {
-      clog(`warn: OBS Virtual Camera is ${st.width}x${st.height}, not ${this.layout === 'stacked' ? '1920x2160' : '3840x1080'} — ` +
-        'each camera will look squeezed. In OBS: Settings → Video, set Base and Output resolution to 3840x1080, ' +
-        'and put the two cameras side by side, 1920x1080 each.');
-    }
+    // An ordinary ~16:9 picture means OBS is sending ONE camera (a single
+    // camera's scene, or a 1920x1080 canvas), not the side-by-side scene.
+    this.single = Math.abs(ratio - 16 / 9) / (16 / 9) < 0.2;
+    this.problem = this.single
+      ? `OBS is sending one camera (${st.width}x${st.height}), not both side by side. In OBS: Settings → Video → 3840x1080, ` +
+        'make one scene with both cameras next to each other, select it, then Stop and Start Virtual Camera.'
+      : Math.abs(ratio - want) / want > 0.15
+        ? `OBS is sending ${st.width}x${st.height}, expected ${this.layout === 'stacked' ? '1920x2160' : '3840x1080'} — the cameras will look squeezed. Check OBS Settings → Video.`
+        : null;
+    clog(`obs split: source ${st.width}x${st.height}, ${this.single ? 'ONE camera (not split)' : `${this.layout}, ${this.regions} regions of ${this.rect(0).sw}x${this.rect(0).sh}`}`);
+    if (this.problem) clog(`warn: ${this.problem}`);
   }
 
   release() {
@@ -760,6 +767,10 @@ export class SplitCamera {
     this.stop();
     await this.source.acquire();
     this._held = true;
+    if (this.source.single && this.region > 0) {
+      this.stop();
+      throw new Error(this.source.problem);
+    }
     this.canvas = document.createElement('canvas');
     this.ctx = this.canvas.getContext('2d');
     this._running = true;
@@ -773,7 +784,9 @@ export class SplitCamera {
     this.stream = this.canvas.captureStream(this.cfg.fps);
     await this.attach(videoEl);
     const r = this.source.rect(this.region);
-    this._status({ level: 'ok', message: `OBS Virtual Camera — camera ${this.region + 1} (${r.sw}x${r.sh})` });
+    this._status(this.source.problem
+      ? { level: 'warn', message: this.source.problem }
+      : { level: 'ok', message: `OBS Virtual Camera — camera ${this.region + 1} (${r.sw}x${r.sh})` });
     return this.resolution;
   }
 

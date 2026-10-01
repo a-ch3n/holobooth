@@ -1034,7 +1034,14 @@ ON_ENTER.angle = () => {
       entry.ready = (async () => {
         if (entry.camera.split) {
           entry.camera.onStatus = status => setStatus(entry.id, status.message || '');
-          return entry.camera.start(videoFor(entry.id));
+          try {
+            return await entry.camera.start(videoFor(entry.id));
+          } catch (error) {
+            // e.g. OBS is only sending one camera: this angle can't be picked.
+            entry.missing = true;
+            host.querySelector(`[data-angle="${entry.id}"]`)?.classList.add('missing');
+            throw error;
+          }
         }
         if (!entry.camera.stills) return startVideoAngle(entry);
         if (!livePreviews) { setStatus(entry.id, 'Ready — real photos with flash'); return; }
