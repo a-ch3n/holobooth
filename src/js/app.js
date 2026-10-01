@@ -198,7 +198,7 @@ function go(name) {
 function resetIdle() {
   clearTimeout(S.idleTimer);
   const ms = S.screen === 'attract' ? null
-    : ['capture', 'pay'].includes(S.screen) ? S.cfg.booth.sessionTimeoutMs
+    : ['capture', 'pay', 'angle'].includes(S.screen) ? S.cfg.booth.sessionTimeoutMs
     : S.cfg.booth.idleAttractAfterMs;
   if (ms) S.idleTimer = setTimeout(() => { abandon(); }, ms);
 }
@@ -1819,7 +1819,9 @@ async function retake() {
   S.retakes++;
   S.shots = []; S.filteredShots = []; S.burst = []; S.filteredBurst = [];
   S.stickers = [];
-  go('capture');
+  // Back to the camera choice (their last pick stays highlighted), so a
+  // retake can also be a different angle — not just the same shot again.
+  go(cameraAngles().length >= 2 ? 'angle' : 'capture');
 }
 
 /* --------------------------------------------------------------- print */
