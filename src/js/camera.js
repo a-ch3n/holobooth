@@ -690,8 +690,18 @@ export class ObsSplitSource {
   get video() { return this.cam.video; }
   get isLive() { return this.cam.isLive && !!this.cam.video?.videoWidth; }
 
-  /** The rectangle of the source frame that region i occupies. */
+  /**
+   * The rectangle of the source frame that region i occupies: where the
+   * camera's picture actually is inside its slot (found by _detect), so a
+   * camera placed a little off in OBS still comes out centered and without
+   * black bars. Falls back to the plain slot until something is detected.
+   */
   rect(i) {
+    return this.boxes?.[this.single ? 0 : i] || this.slot(i);
+  }
+
+  /** The nominal slot for region i: half the picture (or all of it for one camera). */
+  slot(i) {
     const v = this.cam.video, W = v.videoWidth, H = v.videoHeight, n = this.regions;
     // OBS sending one ordinary camera picture: never cut it in pieces.
     if (this.single) return { sx: 0, sy: 0, sw: W, sh: H };
@@ -737,13 +747,78 @@ export class ObsSplitSource {
       : Math.abs(ratio - want) / want > 0.15
         ? `OBS is sending ${st.width}x${st.height}, expected ${this.layout === 'stacked' ? '1920x2160' : '3840x1080'} — the cameras will look squeezed. Check OBS Settings → Video.`
         : null;
-    clog(`obs split: source ${st.width}x${st.height}, ${this.single ? 'ONE camera (not split)' : `${this.layout}, ${this.regions} regions of ${this.rect(0).sw}x${this.rect(0).sh}`}`);
+    clog(`obs split: source ${st.width}x${st.height}, ${this.single ? 'ONE camera (not split)' : `${this.layout}, ${this.regions} slots of ${this.slot(0).sw}x${this.slot(0).sh}`}`);
     if (this.problem) clog(`warn: ${this.problem}`);
+    this.boxes = null;
+    await this._detectSettled();
+  }
+
+  /**
+   * Finds each camera's picture inside its slot: the bounding box of rows and
+   * columns that aren't OBS's empty black canvas. A camera image is never
+   * pure black edge to edge, an empty OBS canvas is, so this is reliable
+   * with a tiny threshold. A slot with no picture is reported as empty.
+   */
+  _detect() {
+    const v = this.cam.video;
+    if (!v?.videoWidth) return false;
+    const W = v.videoWidth, H = v.videoHeight, k = Math.max(1, Math.round(W / 640));
+    const w = Math.round(W / k), h = Math.round(H / k);
+    const c = (this._probe ||= document.createElement('canvas'));
+    c.width = w; c.height = h;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(v, 0, 0, w, h);
+    const px = ctx.getImageData(0, 0, w, h).data;
+    const lit = (x, y) => { const o = (y * w + x) * 4; return px[o] + px[o + 1] + px[o + 2] > 36; };
+    const n = this.single ? 1 : this.regions;
+    const boxes = [], empty = [];
+    for (let i = 0; i < n; i++) {
+      const s = this.slot(i);
+      const x0 = Math.floor(s.sx / k), x1 = Math.min(w, Math.ceil((s.sx + s.sw) / k));
+      const y0 = Math.floor(s.sy / k), y1 = Math.min(h, Math.ceil((s.sy + s.sh) / k));
+      const minCol = Math.max(2, (y1 - y0) * 0.02), minRow = Math.max(2, (x1 - x0) * 0.02);
+      const colLit = x => { let c2 = 0; for (let y = y0; y < y1; y++) if (lit(x, y) && ++c2 >= minCol) return true; return false; };
+      const rowLit = y => { let c2 = 0; for (let x = x0; x < x1; x++) if (lit(x, y) && ++c2 >= minRow) return true; return false; };
+      let l = x0, r = x1 - 1, t = y0, b = y1 - 1;
+      while (l <= r && !colLit(l)) l++;
+      while (r >= l && !colLit(r)) r--;
+      while (t <= b && !rowLit(t)) t++;
+      while (b >= t && !rowLit(b)) b--;
+      const area = (r - l + 1) * (b - t + 1), slotArea = (x1 - x0) * (y1 - y0);
+      if (r < l || b < t || area < slotArea * 0.05) { empty[i] = true; boxes[i] = null; continue; }
+      const box = { sx: l * k, sy: t * k, sw: Math.min(W - l * k, (r - l + 1) * k), sh: Math.min(H - t * k, (b - t + 1) * k) };
+      // Hysteresis: ignore jitter of a few pixels so the picture doesn't twitch.
+      const old = this.boxes?.[i];
+      boxes[i] = old && ['sx', 'sy', 'sw', 'sh'].every(key => Math.abs(old[key] - box[key]) <= W * 0.01) ? old : box;
+      if (boxes[i] !== old) clog(`obs split: camera ${i + 1} found at ${box.sx},${box.sy} ${box.sw}x${box.sh}`);
+    }
+    this.boxes = boxes;
+    this.empty = empty;
+    return true;
+  }
+
+  /** Detect, retrying briefly: OBS sends black for a moment after the virtual camera starts. */
+  async _detectSettled() {
+    for (let i = 0; i < 6; i++) {
+      this._detect();
+      if (this.empty && !this.empty.some(Boolean)) break;
+      await new Promise(r => setTimeout(r, 400));
+    }
+    (this.empty || []).forEach((e, i) => e && clog(`warn: obs split: no picture in ${this.slotName(i)} of the OBS output`));
+    clearInterval(this._redetect);
+    // Keep following OBS if a source is moved or resized while running.
+    this._redetect = setInterval(() => (this.users ? this._detect() : clearInterval(this._redetect)), 3000);
+  }
+
+  slotName(i) {
+    if (this.single) return 'the picture';
+    if (this.regions === 2) return this.layout === 'stacked' ? ['the top half', 'the bottom half'][i] : ['the left half', 'the right half'][i];
+    return `slot ${i + 1}`;
   }
 
   release() {
     this.users = Math.max(0, this.users - 1);
-    if (!this.users) this.cam.stop();
+    if (!this.users) { clearInterval(this._redetect); this.boxes = null; this.cam.stop(); }
   }
 }
 
@@ -770,6 +845,10 @@ export class SplitCamera {
     if (this.source.single && this.region > 0) {
       this.stop();
       throw new Error(this.source.problem);
+    }
+    if (this.source.empty?.[this.region]) {
+      this.stop();
+      throw new Error(`No picture in ${this.source.slotName(this.region)} of OBS — add this camera to the OBS scene there, then Stop and Start Virtual Camera`);
     }
     this.canvas = document.createElement('canvas');
     this.ctx = this.canvas.getContext('2d');
