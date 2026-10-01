@@ -474,6 +474,18 @@ Webcam Utility or a capture card, see above).
 
 ## Payments
 
+**Test vs real, without editing anything:**
+
+| Command | Payments | Window |
+|---|---|---|
+| `npm run dev` | mock (TEST MODE badge) | windowed + DevTools |
+| `npm run start:test` | mock (TEST MODE badge) | full-screen kiosk (rehearsal) |
+| `npm run dev:live` | real | windowed + DevTools |
+| `npm start` | real (`payments.provider`) | full-screen kiosk (the event) |
+
+On the mock reader, every sale approves after ~2 s. Press **D** on the pay
+screen to simulate a decline.
+
 Four providers behind one interface, chosen by `payments.provider`:
 
 - **`mock`** — approves after a beat. Develop against this.

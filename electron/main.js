@@ -57,11 +57,32 @@ function readBaseConfig() {
 function loadConfig() {
   const local = readLocal(LOCAL_CONFIG_PATH);
   if (local) console.log(`[config] using booth.config.local.json${local.server?.url ? ` — server ${local.server.url}` : ''}`);
-  return applyLocal(readBaseConfig(), local);
+  return testPayments(applyLocal(readBaseConfig(), local));
+}
+
+/**
+ * Test vs real payments without editing the config: npm run dev (and
+ * npm run start:test) take every sale through the mock reader, and the kiosk
+ * shows a TEST MODE badge; npm start (and npm run dev:live) use the real
+ * provider. HOLOBOOTH_PAYMENTS=mock|live overrides either way.
+ */
+function testPayments(cfg) {
+  const env = process.env.HOLOBOOTH_PAYMENTS;
+  const mock = env ? env === 'mock' : DEV;
+  if (!mock || !cfg.payments) return cfg;
+  console.log(`[config] TEST MODE — payments are simulated (real provider: ${cfg.payments.provider})`);
+  return { ...cfg, payments: { ...cfg.payments, realProvider: cfg.payments.provider, provider: 'mock', testMode: true } };
 }
 
 function saveConfig(next) {
   config = next;
+  // Test mode is a launch option, not a setting: never save it.
+  next = structuredClone(next);
+  if (next.payments?.testMode) {
+    next.payments.provider = next.payments.realProvider;
+    delete next.payments.testMode;
+    delete next.payments.realProvider;
+  }
   // Never write the local file's values (the kiosk key) into the committed config.
   const clean = stripLocal(next, readBaseConfig(), readLocal(LOCAL_CONFIG_PATH));
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(clean, null, 2));

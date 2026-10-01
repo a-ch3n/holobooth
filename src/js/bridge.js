@@ -110,7 +110,9 @@ function makeRpcBridge(apiBase) {
 
 function makeMemoryBridge() {
   const mem = { cards: [], sales: [] };
-  const cfg = fetch('../config/booth.config.json').then(r => r.json());
+  // Browser preview is always a test: mock payments.
+  const cfg = fetch('../config/booth.config.json').then(r => r.json())
+    .then(c => ({ ...c, payments: { ...c.payments, realProvider: c.payments?.provider, provider: 'mock', testMode: true } }));
   return {
     config: { get: () => cfg, save: async () => true, reload: async () => cfg },
     printers: {

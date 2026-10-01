@@ -226,6 +226,13 @@ async function boot() {
   S.platform = await installBridge();
   document.body.dataset.platform = S.platform;
   S.cfg = await window.booth.config.get();
+  // Never let a test session look like a real one (or the other way round).
+  if (S.cfg.payments?.provider === 'mock') {
+    const badge = document.createElement('div');
+    badge.className = 'test-mode-badge';
+    badge.textContent = 'TEST MODE · payments simulated';
+    document.body.appendChild(badge);
+  }
   clog(`boot: ${navigator.userAgent.match(/(Chrome|Electron)\/[\d.]+/g)?.join(' ') || navigator.userAgent}, ` +
     `windowsCaptureApi=${S.cfg.camera?.windowsCaptureApi || 'mediafoundation'}, hwMjpeg=${!!S.cfg.camera?.windowsHardwareMjpeg}, ` +
     `constraints=${JSON.stringify(S.cfg.camera?.constraints)}`);
@@ -2059,7 +2066,9 @@ ON_ENTER.admin = async () => {
       <h3>System</h3>
       <div class="kv"><span>Booth</span><b>${S.cfg.booth.id}</b></div>
       <div class="kv"><span>Season</span><b>${S.cfg.collection.seasonId}</b></div>
-      <div class="kv"><span>Payments</span><b>${S.cfg.payments.provider}</b></div>
+      <div class="kv"><span>Payments</span><b>${S.cfg.payments.provider === 'mock'
+        ? `TEST (mock)${S.cfg.payments.realProvider ? ` — npm start uses ${S.cfg.payments.realProvider}` : ''}`
+        : S.cfg.payments.provider}</b></div>
       <div class="kv"><span>Version</span><b>${info.version} · ${info.platform}</b></div>
       <div class="kv"><span>Bridge</span><b>${S.platform}</b></div>
       <div style="display:flex;gap:10px;margin-top:16px">
