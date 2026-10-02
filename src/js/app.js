@@ -1010,7 +1010,7 @@ ON_ENTER.angle = () => {
       ${a.sub ? `<div class="sub">${a.sub}</div>` : ''}
       <div class="angle-status" data-angle-status="${a.id}">${livePreviews ? 'Connecting preview…' : 'Checking…'}</div>
     </div>`).join('');
-  S.angleCameras = cameraAngles().map(a => ({ id: a.id, camera: makeCamera(a.id), ready: null, missing: false }));
+  const entries = S.angleCameras = cameraAngles().map(a => ({ id: a.id, camera: makeCamera(a.id), ready: null, missing: false }));
   const setStatus = (id, text) => { const el = host.querySelector(`[data-angle-status="${id}"]`); if (el) el.textContent = text; };
   // One at a time, and each physical camera for one angle only. Opening the
   // same camera twice — e.g. the GoPro angle falling back to the main camera
@@ -1041,13 +1041,23 @@ ON_ENTER.angle = () => {
       entry.ready = (async () => {
         if (entry.camera.split) {
           entry.camera.onStatus = status => setStatus(entry.id, status.message || '');
-          try {
-            return await entry.camera.start(videoFor(entry.id));
-          } catch (error) {
-            // e.g. OBS is only sending one camera: this angle can't be picked.
-            entry.missing = true;
-            host.querySelector(`[data-angle="${entry.id}"]`)?.classList.add('missing');
-            throw error;
+          const stillHere = () => S.screen === 'angle' && S.angleCameras === entries;
+          for (;;) {
+            try {
+              return await entry.camera.start(videoFor(entry.id));
+            } catch (error) {
+              // OBS not ready yet: keep retrying while this screen is up, so
+              // clicking Start Virtual Camera now fixes it without going back.
+              if (/OBS Virtual Camera/.test(error.message) && stillHere()) {
+                setStatus(entry.id, `${error.message} — retrying…`);
+                await sleep(2500);
+                if (stillHere()) continue;
+              }
+              // e.g. OBS is only sending one camera: this angle can't be picked.
+              entry.missing = true;
+              host.querySelector(`[data-angle="${entry.id}"]`)?.classList.add('missing');
+              throw error;
+            }
           }
         }
         if (!entry.camera.stills) return startVideoAngle(entry);
@@ -1068,7 +1078,10 @@ ON_ENTER.angle = () => {
   host.onclick = async e => {
     const id = e.target.closest('.angle-option')?.dataset.angle;
     if (!id) return;
-    await opening;
+    // Don't hold the customer here while OBS is being retried: after a
+    // moment, go on — the shoot falls back to the camera directly.
+    const patience = sleep(2000);
+    await Promise.race([opening, patience]);
     // A tile whose camera isn't plugged in can't be chosen, unless none are
     // (then the shoot falls back to whatever camera there is, as before).
     if (S.angleCameras.find(a => a.id === id)?.missing && S.angleCameras.some(a => !a.missing)) {
@@ -1079,7 +1092,7 @@ ON_ENTER.angle = () => {
     S.angleCameras.forEach(({ id: cameraId }) => {
       host.querySelector(`[data-angle="${cameraId}"]`)?.classList.toggle('on', cameraId === id);
     });
-    await Promise.allSettled(S.angleCameras.map(({ ready }) => ready));
+    await Promise.race([Promise.allSettled(S.angleCameras.map(({ ready }) => ready)), patience]);
     go('capture');
   };
 };

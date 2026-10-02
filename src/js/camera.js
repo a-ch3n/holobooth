@@ -60,6 +60,7 @@ export class Camera {
       mirrorPreview: config.mirrorPreview !== false,
       warmupMs: config.warmupMs ?? 800,
       watchdog: config.watchdog !== false,
+      obsGate: config.obsGate !== false,
     };
     this.stream = null;
     this.deviceId = null;
@@ -105,7 +106,7 @@ export class Camera {
   score(device) {
     const label = (device.label || '').toLowerCase();
     if (this.cfg.excludeLabels.some(x => label.includes(x.toLowerCase()))) return -1000;
-    if (label.includes('obs virtual camera') && !this._obsRunning) return -1000;
+    if (this.cfg.obsGate && label.includes('obs virtual camera') && !this._obsRunning) return -1000;
     const idx = this.cfg.preferredLabels.findIndex(x => label.includes(x.toLowerCase()));
     return idx === -1 ? 0 : 1000 - idx;
   }
@@ -681,6 +682,10 @@ export class ObsSplitSource {
       // The source <video> is off-screen, so the on-screen freeze check doesn't apply;
       // a dropped device still reconnects through the track's 'ended' event.
       watchdog: false,
+      // Don't rely on spotting OBS in the process list (it can miss); the
+      // live-picture check after opening is what tells a real feed from
+      // the placeholder OBS shows when it's closed or not started.
+      obsGate: false,
     });
     this.cam.onStatus = st => this.onStatus?.(st);
     this.users = 0;
@@ -688,7 +693,29 @@ export class ObsSplitSource {
   }
 
   get video() { return this.cam.video; }
-  get isLive() { return this.cam.isLive && !!this.cam.video?.videoWidth; }
+  // Only once opened AND checked live — not while the check is still running.
+  get isLive() { return this._ready && this.cam.isLive && !!this.cam.video?.videoWidth; }
+
+  /**
+   * A real camera feed always changes from frame to frame (sensor noise if
+   * nothing else); the placeholder OBS's virtual camera shows while OBS is
+   * closed or the virtual camera is stopped never does. Samples for ~1.5 s.
+   */
+  async _isLive() {
+    const v = this.cam.video;
+    const c = document.createElement('canvas');
+    c.width = 320; c.height = 90;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    const sample = () => { ctx.drawImage(v, 0, 0, c.width, c.height); return ctx.getImageData(0, 0, c.width, c.height).data; };
+    const first = sample();
+    for (let i = 0; i < 5; i++) {
+      await new Promise(r => setTimeout(r, 300));
+      const next = sample();
+      for (let j = 0; j < first.length; j += 4) if (first[j] !== next[j] || first[j + 1] !== next[j + 1] || first[j + 2] !== next[j + 2]) return true;
+    }
+    clog('warn: OBS Virtual Camera picture is completely still (OBS closed, or Start Virtual Camera not clicked)');
+    return false;
+  }
 
   /**
    * The rectangle of the source frame that region i occupies: where the
@@ -736,6 +763,10 @@ export class ObsSplitSource {
       document.body.appendChild(v);
     }
     const st = await this.cam.start(v, id);
+    if (!(await this._isLive())) {
+      this.cam.stop();
+      throw new Error('OBS Virtual Camera has no live picture — open OBS and click Start Virtual Camera');
+    }
     const ratio = st.width / st.height;
     const want = this.layout === 'stacked' ? 16 / 9 / this.regions : 16 / 9 * this.regions;
     // An ordinary ~16:9 picture means OBS is sending ONE camera (a single
@@ -751,6 +782,7 @@ export class ObsSplitSource {
     if (this.problem) clog(`warn: ${this.problem}`);
     this.boxes = null;
     await this._detectSettled();
+    this._ready = true;
   }
 
   /**
@@ -841,7 +873,7 @@ export class ObsSplitSource {
 
   release() {
     this.users = Math.max(0, this.users - 1);
-    if (!this.users) { clearInterval(this._redetect); this.boxes = null; this.cam.stop(); }
+    if (!this.users) { clearInterval(this._redetect); this.boxes = null; this._ready = false; this.cam.stop(); }
   }
 }
 
@@ -863,7 +895,10 @@ export class SplitCamera {
 
   async start(videoEl) {
     this.stop();
+    const token = this._token;
     await this.source.acquire();
+    // stop() was called while OBS was opening (the customer moved on): let go.
+    if (token !== this._token) { this.source.release(); throw new Error('stopped'); }
     this._held = true;
     if (this.source.single && this.region > 0) {
       this.stop();
@@ -930,6 +965,7 @@ export class SplitCamera {
   }
 
   stop() {
+    this._token = (this._token || 0) + 1;
     this._running = false;
     this.stream?.getTracks().forEach(t => t.stop());
     this.stream = null;
