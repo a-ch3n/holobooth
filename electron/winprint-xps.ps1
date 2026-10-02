@@ -56,15 +56,14 @@ try {
       ([math]::Abs($m.Width - $ww) -lt 12 -and [math]::Abs($m.Height - $hh) -lt 12) -or
       ([math]::Abs($m.Width - $hh) -lt 12 -and [math]::Abs($m.Height - $ww) -lt 12))
   }
-  # Keep the paper already chosen in Printing Preferences if it is the right
-  # size (DNP's own "(6x4)"); otherwise use the driver's matching size.
-  if (-not (Fits $ticket.PageMediaSize)) {
+  # Use the paper chosen in Printing Preferences (DNP's own "(6x4)"), as
+  # Ctrl+P does. Only switch if the preferences name a paper with a known,
+  # different size AND the driver lists one that fits — DNP's driver reports
+  # its sizes without dimensions, so usually there is nothing to compare.
+  $cur = $ticket.PageMediaSize
+  if ($cur -and $cur.Width -and -not (Fits $cur)) {
     $media = $caps.PageMediaSizeCapability | Where-Object { Fits $_ } | Select-Object -First 1
-    if (-not $media) {
-      $have = ($caps.PageMediaSizeCapability | Where-Object { $_.Width } | ForEach-Object { '{0}x{1}in' -f [math]::Round($_.Width / 96, 2), [math]::Round($_.Height / 96, 2) }) -join ', '
-      throw "The printer has no $($W)x$($H)in paper. It has: $have"
-    }
-    $ticket.PageMediaSize = $media
+    if ($media) { $ticket.PageMediaSize = $media }
   }
   $ticket.PageOrientation = if ($W -gt $H) { [System.Printing.PageOrientation]::Landscape } else { [System.Printing.PageOrientation]::Portrait }
   if ($caps.PageBorderlessCapability -contains [System.Printing.PageBorderless]::Borderless) {
@@ -100,7 +99,8 @@ try {
   $writer.Write($doc, $ticket)
 
   $m = $ticket.PageMediaSize
-  Write-Output ('OK xps printer="{0}" paper={1}x{2}in orientation={3} borderless={4}' -f $Printer, [math]::Round($m.Width / 96, 2), [math]::Round($m.Height / 96, 2), $ticket.PageOrientation, $ticket.PageBorderless)
+  $paper = if ($m -and $m.Width) { '{0}x{1}in' -f [math]::Round($m.Width / 96, 2), [math]::Round($m.Height / 96, 2) } else { "from Printing Preferences ($($m.PageMediaSizeName))" }
+  Write-Output ('OK xps printer="{0}" paper={1} orientation={2} borderless={3}' -f $Printer, $paper, $ticket.PageOrientation, $ticket.PageBorderless)
 } catch {
   Write-Output "ERR $($_.Exception.Message)"
   exit 1
