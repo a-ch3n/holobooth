@@ -2080,7 +2080,9 @@ ON_ENTER.admin = async () => {
     <div class="card-panel">
       <h3>Printers</h3>
       ${printers.length
-        ? printers.map(p => `<div class="kv"><span>${escapeHtml(p.displayName || p.name)}</span><b>${p.willUse ? 'PRINTS HERE' : p.isDefault ? 'DEFAULT' : ''}</b></div>`).join('')
+        ? printers.map(p => `<div class="kv"><span>${escapeHtml(p.displayName || p.name)}</span><b>${p.willUse ? 'PRINTS HERE'
+            : window.booth.printers.use ? `<button class="btn btn-ghost" style="padding:4px 12px;font-size:13px" data-use-printer="${escapeHtml(p.name)}">Use this printer</button>`
+            : p.isDefault ? 'DEFAULT' : ''}</b></div>`).join('')
         : '<div class="kv"><span>None detected</span></div>'}
       ${printers.length && !printers.some(p => p.willUse) && info.platform === 'win32'
         ? '<p style="color:var(--bad);font-size:13px;margin-top:10px">No photo printer installed — install the DNP driver (see README → Printing on Windows).</p>' : ''}
@@ -2135,6 +2137,15 @@ ON_ENTER.admin = async () => {
       btn.disabled = false;
     });
   }
+
+  $$('[data-use-printer]').forEach(b => b.addEventListener('click', async () => {
+    b.disabled = true;
+    const r = await window.booth.printers.use(b.dataset.usePrinter).catch(e => ({ ok: false, error: e.message }));
+    if (!r.ok) { toast(r.error, true); b.disabled = false; return; }
+    S.cfg = r.config;
+    toast(`Printing to ${b.dataset.usePrinter}`);
+    ON_ENTER.admin();
+  }));
 
   $('#cam-log-copy')?.addEventListener('click', async e => {
     const btn = e.currentTarget; // null once the await below returns

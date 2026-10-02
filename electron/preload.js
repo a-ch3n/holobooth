@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('booth', {
   printers: {
     list: () => ipcRenderer.invoke('printers:list'),
     print: args => ipcRenderer.invoke('print:image', args),
+    use: name => ipcRenderer.invoke('printers:use', name),
   },
   cards: {
     nextMint: args => ipcRenderer.invoke('cards:nextMint', args),

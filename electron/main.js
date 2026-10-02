@@ -261,6 +261,18 @@ ipcMain.handle('printers:list', async () => {
 
 ipcMain.handle('print:image', (_e, args) => printImage(args));
 
+// "Use this printer" in the operator panel. Saved to this PC's
+// booth.config.local.json, never the committed config; the renderer can
+// set only these two keys through here.
+ipcMain.handle('printers:use', async (_e, name) => {
+  const list = await win.webContents.getPrintersAsync().catch(() => []);
+  if (!list.some(p => p.name === name)) return { ok: false, error: `No printer named "${name}"` };
+  require('./local-config').writeLocalPatch(LOCAL_CONFIG_PATH, { printing: { cardPrinterName: name, stripPrinterName: name } });
+  config = loadConfig();
+  console.log(`[print] operator chose "${name}" for cards and strips`);
+  return { ok: true, config };
+});
+
 ipcMain.handle('cards:nextMint', (_e, { seasonId, frameId }) => nextMint(seasonId, frameId));
 
 ipcMain.handle('cards:record', (_e, card) => {

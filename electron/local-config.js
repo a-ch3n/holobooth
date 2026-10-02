@@ -72,4 +72,11 @@ function stripLocal(next, base, local) {
   return out;
 }
 
-module.exports = { readLocal, applyLocal, stripLocal };
+/** Deep-merges a patch into booth.config.local.json (creating it if needed). */
+function writeLocalPatch(localPath, patch) {
+  const next = deepMerge(readLocal(localPath) || {}, patch);
+  fs.writeFileSync(localPath, JSON.stringify(next, null, 2));
+  return next;
+}
+
+module.exports = { readLocal, applyLocal, stripLocal, writeLocalPatch };
