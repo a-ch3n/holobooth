@@ -2091,8 +2091,8 @@ ON_ENTER.admin = async () => {
         : '<div class="kv"><span>None detected</span></div>'}
       ${info.platform === 'win32' && printers.some(p => p.willUse) ? `
         <div class="kv"><span>Paper sizes</span><b id="paper-sizes" style="font-weight:400;font-size:12px;text-align:right">loading…</b></div>
-        <div class="kv"><span>Print method</span><b>${[['photo', 'Photo (default)'], ['classic', 'Standard'], ['driver', 'Driver paper'], ['browser', 'Browser']].map(([m, label]) => {
-          const cur = ['classic', 'driver', 'browser'].includes(S.cfg.printing?.windowsMethod) ? S.cfg.printing.windowsMethod : 'photo';
+        <div class="kv"><span>Print method</span><b>${[['xps', 'Windows (default)'], ['classic', 'Standard'], ['driver', 'Driver paper'], ['browser', 'Browser']].map(([m, label]) => {
+          const cur = ['classic', 'driver', 'browser'].includes(S.cfg.printing?.windowsMethod) ? S.cfg.printing.windowsMethod : 'xps';
           return `<button class="btn ${cur === m ? '' : 'btn-ghost'}" style="padding:4px 10px;font-size:12px;margin-left:6px" data-print-method="${m}">${label}</button>`;
         }).join('')}</b></div>` : ''}
       <div style="display:flex;gap:10px;align-items:center;margin-top:12px;flex-wrap:wrap">

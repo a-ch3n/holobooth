@@ -209,8 +209,20 @@ async function printImage({ dataUrl, widthIn, heightIn, printerName, copies = 1,
   // own 4x6 paper turned sideways. driver / browser: alternatives kept for
   // other printers (operator panel → Print method).
   const wp = require('./winprint');
-  const want = config.printing?.windowsMethod || 'photo';
-  const method = ['photo', 'driver', 'browser', 'classic'].includes(want) ? want : 'photo';
+  // 'photo' (Windows Photo Viewer) is gone: ImageView_PrintTo isn't exported
+  // on current Windows 11 ("Missing entry"), so anyone who picked it gets XPS.
+  const want = config.printing?.windowsMethod === 'photo' ? 'xps' : config.printing?.windowsMethod || 'xps';
+  const method = ['xps', 'driver', 'browser', 'classic'].includes(want) ? want : 'xps';
+  if (method === 'xps') {
+    const r = await wp.printXps({
+      dataUrl, widthIn, heightIn, printer: printerName,
+      copies: Math.max(1, Math.min(copies, config.printing?.copiesMax || 4)),
+    });
+    await new Promise(res => setTimeout(res, 3000));
+    const queue = wp.summarize(await wp.diagnose(), printerName);
+    console.log(`[print] xps result: ${JSON.stringify(r)}\n${queue}`);
+    return { ...r, paper: `${r.paper || ''}\n${queue}` };
+  }
   if (method === 'photo' && wp.photoViewerDll()) {
     const r = await wp.printPhotoViewer({
       dataUrl, printer: printerName,
@@ -321,7 +333,7 @@ ipcMain.handle('printers:diagnose', async () => {
 
 // Print method switch in the operator panel: this PC only.
 ipcMain.handle('printers:method', (_e, method) => {
-  if (!['photo', 'classic', 'driver', 'browser'].includes(method)) return { ok: false, error: `Unknown method ${method}` };
+  if (!['xps', 'classic', 'driver', 'browser'].includes(method)) return { ok: false, error: `Unknown method ${method}` };
   require('./local-config').writeLocalPatch(LOCAL_CONFIG_PATH, { printing: { windowsMethod: method } });
   config = loadConfig();
   console.log(`[print] operator chose print method "${method}"`);

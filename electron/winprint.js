@@ -197,4 +197,40 @@ async function printPhotoViewer({ dataUrl, printer, copies = 1 }) {
   }
 }
 
-module.exports = { printWindows, printPhotoViewer, photoViewerDll, paperSizes, diagnose, summarize, SCRIPT };
+/**
+ * Print through Windows' XPS path (electron/winprint-xps.ps1): the same one
+ * Ctrl+P photo printing uses, which prints on the DS40 where the GDI and
+ * Chromium paths didn't. Starts from the printer's Printing Preferences, so
+ * each Windows printer entry's paper and 2inch-cut setting apply.
+ */
+let xpsScript = null;
+function ensureXpsScript() {
+  if (xpsScript && fs.existsSync(xpsScript)) return xpsScript;
+  // Copied out to a temp file: PowerShell can't run a script inside app.asar.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'holobooth-xps-'));
+  xpsScript = path.join(dir, 'winprint-xps.ps1');
+  fs.writeFileSync(xpsScript, '\ufeff' + fs.readFileSync(path.join(__dirname, 'winprint-xps.ps1'), 'utf8'));
+  return xpsScript;
+}
+
+async function printXps({ dataUrl, widthIn, heightIn, printer, copies = 1 }) {
+  const img = path.join(os.tmpdir(), `holobooth-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.jpg`);
+  fs.writeFileSync(img, Buffer.from(String(dataUrl).split(',')[1] || '', 'base64'));
+  try {
+    const out = await new Promise(resolve => {
+      execFile('powershell.exe', ['-STA', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ensureXpsScript(),
+        '-Printer', printer, '-Image', img, '-W', String(widthIn), '-H', String(heightIn), '-Copies', String(copies)],
+      { timeout: 120000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) =>
+        resolve({ err, out: String(stdout || '').trim(), stderr: String(stderr || '').trim() }));
+    });
+    const ok = out.out.split(/\r?\n/).find(l => l.startsWith('OK '));
+    if (ok) return { ok: true, reason: null, paper: ok.slice(3) };
+    const msg = out.out.split(/\r?\n/).find(l => l.startsWith('ERR '))?.slice(4)
+      || out.stderr.split(/\r?\n/).filter(Boolean).slice(-3).join(' ') || out.err?.message || 'unknown error';
+    return { ok: false, reason: `XPS print: ${msg}` };
+  } finally {
+    setTimeout(() => fs.rm(img, { force: true }, () => {}), 120000);
+  }
+}
+
+module.exports = { printWindows, printXps, printPhotoViewer, photoViewerDll, paperSizes, diagnose, summarize, SCRIPT };

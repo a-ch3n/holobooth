@@ -279,8 +279,8 @@
       "windowsPaper": "2\\s*inch|2in|x\\s*2|cut"
     },
     "silent": true,
-    "//windowsMethod": "Windows only. photo (default): print the sheet like a photo through Windows Photo Viewer, using the printer's own default paper and Printing Preferences (including the 2-inch cut on a strips printer entry) — DNP's driver discards custom-size pages. classic: a 6x4 sheet sent landscape through Chromium. driver: draw onto the driver's own paper size via PowerShell. browser: no page size, the printer's default paper. Switchable in the operator panel (Print method).",
-    "windowsMethod": "photo",
+    "//windowsMethod": "Windows only. xps (default): print through Windows' XPS print path, the same as Ctrl+P photo printing, starting from the printer's Printing Preferences (its paper and 2inch cut setting) — DNP's driver discards Chromium's custom-size pages. Test by hand: powershell -STA -ExecutionPolicy Bypass -File .\\electron\\winprint-xps.ps1 -Printer \"DS40 (Copy 1)\". classic: a 6x4 sheet sent landscape through Chromium. driver: draw onto the driver's own paper size via PowerShell. browser: no page size, the printer's default paper. Switchable in the operator panel (Print method).",
+    "windowsMethod": "xps",
     "copiesMax": 4,
     "lpOptions": [],
     "dryRun": false,
