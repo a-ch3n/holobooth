@@ -1965,8 +1965,8 @@ async function doPrint() {
    *  pageSize (e.g. "dnp6x4") picks the printer's own named media instead of
    *  an arbitrary Custom.WxHin the driver may not recognize; lpOptions are
    *  extra per-job -o flags (e.g. the DS40's Cutter=2Inch for strip sheets). */
-  const sendPage = async (dataUrl, widthIn, heightIn, printerName, copies, label, pageSize, lpOptions) => {
-    const r = await window.booth.printers.print({ dataUrl, widthIn, heightIn, printerName, copies, silent: p.silent, pageSize, lpOptions });
+  const sendPage = async (dataUrl, widthIn, heightIn, printerName, copies, label, pageSize, lpOptions, windowsPaper) => {
+    const r = await window.booth.printers.print({ dataUrl, widthIn, heightIn, printerName, copies, silent: p.silent, pageSize, lpOptions, windowsPaper });
     if (!r.ok) throw new Error(r.reason || `${label} print was rejected`);
   };
 
@@ -1974,7 +1974,7 @@ async function doPrint() {
   const printGanged = async (unitCanvas, count, sheet, unit, printerName, label) => {
     if (sheet?.enabled) {
       for (const page of buildGangSheet(unitCanvas, count, sheet, unit)) {
-        await sendPage(page.toDataURL('image/jpeg', 0.95), sheet.widthIn, sheet.heightIn, printerName, 1, label, sheet.pageSize, sheet.lpOptions);
+        await sendPage(page.toDataURL('image/jpeg', 0.95), sheet.widthIn, sheet.heightIn, printerName, 1, label, sheet.pageSize, sheet.lpOptions, sheet.windowsPaper);
       }
     } else {
       // JPEG, not PNG: the Pi wraps this straight into a PDF via /DCTDecode to
@@ -2084,6 +2084,7 @@ ON_ENTER.admin = async () => {
             : window.booth.printers.use ? `<button class="btn btn-ghost" style="padding:4px 12px;font-size:13px" data-use-printer="${escapeHtml(p.name)}">Use this printer</button>`
             : p.isDefault ? 'DEFAULT' : ''}</b></div>`).join('')
         : '<div class="kv"><span>None detected</span></div>'}
+      ${info.platform === 'win32' && printers.some(p => p.willUse) ? '<div class="kv"><span>Paper sizes</span><b id="paper-sizes" style="font-weight:400;font-size:12px;text-align:right">loading…</b></div>' : ''}
       ${printers.length && !printers.some(p => p.willUse) && info.platform === 'win32'
         ? '<p style="color:var(--bad);font-size:13px;margin-top:10px">No photo printer installed — install the DNP driver (see README → Printing on Windows).</p>' : ''}
     </div>
@@ -2137,6 +2138,11 @@ ON_ENTER.admin = async () => {
       btn.disabled = false;
     });
   }
+
+  window.booth.printers.papers?.().then(r => {
+    const el = $('#paper-sizes');
+    if (el) el.textContent = r.ok ? r.sizes.map(s => `${s.name} (${s.widthIn}×${s.heightIn})`).join(' · ') || 'none' : r.error;
+  });
 
   $$('[data-use-printer]').forEach(b => b.addEventListener('click', async () => {
     b.disabled = true;

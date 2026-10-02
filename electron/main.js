@@ -176,7 +176,7 @@ function createWindow() {
  * Windows has no CUPS, so it keeps the original @page-sized BrowserWindow
  * printed through Electron's API, which doesn't have this bug there.
  */
-async function printImage({ dataUrl, widthIn, heightIn, printerName, copies = 1, silent = true, pageSize = null, lpOptions = [] }) {
+async function printImage({ dataUrl, widthIn, heightIn, printerName, copies = 1, silent = true, pageSize = null, lpOptions = [], windowsPaper = null }) {
   console.log(`[print] ${process.platform} request: ${widthIn}x${heightIn}in, printer=${printerName || '(OS default)'}, copies=${copies}, silent=${silent}, pageSize=${pageSize || '(custom size)'}`);
 
   if (process.platform !== 'win32') {
@@ -201,6 +201,18 @@ async function printImage({ dataUrl, widthIn, heightIn, printerName, copies = 1,
   }
   console.log(`[print] printing to "${choice.name}" (${choice.why})`);
   printerName = choice.name;
+
+  // Default: through the driver's own paper sizes, like Windows' test page
+  // (see electron/winprint.js). printing.windowsMethod: "chromium" = the old way.
+  if (config.printing?.windowsMethod !== 'chromium') {
+    const r = await require('./winprint').printWindows({
+      dataUrl, widthIn, heightIn, printer: printerName,
+      copies: Math.max(1, Math.min(copies, config.printing?.copiesMax || 4)),
+      paperHint: windowsPaper || '',
+    });
+    console.log(`[print] windows (driver paper) result: ${JSON.stringify(r)}`);
+    return r;
+  }
 
   const html = `<!doctype html><html><head><meta charset="utf-8"><style>
     @page { size: ${widthIn}in ${heightIn}in; margin: 0; }
@@ -260,6 +272,16 @@ ipcMain.handle('printers:list', async () => {
 });
 
 ipcMain.handle('print:image', (_e, args) => printImage(args));
+
+// The chosen printer's own paper sizes, for the operator panel (and for
+// working out which one is the DS40's 2-inch-cut size).
+ipcMain.handle('printers:papers', async () => {
+  if (process.platform !== 'win32') return { ok: false, error: 'Windows only' };
+  const list = await win.webContents.getPrintersAsync().catch(() => []);
+  const choice = require('./printers').choosePrinter(list, config.printing?.cardPrinterName || null);
+  if (choice.error) return { ok: false, error: choice.error };
+  return { ok: true, printer: choice.name, sizes: await require('./winprint').paperSizes(choice.name) };
+});
 
 // "Use this printer" in the operator panel. Saved to this PC's
 // booth.config.local.json, never the committed config; the renderer can

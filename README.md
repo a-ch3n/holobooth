@@ -661,8 +661,13 @@ the photo printer by name (DNP, Citizen, SELPHY, Mitsubishi and so on)
 instead of using the Windows default, which is often "Microsoft Print to
 PDF". If there's no photo printer, it says so instead of printing
 nowhere. The operator panel marks the printer it will use **PRINTS HERE**.
-The 2-inch strip cut on Windows is a setting in the DS40's Printing
-Preferences, not the `lpOptions` used on Mac.
+Windows jobs print onto the **driver's own paper size** (like Windows'
+"Print a test page"), not a custom page size, which DNP's driver doesn't
+accept. HoloBooth picks the driver's 6×4 size. For strips it prefers the
+2-inch-cut 6×4 size (`stripSheet.windowsPaper`), so the strips come out
+separated. Cards never use a cut size. The operator panel lists the
+printer's paper sizes under **Printers**. If a print fails, the message
+says which sizes the driver has.
 
 Dye-subs are unforgiving about page geometry — if the page size doesn't match the
 media exactly, the driver silently scales and your 2.5×3.5″ card comes out at
