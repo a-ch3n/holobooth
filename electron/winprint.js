@@ -114,4 +114,44 @@ async function printWindows({ dataUrl, widthIn, heightIn, printer, copies = 1, p
   }
 }
 
-module.exports = { printWindows, paperSizes, SCRIPT };
+/**
+ * What Windows itself says: every printer with its port, driver and status,
+ * and every job sitting in a queue. The answer to "nothing came out" —
+ * a job stuck in an error state, two DS40 entries on different ports, a
+ * printer Windows thinks is offline.
+ */
+const DIAG = `
+$ErrorActionPreference = 'SilentlyContinue'
+$printers = @(Get-Printer | ForEach-Object { [pscustomobject]@{ name = $_.Name; port = $_.PortName; driver = $_.DriverName; status = "$($_.PrinterStatus)"; default = $false } })
+$def = (Get-CimInstance -ClassName Win32_Printer -Filter 'Default=TRUE').Name
+foreach ($p in $printers) { if ($p.name -eq $def) { $p.default = $true } }
+$jobs = @(foreach ($p in Get-Printer) { Get-PrintJob -PrinterName $p.Name | ForEach-Object { [pscustomobject]@{ printer = $p.Name; id = $_.Id; doc = $_.DocumentName; status = "$($_.JobStatus)"; submitted = "$($_.SubmittedTime)" } } })
+$ports = @(Get-PrinterPort | Where-Object { $_.Name -like 'USB*' -or $_.Name -like 'DOT4*' } | ForEach-Object { [pscustomobject]@{ name = $_.Name; description = $_.Description } })
+[pscustomobject]@{ printers = $printers; jobs = $jobs; usbPorts = $ports } | ConvertTo-Json -Depth 4 -Compress
+`;
+
+function diagnose() {
+  return new Promise(resolve => {
+    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', DIAG],
+      { timeout: 30000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
+        const out = String(stdout || '').trim();
+        try { resolve({ ok: true, ...JSON.parse(out.slice(out.indexOf('{'))) }); }
+        catch { resolve({ ok: false, error: (String(stderr || '').trim() || err?.message || out || 'no output').slice(0, 500) }); }
+      });
+  });
+}
+
+/** One line for the log: the printer's port/status and its queue. */
+function summarize(d, focus) {
+  if (!d.ok) return `printer check failed: ${d.error}`;
+  const arr = v => (Array.isArray(v) ? v : v ? [v] : []);
+  const printers = arr(d.printers).filter(p => !focus || /DS|DNP|Citizen|SELPHY/i.test(p.name) || p.name === focus);
+  const jobs = arr(d.jobs);
+  return [
+    ...printers.map(p => `printer "${p.name}" port=${p.port} status=${p.status}${p.default ? ' (Windows default)' : ''} driver=${p.driver}`),
+    jobs.length ? `queue: ${jobs.map(j => `[${j.printer}] #${j.id} "${j.doc}" ${j.status}`).join('; ')}` : 'queue: empty (no jobs waiting)',
+    `usb ports: ${arr(d.usbPorts).map(p => `${p.name}${p.description ? ` (${p.description})` : ''}`).join(', ') || 'none'}`,
+  ].join('\n');
+}
+
+module.exports = { printWindows, paperSizes, diagnose, summarize, SCRIPT };

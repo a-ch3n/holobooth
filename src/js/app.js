@@ -2098,6 +2098,7 @@ ON_ENTER.admin = async () => {
       <div style="display:flex;gap:10px;align-items:center;margin-top:12px;flex-wrap:wrap">
         <button class="btn btn-ghost" id="print-test">Print test card sheet</button>
         <button class="btn btn-ghost" id="print-test-strip">Print test strip sheet</button>
+        ${window.booth.printers.diagnose ? '<button class="btn btn-ghost" id="print-check">Check printer</button>' : ''}
         <span id="print-test-result" style="font-size:12px;color:var(--ink-dim)"></span>
       </div>
       ${printers.length && !printers.some(p => p.willUse) && info.platform === 'win32'
@@ -2178,10 +2179,20 @@ ON_ENTER.admin = async () => {
       copies: 1, silent: true, pageSize: sheet.pageSize, lpOptions: sheet.lpOptions, windowsPaper: sheet.windowsPaper,
     }).catch(err => ({ ok: false, reason: err.message }));
     clog(`print test ${kind} sheet: ${r.ok ? `ok ${r.paper || ''}` : `FAILED ${r.reason || ''}`}`);
+    out.style.whiteSpace = 'pre-wrap';
     out.textContent = r.ok ? `Sent ✓ ${r.paper || ''}` : `Failed: ${r.reason}`;
     out.style.color = r.ok ? '' : 'var(--bad)';
     btn.disabled = false;
   };
+  $('#print-check')?.addEventListener('click', async e => {
+    const btn = e.currentTarget, out = $('#print-test-result');
+    btn.disabled = true; out.textContent = 'Asking Windows…';
+    const r = await window.booth.printers.diagnose().catch(err => ({ ok: false, text: err.message }));
+    clog(`printer check:\n${r.text}`);
+    out.style.whiteSpace = 'pre-wrap';
+    out.textContent = r.text;
+    btn.disabled = false;
+  });
   $('#print-test')?.addEventListener('click', e => printTest(e, 'card'));
   $('#print-test-strip')?.addEventListener('click', e => printTest(e, 'strip'));
 

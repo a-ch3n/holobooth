@@ -257,7 +257,13 @@ async function printImage({ dataUrl, widthIn, heightIn, printerName, copies = 1,
       try { printWin.destroy(); } catch {}
       printWin = null;
       console.log(`[print] windows result: ok=${ok}${reason ? `, reason=${reason}` : ''}`);
-      resolve({ ok, reason: reason || null });
+      // What happened to the job after Chromium handed it to Windows.
+      setTimeout(async () => {
+        const { diagnose, summarize } = require('./winprint');
+        const queue = summarize(await diagnose(), printerName);
+        console.log(`[print] after print:\n${queue}`);
+        resolve({ ok, reason: reason || null, paper: `method=${method} printer="${printerName}" landscape=${opts.landscape}\n${queue}` });
+      }, 3000);
     });
   });
 }
@@ -290,6 +296,15 @@ ipcMain.handle('printers:papers', async () => {
   const choice = require('./printers').choosePrinter(list, config.printing?.cardPrinterName || null);
   if (choice.error) return { ok: false, error: choice.error };
   return { ok: true, printer: choice.name, sizes: await require('./winprint').paperSizes(choice.name) };
+});
+
+// "Check printer" in the operator panel: what Windows says about every
+// printer, port and queued job.
+ipcMain.handle('printers:diagnose', async () => {
+  if (process.platform !== 'win32') return { ok: false, error: 'Windows only' };
+  const { diagnose, summarize } = require('./winprint');
+  const d = await diagnose();
+  return { ok: d.ok, text: summarize(d), raw: d };
 });
 
 // Print method switch in the operator panel: this PC only.
