@@ -646,6 +646,24 @@ the default one is ever retired.
 
 ## Printing
 
+### Printing on Windows (DNP DS40)
+
+Windows doesn't install DNP's driver by itself. Until it's installed, the
+printer won't appear in Windows Settings or in HoloBooth.
+
+1. Download the **DS40 Windows driver** from DNP's support site
+   (dnpphoto.com → Support → Drivers).
+2. Turn the printer on, plug it in by USB, and run DNP's installer.
+3. Check **Settings → Bluetooth & devices → Printers & scanners** lists it.
+
+With `cardPrinterName` / `stripPrinterName` left `null`, HoloBooth finds
+the photo printer by name (DNP, Citizen, SELPHY, Mitsubishi and so on)
+instead of using the Windows default, which is often "Microsoft Print to
+PDF". If there's no photo printer, it says so instead of printing
+nowhere. The operator panel marks the printer it will use **PRINTS HERE**.
+The 2-inch strip cut on Windows is a setting in the DS40's Printing
+Preferences, not the `lpOptions` used on Mac.
+
 Dye-subs are unforgiving about page geometry — if the page size doesn't match the
 media exactly, the driver silently scales and your 2.5×3.5″ card comes out at
 2.42×3.39″ and no longer fits a card sleeve. Both platforms solve it, differently:

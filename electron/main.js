@@ -192,6 +192,16 @@ async function printImage({ dataUrl, widthIn, heightIn, printerName, copies = 1,
     return result;
   }
 
+  // Pick the actual photo printer, not whatever Windows calls the default.
+  const printers = await win.webContents.getPrintersAsync().catch(() => []);
+  const choice = require('./printers').choosePrinter(printers, printerName);
+  if (choice.error) {
+    console.error(`[print] ${choice.error}`);
+    return { ok: false, reason: choice.error };
+  }
+  console.log(`[print] printing to "${choice.name}" (${choice.why})`);
+  printerName = choice.name;
+
   const html = `<!doctype html><html><head><meta charset="utf-8"><style>
     @page { size: ${widthIn}in ${heightIn}in; margin: 0; }
     html,body { margin:0; padding:0; width:${widthIn}in; height:${heightIn}in;
@@ -240,7 +250,13 @@ ipcMain.handle('config:save', (_e, next) => saveConfig(next));
 ipcMain.handle('config:reload', () => (config = loadConfig()));
 
 ipcMain.handle('printers:list', async () => {
-  try { return await win.webContents.getPrintersAsync(); } catch { return []; }
+  try {
+    const list = await win.webContents.getPrintersAsync();
+    if (process.platform !== 'win32') return list;
+    // Mark the one a card would actually go to, for the operator panel.
+    const choice = require('./printers').choosePrinter(list, config.printing?.cardPrinterName || null);
+    return list.map(p => ({ ...p, willUse: p.name === choice.name }));
+  } catch { return []; }
 });
 
 ipcMain.handle('print:image', (_e, args) => printImage(args));

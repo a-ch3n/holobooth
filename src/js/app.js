@@ -2080,8 +2080,10 @@ ON_ENTER.admin = async () => {
     <div class="card-panel">
       <h3>Printers</h3>
       ${printers.length
-        ? printers.map(p => `<div class="kv"><span>${p.displayName || p.name}</span><b>${p.isDefault ? 'DEFAULT' : ''}</b></div>`).join('')
+        ? printers.map(p => `<div class="kv"><span>${escapeHtml(p.displayName || p.name)}</span><b>${p.willUse ? 'PRINTS HERE' : p.isDefault ? 'DEFAULT' : ''}</b></div>`).join('')
         : '<div class="kv"><span>None detected</span></div>'}
+      ${printers.length && !printers.some(p => p.willUse) && info.platform === 'win32'
+        ? '<p style="color:var(--bad);font-size:13px;margin-top:10px">No photo printer installed — install the DNP driver (see README → Printing on Windows).</p>' : ''}
     </div>
 
     <div class="card-panel">
