@@ -208,7 +208,19 @@ async function printImage({ dataUrl, widthIn, heightIn, printerName, copies = 1,
   // September — landscape for a wide sheet, so Windows sends the driver its
   // own 4x6 paper turned sideways. driver / browser: alternatives kept for
   // other printers (operator panel → Print method).
-  const method = ['driver', 'browser'].includes(config.printing?.windowsMethod) ? config.printing.windowsMethod : 'classic';
+  const wp = require('./winprint');
+  const want = config.printing?.windowsMethod || 'photo';
+  const method = ['photo', 'driver', 'browser', 'classic'].includes(want) ? want : 'photo';
+  if (method === 'photo' && wp.photoViewerDll()) {
+    const r = await wp.printPhotoViewer({
+      dataUrl, printer: printerName,
+      copies: Math.max(1, Math.min(copies, config.printing?.copiesMax || 4)),
+    });
+    await new Promise(res => setTimeout(res, 3000));
+    const queue = wp.summarize(await wp.diagnose(), printerName);
+    console.log(`[print] photo viewer result: ${JSON.stringify(r)}\n${queue}`);
+    return { ...r, paper: `${r.paper || ''} printer="${printerName}"\n${queue}` };
+  }
   if (method === 'driver') {
     const r = await require('./winprint').printWindows({
       dataUrl, widthIn, heightIn, printer: printerName,
@@ -309,7 +321,7 @@ ipcMain.handle('printers:diagnose', async () => {
 
 // Print method switch in the operator panel: this PC only.
 ipcMain.handle('printers:method', (_e, method) => {
-  if (!['classic', 'driver', 'browser'].includes(method)) return { ok: false, error: `Unknown method ${method}` };
+  if (!['photo', 'classic', 'driver', 'browser'].includes(method)) return { ok: false, error: `Unknown method ${method}` };
   require('./local-config').writeLocalPatch(LOCAL_CONFIG_PATH, { printing: { windowsMethod: method } });
   config = loadConfig();
   console.log(`[print] operator chose print method "${method}"`);

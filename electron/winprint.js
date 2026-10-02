@@ -55,7 +55,13 @@ $doc.add_PrintPage({
     $b = $ev.PageBounds
     $hx = [single]$ev.PageSettings.HardMarginX; $hy = [single]$ev.PageSettings.HardMarginY
     # Origin is the printable area's corner; step back over the hard margin so the image covers the whole sheet.
-    $g.DrawImage($script:img, (New-Object System.Drawing.RectangleF((-$hx), (-$hy), [single]$b.Width, [single]$b.Height)))
+    # A plain 24-bit copy, drawn into whole-unit coordinates: some dye-sub
+    # drivers render GDI+'s 32-bit/alpha path as an empty (white) page.
+    $bmp = New-Object System.Drawing.Bitmap($script:img.Width, $script:img.Height, [System.Drawing.Imaging.PixelFormat]::Format24bppRgb)
+    $gg = [System.Drawing.Graphics]::FromImage($bmp); $gg.DrawImage($script:img, 0, 0, $script:img.Width, $script:img.Height); $gg.Dispose()
+    $g.PageUnit = [System.Drawing.GraphicsUnit]::Display
+    $g.DrawImage($bmp, (New-Object System.Drawing.Rectangle([int](-$hx), [int](-$hy), [int]$b.Width, [int]$b.Height)))
+    $bmp.Dispose()
     $script:info = "page=$($b.Width)x$($b.Height) hardMargin=$hx,$hy dpi=$($g.DpiX) unit=$($g.PageUnit) image=$($script:img.Width)x$($script:img.Height)"
     $script:ran = $true
   } catch { $script:drawErr = $_.Exception.Message }
@@ -154,4 +160,41 @@ function summarize(d, focus) {
   ].join('\n');
 }
 
-module.exports = { printWindows, paperSizes, diagnose, summarize, SCRIPT };
+/**
+ * Print a JPEG the way Windows prints a photo: Windows Photo Viewer's
+ * ImageView_PrintTo (built into Windows 10/11). It uses the printer's own
+ * default paper and Printing Preferences, like the test page that works, and
+ * so also that entry's cut setting (the strips entry has the 2-inch cut on,
+ * the cards entry doesn't). The picture is fitted to the page and turned to
+ * match it.
+ */
+function photoViewerDll() {
+  const roots = [process.env.ProgramW6432, process.env.ProgramFiles, 'C:\\Program Files'].filter(Boolean);
+  for (const r of roots) {
+    const p = path.join(r, 'Windows Photo Viewer', 'PhotoViewer.dll');
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
+async function printPhotoViewer({ dataUrl, printer, copies = 1 }) {
+  const dll = photoViewerDll();
+  if (!dll) return { ok: false, reason: 'Windows Photo Viewer (PhotoViewer.dll) not found on this PC' };
+  const img = path.join(os.tmpdir(), `holobooth-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.jpg`);
+  fs.writeFileSync(img, Buffer.from(String(dataUrl).split(',')[1] || '', 'base64'));
+  try {
+    for (let i = 0; i < Math.max(1, copies); i++) {
+      const r = await new Promise(resolve => {
+        execFile('rundll32.exe', [`${dll},ImageView_PrintTo`, '/pt', img, printer], { timeout: 60000, windowsHide: true },
+          err => resolve(err ? { ok: false, reason: `Photo Viewer print failed: ${err.message}` } : { ok: true }));
+      });
+      if (!r.ok) return r;
+    }
+    return { ok: true, reason: null, paper: 'method=photo (printer default paper and preferences)' };
+  } finally {
+    // The spooler reads the file after rundll32 returns; leave it a while.
+    setTimeout(() => fs.rm(img, { force: true }, () => {}), 120000);
+  }
+}
+
+module.exports = { printWindows, printPhotoViewer, photoViewerDll, paperSizes, diagnose, summarize, SCRIPT };
