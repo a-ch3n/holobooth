@@ -204,7 +204,12 @@ async function printImage({ dataUrl, widthIn, heightIn, printerName, copies = 1,
 
   // Default: through the driver's own paper sizes, like Windows' test page
   // (see electron/winprint.js). printing.windowsMethod: "chromium" = the old way.
-  if (!['chromium', 'browser'].includes(config.printing?.windowsMethod)) {
+  // classic (default): the Chromium print that worked on this DS40 in
+  // September — landscape for a wide sheet, so Windows sends the driver its
+  // own 4x6 paper turned sideways. driver / browser: alternatives kept for
+  // other printers (operator panel → Print method).
+  const method = ['driver', 'browser'].includes(config.printing?.windowsMethod) ? config.printing.windowsMethod : 'classic';
+  if (method === 'driver') {
     const r = await require('./winprint').printWindows({
       dataUrl, widthIn, heightIn, printer: printerName,
       copies: Math.max(1, Math.min(copies, config.printing?.copiesMax || 4)),
@@ -228,11 +233,10 @@ async function printImage({ dataUrl, widthIn, heightIn, printerName, copies = 1,
   const opts = {
     silent,
     printBackground: true,
-    // Not `landscape: widthIn > heightIn` — pageSize below already gives the
-    // exact physical width/height, wide-first or tall-first as wanted. Also
-    // telling Windows "landscape" rotates that already-oriented page again,
-    // so a wide (e.g. 6x4 card gang sheet) page came out sideways.
-    landscape: false,
+    // A wide sheet must be sent as landscape: without it Windows hands the
+    // DS40 a page wider than its 4x6 paper and the driver drops the job
+    // (Sept 21's landscape:false, meant for the Mac, stopped Windows printing).
+    landscape: widthIn > heightIn,
     copies: Math.max(1, Math.min(copies, config.printing?.copiesMax || 4)),
     margins: { marginType: 'none' },
     pageSize: {
@@ -243,10 +247,7 @@ async function printImage({ dataUrl, widthIn, heightIn, printerName, copies = 1,
   };
   // "browser": no custom size — print on the printer's own default paper
   // (DNP's driver only accepts its own forms), turned to suit the sheet.
-  if (config.printing?.windowsMethod === 'browser') {
-    delete opts.pageSize;
-    opts.landscape = widthIn > heightIn;
-  }
+  if (method === 'browser') delete opts.pageSize;
   if (printerName) opts.deviceName = printerName;
 
   console.log('[print] windows webContents.print options:', JSON.stringify(opts));
@@ -272,8 +273,10 @@ ipcMain.handle('printers:list', async () => {
     const list = await win.webContents.getPrintersAsync();
     if (process.platform !== 'win32') return list;
     // Mark the one a card would actually go to, for the operator panel.
-    const choice = require('./printers').choosePrinter(list, config.printing?.cardPrinterName || null);
-    return list.map(p => ({ ...p, willUse: p.name === choice.name }));
+    const { choosePrinter } = require('./printers');
+    const cards = choosePrinter(list, config.printing?.cardPrinterName || null);
+    const strips = choosePrinter(list, config.printing?.stripPrinterName || config.printing?.cardPrinterName || null);
+    return list.map(p => ({ ...p, willUse: p.name === cards.name, willUseStrips: p.name === strips.name }));
   } catch { return []; }
 });
 
@@ -291,7 +294,7 @@ ipcMain.handle('printers:papers', async () => {
 
 // Print method switch in the operator panel: this PC only.
 ipcMain.handle('printers:method', (_e, method) => {
-  if (!['driver', 'browser'].includes(method)) return { ok: false, error: `Unknown method ${method}` };
+  if (!['classic', 'driver', 'browser'].includes(method)) return { ok: false, error: `Unknown method ${method}` };
   require('./local-config').writeLocalPatch(LOCAL_CONFIG_PATH, { printing: { windowsMethod: method } });
   config = loadConfig();
   console.log(`[print] operator chose print method "${method}"`);
@@ -301,12 +304,15 @@ ipcMain.handle('printers:method', (_e, method) => {
 // "Use this printer" in the operator panel. Saved to this PC's
 // booth.config.local.json, never the committed config; the renderer can
 // set only these two keys through here.
-ipcMain.handle('printers:use', async (_e, name) => {
+ipcMain.handle('printers:use', async (_e, name, role = 'both') => {
   const list = await win.webContents.getPrintersAsync().catch(() => []);
   if (!list.some(p => p.name === name)) return { ok: false, error: `No printer named "${name}"` };
-  require('./local-config').writeLocalPatch(LOCAL_CONFIG_PATH, { printing: { cardPrinterName: name, stripPrinterName: name } });
+  const printing = role === 'cards' ? { cardPrinterName: name }
+    : role === 'strips' ? { stripPrinterName: name }
+    : { cardPrinterName: name, stripPrinterName: name };
+  require('./local-config').writeLocalPatch(LOCAL_CONFIG_PATH, { printing });
   config = loadConfig();
-  console.log(`[print] operator chose "${name}" for cards and strips`);
+  console.log(`[print] operator chose "${name}" for ${role}`);
   return { ok: true, config };
 });
 

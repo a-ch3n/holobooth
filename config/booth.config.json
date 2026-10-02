@@ -279,8 +279,8 @@
       "windowsPaper": "2\\s*inch|2in|x\\s*2|cut"
     },
     "silent": true,
-    "//windowsMethod": "Windows only. driver (default): print onto the printer driver's own paper size, like Windows' test page — needed for DNP. chromium: the browser's custom-page-size print, which DNP's driver doesn't accept.",
-    "windowsMethod": "driver",
+    "//windowsMethod": "Windows only. classic (default): the print that worked on the DS40 — a 6x4 sheet sent landscape. driver: draw onto the driver's own paper size via PowerShell. browser: no page size, the printer's default paper. Switchable in the operator panel (Print method).",
+    "windowsMethod": "classic",
     "copiesMax": 4,
     "lpOptions": [],
     "dryRun": false,

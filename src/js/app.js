@@ -2081,18 +2081,23 @@ ON_ENTER.admin = async () => {
     <div class="card-panel">
       <h3>Printers</h3>
       ${printers.length
-        ? printers.map(p => `<div class="kv"><span>${escapeHtml(p.displayName || p.name)}</span><b>${p.willUse ? 'PRINTS HERE'
-            : window.booth.printers.use ? `<button class="btn btn-ghost" style="padding:4px 12px;font-size:13px" data-use-printer="${escapeHtml(p.name)}">Use this printer</button>`
-            : p.isDefault ? 'DEFAULT' : ''}</b></div>`).join('')
+        ? printers.map(p => {
+            const tag = [p.willUse && 'CARDS', p.willUseStrips && 'STRIPS'].filter(Boolean).join(' + ');
+            const btn = (role, label) => `<button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;margin-left:6px" data-use-printer="${escapeHtml(p.name)}" data-role="${role}">${label}</button>`;
+            return `<div class="kv"><span>${escapeHtml(p.displayName || p.name)}${tag ? ` <b style="color:var(--accent)">· ${tag}</b>` : ''}</span><b>${window.booth.printers.use
+              ? `${p.willUse ? '' : btn('cards', 'Cards')}${p.willUseStrips ? '' : btn('strips', 'Strips')}`
+              : p.isDefault ? 'DEFAULT' : ''}</b></div>`;
+          }).join('')
         : '<div class="kv"><span>None detected</span></div>'}
       ${info.platform === 'win32' && printers.some(p => p.willUse) ? `
         <div class="kv"><span>Paper sizes</span><b id="paper-sizes" style="font-weight:400;font-size:12px;text-align:right">loading…</b></div>
-        <div class="kv"><span>Print method</span><b>${['driver', 'browser'].map(m => {
-          const on = (S.cfg.printing?.windowsMethod === 'browser' ? 'browser' : 'driver') === m;
-          return `<button class="btn ${on ? '' : 'btn-ghost'}" style="padding:4px 12px;font-size:13px;margin-left:6px" data-print-method="${m}">${m === 'driver' ? 'Driver paper' : 'Browser'}</button>`;
+        <div class="kv"><span>Print method</span><b>${[['classic', 'Standard'], ['driver', 'Driver paper'], ['browser', 'Browser']].map(([m, label]) => {
+          const cur = ['driver', 'browser'].includes(S.cfg.printing?.windowsMethod) ? S.cfg.printing.windowsMethod : 'classic';
+          return `<button class="btn ${cur === m ? '' : 'btn-ghost'}" style="padding:4px 10px;font-size:12px;margin-left:6px" data-print-method="${m}">${label}</button>`;
         }).join('')}</b></div>` : ''}
       <div style="display:flex;gap:10px;align-items:center;margin-top:12px;flex-wrap:wrap">
-        <button class="btn btn-ghost" id="print-test">Print test sheet</button>
+        <button class="btn btn-ghost" id="print-test">Print test card sheet</button>
+        <button class="btn btn-ghost" id="print-test-strip">Print test strip sheet</button>
         <span id="print-test-result" style="font-size:12px;color:var(--ink-dim)"></span>
       </div>
       ${printers.length && !printers.some(p => p.willUse) && info.platform === 'win32'
@@ -2161,27 +2166,31 @@ ON_ENTER.admin = async () => {
     ON_ENTER.admin();
   }));
 
-  $('#print-test')?.addEventListener('click', async e => {
+  const printTest = async (e, kind) => {
     const btn = e.currentTarget, out = $('#print-test-result');
     btn.disabled = true; out.textContent = 'Printing…';
-    const sheet = S.cfg.printing?.sheet?.enabled ? S.cfg.printing.sheet : { widthIn: 6, heightIn: 4 };
+    const pr = S.cfg.printing || {};
+    const sheet = (kind === 'strip' ? pr.stripSheet : pr.sheet)?.enabled ? (kind === 'strip' ? pr.stripSheet : pr.sheet) : { widthIn: 6, heightIn: 4 };
     const r = await window.booth.printers.print({
-      dataUrl: testSheet(sheet.widthIn, sheet.heightIn, S.cfg.printing?.dpi || 300).toDataURL('image/jpeg', 0.95),
-      widthIn: sheet.widthIn, heightIn: sheet.heightIn, printerName: S.cfg.printing?.cardPrinterName || null,
-      copies: 1, silent: true, pageSize: sheet.pageSize, lpOptions: sheet.lpOptions,
+      dataUrl: testSheet(sheet.widthIn, sheet.heightIn, pr.dpi || 300, kind).toDataURL('image/jpeg', 0.95),
+      widthIn: sheet.widthIn, heightIn: sheet.heightIn,
+      printerName: (kind === 'strip' ? pr.stripPrinterName || pr.cardPrinterName : pr.cardPrinterName) || null,
+      copies: 1, silent: true, pageSize: sheet.pageSize, lpOptions: sheet.lpOptions, windowsPaper: sheet.windowsPaper,
     }).catch(err => ({ ok: false, reason: err.message }));
-    clog(`print test sheet: ${r.ok ? `ok ${r.paper || ''}` : `FAILED ${r.reason || ''}`}`);
+    clog(`print test ${kind} sheet: ${r.ok ? `ok ${r.paper || ''}` : `FAILED ${r.reason || ''}`}`);
     out.textContent = r.ok ? `Sent ✓ ${r.paper || ''}` : `Failed: ${r.reason}`;
     out.style.color = r.ok ? '' : 'var(--bad)';
     btn.disabled = false;
-  });
+  };
+  $('#print-test')?.addEventListener('click', e => printTest(e, 'card'));
+  $('#print-test-strip')?.addEventListener('click', e => printTest(e, 'strip'));
 
   $$('[data-use-printer]').forEach(b => b.addEventListener('click', async () => {
     b.disabled = true;
-    const r = await window.booth.printers.use(b.dataset.usePrinter).catch(e => ({ ok: false, error: e.message }));
+    const r = await window.booth.printers.use(b.dataset.usePrinter, b.dataset.role).catch(e => ({ ok: false, error: e.message }));
     if (!r.ok) { toast(r.error, true); b.disabled = false; return; }
     S.cfg = r.config;
-    toast(`Printing to ${b.dataset.usePrinter}`);
+    toast(`${b.dataset.role === 'strips' ? 'Strips' : 'Cards'} print to ${b.dataset.usePrinter}`);
     ON_ENTER.admin();
   }));
 
@@ -2208,10 +2217,27 @@ ON_ENTER.admin = async () => {
  * colour bands, a border 0.1in in from every edge (shows any cropping), TOP
  * with an arrow, and each corner labelled.
  */
-function testSheet(widthIn, heightIn, dpi) {
+function testSheet(widthIn, heightIn, dpi, kind = 'card') {
   const c = document.createElement('canvas');
   c.width = Math.round(widthIn * dpi); c.height = Math.round(heightIn * dpi);
   const x = c.getContext('2d'), W = c.width, H = c.height;
+  if (kind === 'strip') {
+    // Two halves along the sheet's short side, where the DS40's 2-inch cut
+    // should fall: if the cut works, STRIP 1 and STRIP 2 come out as two pieces.
+    const half = (H >= W ? [[0, 0, W / 2, H], [W / 2, 0, W / 2, H]] : [[0, 0, W, H / 2], [0, H / 2, W, H / 2]]);
+    [['#1e88e5', 'STRIP 1'], ['#8e24aa', 'STRIP 2']].forEach(([col, label], i) => {
+      const [hx, hy, hw, hh] = half[i];
+      x.fillStyle = col; x.fillRect(hx, hy, hw, hh);
+      x.save(); x.translate(hx + hw / 2, hy + hh / 2); if (hh > hw) x.rotate(-Math.PI / 2);
+      x.fillStyle = '#fff'; x.strokeStyle = '#000'; x.lineWidth = dpi * 0.02; x.textAlign = 'center'; x.textBaseline = 'middle';
+      x.font = `900 ${dpi * 0.4}px system-ui, sans-serif`; x.strokeText(label, 0, 0); x.fillText(label, 0, 0);
+      x.restore();
+    });
+    x.setLineDash([dpi * 0.12, dpi * 0.08]); x.strokeStyle = '#fff'; x.lineWidth = dpi * 0.03; x.beginPath();
+    if (H >= W) { x.moveTo(W / 2, 0); x.lineTo(W / 2, H); } else { x.moveTo(0, H / 2); x.lineTo(W, H / 2); }
+    x.stroke();
+    return c;
+  }
   const colors = ['#e53935', '#fb8c00', '#fdd835', '#43a047', '#1e88e5', '#8e24aa'];
   colors.forEach((col, i) => { x.fillStyle = col; x.fillRect(0, (i * H) / colors.length, W, H / colors.length + 1); });
   x.strokeStyle = '#000'; x.lineWidth = dpi * 0.03;
