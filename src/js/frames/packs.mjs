@@ -659,4 +659,4 @@ export function pickerGroups(now = new Date()) {
     .filter(g => g.frames.length);
 }
 
-export { ENERGY, ENERGY_IDS, energy };
+export { ENERGY, ENERGY_IDS, energy, themeFor };

@@ -333,7 +333,7 @@ export function renderPropBoard(ctx, opts) {
 /** Renders a strip. photos should be the session's shots in order. */
 export function renderStrip(ctx, {
   W, H, photos, card, frame: sourceFrame = null, theme = null,
-  stickers = null, stickerImages = null,
+  personalization = null, stickers = null, stickerImages = null,
 }) {
   const frame = sourceFrame || {
     template: 'strip',
@@ -343,8 +343,13 @@ export function renderStrip(ctx, {
       fontDisplay: 'Rajdhani, Impact, sans-serif', fontBody: 'Helvetica, Arial, sans-serif',
     },
   };
+  // Same personalisation rule as renderCard(): the strip's own header only
+  // shows a typed name once the customer has actually typed one, otherwise
+  // it falls back to the strip theme's own name — never a blank/placeholder.
+  const personal = buildPersonal(personalization || {});
   const meta = {
     ...card,
+    personal,
     focal: { x: 0.5, y: 0.4 },
     dateLabel: new Date(card?.mintedAt || Date.now()).toLocaleDateString('en-US',
       { month: 'short', day: 'numeric', year: 'numeric' }),

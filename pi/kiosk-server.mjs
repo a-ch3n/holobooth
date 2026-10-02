@@ -24,13 +24,19 @@ import { join, extname, normalize, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hostname, arch, platform as osPlatform, loadavg, totalmem, freemem } from 'node:os';
 import { printImage, listPrinters } from './print.mjs';
+import { createRequire } from 'node:module';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CONFIG_PATH = join(ROOT, 'config', 'booth.config.json');
+const LOCAL_CONFIG_PATH = join(ROOT, 'config', 'booth.config.local.json');
+const { readLocal, applyLocal, stripLocal } = createRequire(import.meta.url)('../electron/local-config.js');
+const readBase = () => JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
+const { createStills } = createRequire(import.meta.url)('../electron/stills.js');
+const loadConfig = () => applyLocal(readBase(), readLocal(LOCAL_CONFIG_PATH));
 const PORT = Number(process.env.PORT || 4180);
 const DATA_DIR = process.env.HOLOBOOTH_DATA || join(ROOT, 'data');
 
-let config = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
+let config = loadConfig();
 await mkdir(DATA_DIR, { recursive: true });
 
 /* ============================================================== ledgers */
@@ -55,16 +61,30 @@ function readLedger(name) {
   } catch { return []; }
 }
 
+/* ============================================================== stills */
+
+let stills = null, stillsKey = '';
+async function stillsCall(fn) {
+  try {
+    const cfg = config.camera?.stills || {};
+    if (!stills || JSON.stringify(cfg) !== stillsKey) {
+      stills = createStills(cfg, { dir: join(DATA_DIR, 'stills', new Date().toISOString().slice(0, 10)) });
+      stillsKey = JSON.stringify(cfg);
+    }
+    return { ok: true, ...(await fn(stills)) };
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+
 /* ================================================================= RPC */
 
 const METHODS = {
   'config.get': () => config,
   'config.save': async next => {
     config = next;
-    await writeFile(CONFIG_PATH, JSON.stringify(next, null, 2));
+    await writeFile(CONFIG_PATH, JSON.stringify(stripLocal(next, readBase(), readLocal(LOCAL_CONFIG_PATH)), null, 2));
     return true;
   },
-  'config.reload': () => (config = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'))),
+  'config.reload': () => (config = loadConfig()),
 
   'printers.list': () => listPrinters(),
   'printers.print': args => {
@@ -101,6 +121,11 @@ const METHODS = {
       byProduct: rows.reduce((m, r) => ((m[r.productId] = (m[r.productId] || 0) + 1), m), {}),
     };
   },
+
+  // Tethered camera (camera.stills) — gphoto2 on the Pi. Same { ok, … } shape as Electron.
+  'stills.status': () => stillsCall(async st => { const r = await st.status(); if (!r.ok) throw new Error(r.message); return r; }),
+  'stills.liveview': () => stillsCall(async st => ({ jpeg: await st.liveview() })),
+  'stills.capture': () => stillsCall(st => st.capture()),
 
   'media.save': async ({ name, dataUrl }) => {
     const dir = join(DATA_DIR, 'media', new Date().toISOString().slice(0, 10));
@@ -224,6 +249,8 @@ createServer(async (req, res) => {
     let p = path === '/' ? '/src/index.html' : path;
     const file = join(ROOT, normalize(p).replace(/^(\.\.[/\\])+/, ''));
     if (!file.startsWith(ROOT)) { res.writeHead(403).end('forbidden'); return; }
+    // Holds the cloud server's kiosk key — never hand it to a browser.
+    if (file.endsWith('booth.config.local.json')) { res.writeHead(403).end('forbidden'); return; }
     const s = await stat(file);
     if (s.isDirectory()) { res.writeHead(404).end('not found'); return; }
     res.writeHead(200, {

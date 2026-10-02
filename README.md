@@ -68,7 +68,7 @@ is a card you refund.
 src/js/app.js         the state machine: attract → pick → pay → shoot → reveal
 src/js/bridge.js      one window.booth API, three backends (see below)
 src/js/camera.js      HDMI capture card detection, capture, burst
-src/js/payments.js    stripe-terminal | stripe-qr | mock, one interface
+src/js/payments.js    stripe-smart-reader | stripe-terminal | stripe-qr | mock, one interface
 src/js/gif.js         GIF89a encoder (median-cut + LZW), no dependencies
 src/js/frames/
   energy.mjs          the 14 types: colours, glyphs, pips, weakness chart
@@ -146,8 +146,19 @@ carousel and print master all size themselves from it.
 ## The session flow
 
 ```
-attract → pick a style → [personalise] → pay → shoot → DECORATE → reveal → print
+attract → pick a style → [personalise] → pay → [angle] → shoot → [filter] → DECORATE → reveal → print
 ```
+
+`[angle]` and `[filter]` are both optional and skipped automatically unless
+configured: `[angle]` only appears with 2+ entries in `camera.angles.list`,
+`[filter]` only with `filters.enabled` and a real `filters.list` in
+`config/booth.config.json`. `[filter]` runs on the actual photo just taken,
+not a live camera feed — tap through the looks (Vintage Film, a punchier
+point-and-shoot look, a neutral "Professional" look, "Original" to go back
+to unfiltered, by default) and hit Next once you're happy. Nothing is baked
+in until then: the raw shots are kept untouched the whole session, so picking
+a filter is never a one-way trip. Whatever's chosen is what actually prints
+and gets delivered — not a screen-only effect.
 
 `DECORATE` is where the session actually becomes theirs, and it has three tabs:
 
@@ -359,24 +370,150 @@ Camera HDMI → capture card → USB. The card enumerates as a UVC webcam, so
 4. `warmupMs` exists because capture cards output black for a beat while they
    lock onto the signal. Don't set it to 0.
 
+**Two cameras through OBS (`camera.obsSplit`, on by default).** Opening
+two capture cards at once can make Windows cut off the first one, and OBS
+Virtual Camera only sends one picture. So OBS holds both cameras and puts
+them **side by side in one scene**. HoloBooth opens OBS Virtual Camera once
+and cuts it in two: each angle tile gets a live preview, and either can be
+picked and shot at full 1920×1080.
+
+1. **OBS → Settings → Video:** Base (Canvas) and Output (Scaled)
+   resolution both **3840x1080**, FPS **30**.
+2. Make a new scene, e.g. **Booth**. Add both cameras to it with
+   **Sources → + → Video Capture Device → Add Existing**:
+   - **M50 on the left half:** right-click → Transform → Edit Transform,
+     Position **0, 0**, Size **1920 × 1080**.
+   - **GoPro on the right half:** Position **1920, 0**, Size **1920 × 1080**.
+3. Select the **Booth** scene and click **Start Virtual Camera**.
+4. Start HoloBooth. Which half is which angle is `obsRegion` in each
+   `camera.angles.list` entry: 0 = left, 1 = right.
+
+Keep OBS running in the background. If it isn't running, the tiles say so
+and the shoot opens the camera directly instead. The camera log records
+the size OBS is actually sending, and warns if it isn't 3840x1080.
+
+To start OBS with the virtual camera already on, use a shortcut:
+`"C:\Program Files\obs-studio\bin\64bit\obs64.exe" --startvirtualcam --scene "Booth" --minimize-to-tray`
+(set the shortcut's "Start in" to that `64bit` folder).
+
+**Camera log:** the operator panel (tap the bottom-left corner 5 times)
+has a **Camera log** of everything the camera did: devices seen, what was
+opened at what size, drops, freezes and reconnects, and screen changes.
+**Copy camera log** puts it on the clipboard to send to whoever is helping.
+
 Cameras with a **micro** HDMI port need a locking or right-angle cable. This is
 the single most common failure at an event: someone brushes the cable, the
 signal drops, and the next customer gets a black card.
+
+### Real photos with flash (Canon M50 and other DSLR/mirrorless bodies)
+
+With `camera.stills.enabled`, HoloBooth works the way Lumabooth does. The
+camera focuses, fires its shutter **and flash**, and the full-resolution
+photo goes on the card and strip instead of a video frame. The same USB
+cable also carries the live view the customer poses to.
+
+**The camera must support USB remote shooting.** The **Canon EOS M50
+does not**: over USB it only gives live view, so it can't fire its shutter
+or flash from a computer, in HoloBooth or anything else. Use the M50 as a
+video camera instead (EOS Webcam Utility or HDMI, above), with constant
+lighting. Canon bodies that do tether well and are common in booths
+include the Rebel T6/T7/T7i and SL2/SL3 (2000D/4000D/800D/200D/250D).
+
+**Windows: digiCamControl** (free, [digicamcontrol.com](https://digicamcontrol.com)).
+It talks to Canon cameras through Canon's own SDK, the same way Lumabooth does.
+
+1. Install digiCamControl, plug the camera in by USB and open the app.
+   Check that it shows the camera and can take a photo.
+2. **File → Settings → Webserver:** turn on "Use web server", port 5513,
+   then restart digiCamControl. Leave it running (minimised is fine).
+3. Start HoloBooth. Open the operator panel (tap the bottom-left corner 5
+   times) and press **Take a test photo**. It shows the photo, its size and
+   how long it took.
+
+**Mac, Linux or Raspberry Pi: gphoto2** (`brew install gphoto2` or
+`sudo apt install gphoto2`). Nothing else to set up. On a Mac, HoloBooth
+closes macOS's own camera daemon first, because it grabs the camera on plug-in.
+
+**Camera settings (M50):**
+- **Mode:** the dial on **M** or **Av**, not movie mode. Image quality
+  **JPEG** (L / Fine), not RAW only.
+- **Focus:** AF on, **One-Shot**, **Face + Tracking**. If focus can't
+  lock (too dark, nothing in frame), the camera refuses to shoot. HoloBooth
+  then uses the live view frame for that shot and keeps going.
+- **Flash:** pop up the built-in flash and set it to fire. Better: a
+  speedlight on the hot shoe, or a radio trigger (Godox X2T-C) to
+  off-camera strobes. Keep the shutter at **1/200 s or slower**, the M50's
+  flash sync limit. Lights also help autofocus.
+- **Wi-Fi/Bluetooth off**, because the M50 disables USB control while
+  they're on.
+- **Auto power off disabled.** Use a dummy battery (ACK-E12) for power.
+- **Only one program can hold the camera.** Quit Lumabooth, OBS and EOS
+  Webcam Utility.
+
+**What to expect:**
+- **Timing:** each photo takes about 1–3 s to focus, shoot and transfer,
+  with 📸 on screen meanwhile. Live view pauses during that.
+- **Live view** from digiCamControl runs at ~10–15 fps. From gphoto2 it's
+  only a few fps. For a smooth preview, set `camera.stills.preview` to
+  `"video"` and feed an HDMI capture card, while photos still go over USB.
+- **The GIF** is built from live view frames, so it's lower resolution
+  than the prints.
+- **Originals** are kept at full size: digiCamControl and gphoto2 save
+  them under the app's data folder in `stills/<date>/`. The kiosk uses a
+  copy scaled to `maxDimension` (3000 px), which is plenty for 300 dpi.
+- **Fallback:** if the camera can't be reached at the start of a session,
+  the booth falls back to the video camera (`preferredLabels`) and shows
+  why. A paid customer still gets a shoot.
+- **Camera angles:** with several angles, only `camera.stills.angle`
+  (default `standard`) uses the tethered camera. The others stay video.
+
+Set `camera.stills.enabled` to `false` to go back to video frames (EOS
+Webcam Utility or a capture card, see above).
 
 ---
 
 ## Payments
 
-Three providers behind one interface, chosen by `payments.provider`:
+**Test vs real, without editing anything:**
+
+| Command | Payments | Window |
+|---|---|---|
+| `npm run dev` | mock (TEST MODE badge) | windowed + DevTools |
+| `npm run start:test` | mock (TEST MODE badge) | full-screen kiosk (rehearsal) |
+| `npm run dev:live` | real | windowed + DevTools |
+| `npm start` | real (`payments.provider`) | full-screen kiosk (the event) |
+
+On the mock reader, every sale approves after ~2 s. Press **D** on the pay
+screen to simulate a decline.
+
+**Card reader and QR together (`payments.offerQr`, on).** With a WisePOS E,
+S700 or M2, the pay screen also shows a QR code. The customer taps their
+card, or scans and pays on their phone (Apple Pay, Google Pay or card).
+The first payment to complete is the sale. The other is stopped: the
+reader is cleared, and the QR link is expired so it can't be paid later. A
+payment that lands at the same instant, or as the customer presses
+Cancel, is refunded automatically, so nobody is charged twice. After a
+declined card, a fresh sale goes back on the reader (up to 3 tries) while
+the QR stays up. If the reader is offline, the screen falls back to QR
+only. After paying by QR, the phone shows a confirmation page from the
+server. That page only loads when the server is public (the cloud server
+with `PUBLIC_URL`), but the payment goes through either way.
+
+Four providers behind one interface, chosen by `payments.provider`:
 
 - **`mock`** — approves after a beat. Develop against this.
-- **`stripe-terminal`** — the real thing, for a Stripe **M2** reader. The M2 is
-  Bluetooth-only, so the kiosk can't drive it directly: the server creates a
-  PaymentIntent and hands it off, a **phone running `companion-app/`** pairs
-  with the M2 over Bluetooth and actually collects the tap, and the kiosk
-  polls the server until that session flips to paid. Capture happens as soon
-  as the tap is approved, same as before — see `companion-app/README.md` for
-  the full flow and `server/index.js`'s `/sessions` endpoints.
+- **`stripe-smart-reader`** — a **WisePOS E** or **S700**. These have their own
+  Wi-Fi/Ethernet, so `server/index.js` drives the reader directly over the
+  internet: the kiosk creates a sale, the server pushes it to the reader's
+  screen (`process_payment_intent`), the customer taps there, and the kiosk
+  polls until it's paid. **Just this PC and the reader — no phone, no
+  companion app.** Declines and walk-aways are read off the reader's own
+  action status, so it works without webhooks configured.
+- **`stripe-terminal`** — for a Stripe **M2** reader. The M2 is Bluetooth-only,
+  so the kiosk can't drive it directly: the server creates a PaymentIntent
+  and hands it off, a **phone running `companion-app/`** pairs with the M2
+  over Bluetooth and actually collects the tap, and the kiosk polls the
+  server until that session flips to paid — see `companion-app/README.md`.
 - **`stripe-qr`** — customer pays on their phone from an on-screen QR. No
   hardware, slower line.
 
@@ -386,9 +523,27 @@ The secret key lives only in `server/index.js`:
 STRIPE_SECRET_KEY=sk_test_... npm run server
 ```
 
-Set `payments.stripe.locationId`, register the reader in the Stripe dashboard,
-and the app finds it on boot. Leave `stripe.simulated: true` to test the whole
-flow against Stripe's simulated reader before hardware arrives.
+### Smart reader setup (once per reader)
+
+1. Create a Location in the Stripe Dashboard (Terminal → Locations) and put
+   its `tml_...` id in `payments.stripe.locationId`.
+2. On the reader: **Settings → Generate pairing code** (three words).
+3. Register it:
+   ```bash
+   STRIPE_SECRET_KEY=sk_live_... npm run reader:register -- sepia-cerulean-aqua
+   ```
+   It prints a `tmr_...` reader id. (Run it with no code to list readers
+   already registered at the location.)
+4. In `booth.config.json` set `"provider": "stripe-smart-reader"` and
+   `"reader": { "id": "tmr_..." }`, then restart the server. Its startup log
+   shows which reader it's driving.
+
+**No hardware yet?** Set `payments.stripe.simulated: true` and start the
+server with an `sk_test_` key — it finds or creates a test Location and a
+simulated WisePOS E by itself on boot, no registration step. On the kiosk's
+pay screen, press **T** to tap a working card or **D** for a decline
+(Stripe's `4000000000000002` test card). Refuses to run with a live key,
+and never creates anything in your live account.
 
 ### Product catalog
 
@@ -405,7 +560,60 @@ receipts show the product by name) instead of an inline, unnamed line item.
 Re-run it any time a price or product name changes in the config — it
 updates in place rather than creating duplicates, archiving the old Price
 if the amount changed. Both payment endpoints look the amount up server-side
-from `productId`; the kiosk's own `amount` is never trusted.
+from `productId`; the kiosk's own `amount` is never trusted. The kiosk does
+send the price it showed, and the server refuses the sale (409, "Price
+mismatch") if the two copies of the config disagree, so update the server
+whenever you change a price.
+
+### Cloud server (download links that work on any phone)
+
+Run locally, the download QR points at `127.0.0.1`, which is the customer's
+own phone, so it can't work. It also dies when the booth PC is packed away.
+Put `server/index.js` on a ~$5/month VPS instead (DigitalOcean, Hetzner,
+Vultr, Lightsail: Ubuntu 24.04, 1 GB RAM). One script sets up Node, HTTPS
+(Caddy + Let's Encrypt), a systemd service and the keys:
+
+```bash
+ssh root@YOUR.SERVER.IP
+curl -fsSL https://raw.githubusercontent.com/a-ch3n/holobooth/main/deploy/setup-vps.sh -o setup-vps.sh
+sudo bash setup-vps.sh
+```
+
+With no domain it uses `https://<ip-with-dashes>.sslip.io`. With a domain,
+point an A record at the server and run `sudo DOMAIN=photos.example.com bash
+setup-vps.sh`. It asks for the Stripe secret key, which is stored in
+`/etc/holobooth.env` on the server and nowhere else. At the end it prints
+two lines for the booth PC. Put them in **`config/booth.config.local.json`**,
+which is gitignored:
+
+```json
+{ "server": { "url": "https://203-0-113-5.sslip.io", "kioskKey": "…" } }
+```
+
+`server.url` points payments, AI names and photo uploads at the VPS, so the
+booth PC no longer runs `npm run server` at all. With a smart reader, the
+reader and the kiosk both just need internet.
+
+- **The kiosk key.** Everything that takes money, refunds, uploads or spends
+  API quota requires the `x-kiosk-key` header once `PUBLIC_URL` is set, and
+  the server won't start without one. Download pages, `/qr` and `/health`
+  stay open. The key never goes in `booth.config.json`, because this repo is
+  public.
+- **Download links** are 128-bit random ids, so they can't be guessed, and
+  expire after `delivery.retentionDays`. Each sale is roughly 5–10 MB, so a
+  25 GB disk holds a few thousand sales.
+- **Going live on the server:** put `sk_live_…` in `/etc/holobooth.env`, and
+  put the reader id and `"stripe": { "simulated": false }` in the server's
+  own `/opt/holobooth/config/booth.config.local.json`, e.g.
+  `{ "payments": { "stripe": { "simulated": false }, "reader": { "id": "tmr_…" } } }`,
+  then `systemctl restart holobooth`.
+- **Webhooks** are optional. Without `STRIPE_WEBHOOK_SECRET` the server
+  checks every webhook against Stripe before believing it.
+- **Update:** re-run `sudo bash setup-vps.sh`. It pulls, reinstalls and
+  restarts, and keeps the keys and photos. Logs: `journalctl -u holobooth -f`.
+- **Trade-off:** the upload now crosses the venue's internet before the
+  download QR appears. On weak Wi-Fi, that's a few seconds on the reveal
+  screen.
 
 ---
 
@@ -437,6 +645,37 @@ the default one is ever retired.
 ---
 
 ## Printing
+
+### Printing on Windows (DNP DS40)
+
+Windows doesn't install DNP's driver by itself. Until it's installed, the
+printer won't appear in Windows Settings or in HoloBooth.
+
+1. Download the **DS40 Windows driver** from DNP's support site
+   (dnpphoto.com → Support → Drivers).
+2. Turn the printer on, plug it in by USB, and run DNP's installer.
+3. Check **Settings → Bluetooth & devices → Printers & scanners** lists it.
+
+With `cardPrinterName` / `stripPrinterName` left `null`, HoloBooth finds
+the photo printer by name (DNP, Citizen, SELPHY, Mitsubishi and so on)
+instead of using the Windows default, which is often "Microsoft Print to
+PDF". If there's no photo printer, it says so instead of printing
+nowhere. The operator panel marks the printer it will use **PRINTS HERE**.
+Windows prints a 6×4 sheet as a **landscape** page (Print method:
+**Standard**, the setting that has printed on the DS40). Sending it
+portrait asks the DNP driver for a page wider than its 4×6 paper, and it
+drops the job. **Driver paper** and **Browser** are alternatives for
+other printers.
+
+**Strip cut on Windows:** the DS40's 2-inch cut is a printer-preferences
+setting on Windows, not a per-job option. Cards must not be cut, so use
+two Windows printer entries for the same DS40, one per job type:
+1. Make sure both entries (e.g. "DS40" and "DS40 (Copy 1)") point to the
+   same USB port: right-click → Printer properties → Ports.
+2. On the one for strips: Printing preferences → turn on the 2-inch cut.
+3. In the operator panel, under Printers, tap **Cards** on one and
+   **Strips** on the other. **Print test strip sheet** should come out
+   as two pieces.
 
 Dye-subs are unforgiving about page geometry — if the page size doesn't match the
 media exactly, the driver silently scales and your 2.5×3.5″ card comes out at
@@ -511,7 +750,8 @@ Honest list of what needs real work before an event:
 
 - **Collector dex identity.** `collection.identifyBy` is set to `phone` but the
   kiosk never asks for one — cards record `collectorId: null`. The server
-  endpoint (`GET /dex?id=`) works; the phone-entry screen doesn't exist.
+  endpoint (`GET /dex?id=`, kiosk key required) works; the phone-entry
+  screen doesn't exist.
 - **Fonts.** The card faces fall back to system fonts until you drop real files
   into `src/assets/fonts/` and add `@font-face` rules. The layouts hold either
   way, but a rounded display face is a big part of the genre's feel.

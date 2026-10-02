@@ -10,49 +10,104 @@
     "sessionTimeoutMs": 240000
   },
   "camera": {
+    "//obs": "OBS Virtual Camera is first, but only picked while OBS is running (checked on Windows). Then OBS holds the capture card and passes the picture on. Start OBS, add the capture card as a Video Capture Device, and press Start Virtual Camera. With OBS closed it's skipped and the card is used directly.",
     "//": "HDMI capture cards present themselves as UVC webcams. Put distinctive substrings of your device label here, highest priority first. Run `Settings > Camera` in-app to see the live device list.",
     "preferredLabels": [
+      "OBS Virtual Camera",
       "Cam Link",
       "Elgato",
       "HDMI",
       "USB Video",
+      "USB3",
       "UVC",
-      "Capture"
+      "Capture",
+      "EOS Webcam"
     ],
     "excludeLabels": [
       "FaceTime",
       "Integrated",
       "Built-in"
     ],
+    "//constraints": "30 fps, not 60: generic USB 3.0 HDMI capture cards (\"USB Video 3.0\") can start at 1080p60 and then stall, especially on a USB 2 port, and a booth gains nothing from 60.",
     "constraints": {
       "width": 1920,
       "height": 1080,
-      "frameRate": 60
+      "frameRate": 30
     },
+    "//windowsCaptureApi": "Windows only. mediafoundation (default): the same camera API the Windows Camera app uses. directshow: the API OBS uses; try it if a camera works in OBS but not here. Either way the capture card's MJPEG is decoded in software (see windowsHardwareMjpeg).",
+    "windowsCaptureApi": "mediafoundation",
+    "//windowsHardwareMjpeg": "Windows only. false (default): decode the capture card's MJPEG video in software. The GPU decoder froze a USB Video 3.0 card after a few seconds while the Windows Camera app ran fine.",
+    "windowsHardwareMjpeg": false,
     "mirrorPreview": true,
     "cropToPortrait": true,
     "warmupMs": 1200,
+    "stills": {
+      "//": "Real photos like Lumabooth: the camera autofocuses, fires its shutter and flash, and the full-resolution JPEG is used for the print. Instead of a video frame. Windows: install digiCamControl (digicamcontrol.com), turn on File > Settings > Webserver (port 5513) and leave it running. Mac/Linux/Pi: install gphoto2. Only one program can hold the camera, so close Lumabooth, EOS Webcam Utility and OBS. If the camera can't be reached the booth falls back to the video feed (preferredLabels above) so a paid session still happens. Test it from the operator screen: Take a test photo.",
+      "//enabled": "Off: the Canon M50 only allows live view over USB, not remote shooting, so it can't be tethered. Turn on with a body that supports USB remote shooting (e.g. Canon Rebel T6/T7/T7i/SL2/SL3). The M50 works as a video camera instead via EOS Webcam Utility or HDMI.",
+      "enabled": false,
+      "//backend": "auto = digicamcontrol on Windows, gphoto2 on Mac/Linux/Pi.",
+      "backend": "auto",
+      "//preview": "liveview = the camera's own live view over the same USB cable (no extra hardware). video = show a capture card's HDMI feed instead (smoother), still shooting over USB.",
+      "preview": "liveview",
+      "//angle": "With several camera angles, which one is the tethered camera. The others stay video.",
+      "angle": "standard",
+      "liveviewFps": 12,
+      "//maxDimension": "Long edge the photo is scaled to. 3000px is plenty for 300dpi cards and strips, and keeps memory sane with 24 MP originals (full-size files are kept on disk).",
+      "maxDimension": 3000,
+      "timeoutMs": 15000,
+      "digicamcontrol": { "url": "http://127.0.0.1:5513" },
+      "gphoto2": { "bin": "gphoto2" }
+    },
+    "obsSplit": {
+      "//": "Both cameras through OBS. OBS holds the two capture cards and shows them side by side in ONE scene (Settings > Video: Base and Output 3840x1080, 30 fps; camera 1 at x=0, camera 2 at x=1920, each 1920x1080). Start Virtual Camera with that scene. HoloBooth opens OBS Virtual Camera once and cuts it in two, so every angle tile gets a live preview and either can be picked, without ever opening two cameras (which kills the first one on the booth PC). If OBS isn't running, the shoot falls back to opening the camera directly.",
+      "enabled": true,
+      "//layout": "side-by-side (3840x1080, left/right) or stacked (1920x2160, top/bottom).",
+      "layout": "side-by-side",
+      "regions": 2,
+      "width": 3840,
+      "height": 1080,
+      "frameRate": 30
+    },
     "angles": {
+      "//livePreviews": "false (default): the angle picker shows tiles and only checks each camera is plugged in; the shoot opens just the chosen one. true: live preview in every tile, which means all cameras streaming at once. On some Windows PCs opening a second camera kills the first, so leave this off unless you've tested it.",
+      "livePreviews": false,
       "//": "Optional: two (or more) physical cameras. When 2+ entries are listed here, the customer picks one on a screen shown right after paying, before the shoot starts. Each entry's preferredLabels/excludeLabels/constraints override the defaults above for that angle only — fields left out fall back to the defaults. Leave this as a single entry (or remove it) to skip the picker and keep the single-camera flow exactly as it was.",
       "list": [
         {
           "id": "standard",
+          "//obsRegion": "With obsSplit: which part of the OBS picture this angle is. 0 = left (the M50), 1 = right (the GoPro).",
+          "obsRegion": 0,
           "label": "Standard",
           "sub": "Eye level",
           "icon": "📷",
-          "//": "The main camera, in over HDMI through the capture card.",
-          "preferredLabels": ["Capture Card", "Cam Link", "Elgato", "HDMI", "USB Video", "UVC", "Capture"]
+          "//": "The main camera: the Canon M50 over HDMI into a capture card (preferred), or over USB via Canon's EOS Webcam Utility. EOS Webcam is last because once installed it lists a virtual camera even when the M50 is on HDMI, and would otherwise win with a blank picture.",
+          "preferredLabels": ["OBS Virtual Camera", "Capture Card", "Cam Link", "Elgato", "HDMI", "USB Video", "USB3", "UVC", "Capture", "EOS Webcam"]
         },
         {
           "id": "high",
+          "obsRegion": 1,
           "label": "High Angle",
           "sub": "GoPro overhead",
           "icon": "🔝",
           "//": "The second camera: a GoPro in USB webcam mode, so it enumerates as its own UVC device with 'GoPro' in the label — no second capture card needed.",
-          "preferredLabels": ["GoPro HERO10", "GoPro HERO 10", "HERO10", "HERO 10", "GoPro Webcam", "GoPro"]
+          "preferredLabels": ["GoPro HERO10", "GoPro HERO 10", "HERO10", "HERO 10", "GoPro Webcam", "GoPro"],
+          "//constraints": "Without this, the GoPro inherits the capture card's 1080p60 ideal — most GoPro webcam-mode firmware can't do 60fps at full FOV and silently switches to a narrower digital crop to hit it instead of failing, which looks like the image not filling the frame. 1080p30 is well within every GoPro webcam mode's full-FOV range. If it's still cropped in, check the GoPro's own on-device webcam FOV setting (Wide/Linear/Narrow) — that's a camera-side setting this app can't reach.",
+          "constraints": { "width": 1920, "height": 1080, "frameRate": 30 }
         }
       ]
     }
+  },
+  "filters": {
+    "//": "Optional camera-look picker shown right before the shoot (after the camera angle picker, if any). cssFilter is a plain CSS filter() string (see developer.mozilla.org/en-US/docs/Web/CSS/filter) applied live in the preview and baked into every captured shot — not just a screen effect, it's what prints and gets delivered. vignette/grain are optional 0-1 intensities layered on top (grain needs a real photo behind it to look right; it's subtle at low values). Set enabled:false, or leave list with just one entry, to skip the picker and always shoot at 'none'.",
+    "enabled": true,
+    "default": "none",
+    "list": [
+      { "id": "none", "label": "Original", "sub": "Straight off the sensor", "icon": "📷", "cssFilter": "none" },
+      { "id": "vintage", "label": "Vintage Film", "sub": "Warm, faded, a little grainy", "icon": "🎞️", "cssFilter": "sepia(0.35) saturate(1.3) contrast(0.92) brightness(1.05) hue-rotate(-6deg)", "vignette": 0.35, "grain": 0.12 },
+      { "id": "noir", "label": "Noir Film", "sub": "Black & white, high-contrast grain", "icon": "🎥", "cssFilter": "grayscale(1) contrast(1.25) brightness(1.02)", "vignette": 0.3, "grain": 0.16 },
+      { "id": "g7x", "label": "Canon G7X Mk II", "sub": "Punchy point-and-shoot color", "icon": "📸", "cssFilter": "saturate(1.35) contrast(1.12) brightness(1.03) hue-rotate(-2deg)" },
+      { "id": "pro", "label": "Professional", "sub": "Neutral, studio-flat", "icon": "🎬", "cssFilter": "contrast(1.08) saturate(1.05) brightness(1.02)" }
+    ]
   },
   "capture": {
     "countdownSeconds": 5,
@@ -66,7 +121,7 @@
     "flashScreen": true,
     "reviewSeconds": 25,
     "allowRetake": true,
-    "maxRetakes": 1,
+    "maxRetakes": 3,
     "chooseBestShot": true
   },
   "pricing": {
@@ -78,6 +133,16 @@
         "blurb": "One printed Pokémon card + digital copy",
         "amount": 700,
         "prints": { "card": 1, "strip": 0 },
+        "digital": true,
+        "gif": false,
+        "rarityBoost": 1.0
+      },
+      {
+        "id": "two_cards",
+        "name": "2 Pokémon Cards",
+        "blurb": "Two printed Pokémon cards + digital copies",
+        "amount": 1200,
+        "prints": { "card": 2, "strip": 0 },
         "digital": true,
         "gif": false,
         "rarityBoost": 1.0
@@ -97,7 +162,7 @@
         "name": "Digital Photo Strip",
         "blurb": "One digital photo strip delivered by QR code",
         "amount": 500,
-        "prints": { "card": 0, "strip": 1 },
+        "prints": { "card": 0, "strip": 0 },
         "digital": true,
         "gif": false,
         "rarityBoost": 1.0
@@ -143,14 +208,24 @@
     "timeoutMs": 6000
   },
   "payments": {
-    "//": "provider: 'stripe-terminal' | 'stripe-qr' | 'mock'. Use 'mock' for development with no hardware.",
+    "//": "provider: 'stripe-smart-reader' | 'stripe-terminal' | 'stripe-qr' | 'mock'. Use 'mock' for development with no hardware.",
+    "//stripe-smart-reader": "Reader is a WisePOS E or S700 — has its own Wi-Fi/Ethernet, so server/index.js drives it directly over the internet. No phone, no companion app: just this PC and the reader. Register it once with `npm run reader:register` (see README > Payments), which gives you the reader id to put in reader.id below.",
     "//stripe-terminal": "Reader is an M2, which is Bluetooth-only — the kiosk can't drive it directly. A phone running the companion app (companion-app/) pairs with the M2 and does the actual collecting; the kiosk only creates the sale and polls for it to be paid. See server/index.js's /sessions and /booths/:boothId/pending, and companion-app/README.md for pairing the phone. Set COMPANION_APP_KEY on the server and give the same value to the phone app so random devices can't poll your booth's payments.",
-    "provider": "stripe-terminal",
-    "serverUrl": "http://192.168.1.11:4242",
+    "//testing": "npm run dev always uses mock payments (TEST MODE badge on screen), whatever provider says. npm start uses provider below. npm run dev:live = dev window with real payments; npm run start:test = full-screen kiosk with mock payments (rehearsal).",
+    "provider": "stripe-smart-reader",
+    "//offerQr": "true: the pay screen shows the card reader AND a QR code at the same time. The customer taps the WisePOS E or scans and pays on their phone; the first payment wins, the other is cancelled, and a payment that lands at the same instant is refunded automatically.",
+    "offerQr": true,
+    "//serverUrl": "127.0.0.1 when the server runs on this same PC (smart reader, QR). The M2's phone needs the PC's LAN IP instead, e.g. http://192.168.1.11:4242.",
+    "serverUrl": "http://127.0.0.1:4242",
     "stripe": {
       "publishableKey": "pk_live_51UC0PHGZUT57A45HuaGS9jqtRee5v0TtKo9FDVVpqca7qVkBpRDEFEka9llzsNmsbxchERupMKPVuQcpoolVCo5o00evnae4cG",
       "locationId": "tml_Gqwbw5yrW85LOz",
-      "simulated": false
+      "//simulated": "stripe-smart-reader + a test key (sk_test_...): the server creates a simulated reader by itself at boot, no registration needed. Press T on the pay screen to tap a card, D to decline. Set false for the real reader and a live key.",
+      "simulated": true
+    },
+    "reader": {
+      "//": "stripe-smart-reader only. The tmr_... id `npm run reader:register` prints. STRIPE_READER_ID on the server overrides this.",
+      "id": null
     },
     "qr": {
       "checkoutBaseUrl": "https://pay.yourbooth.com/c",
@@ -179,21 +254,35 @@
       "heightIn": 6.0,
       "bleedIn": 0.06
     },
-    "//sheet": "Most dye-subs print 4x6. 'sheet' gangs card prints onto a 4x6 so you cut/perforate after.",
+    "//sheet": "Most dye-subs print 4x6. 'sheet' gangs card prints onto a 4x6 so you cut/perforate after. pageSize is the printer's own named media (see `lpoptions -p NAME -l`, the PageSize/Media Size line) — set it whenever your driver has one, since a Custom.WxHin size the driver doesn't recognize is what caused off-center, crooked cards on a real DNP DS40 (its PageSize list is fixed presets like dnp6x4, no arbitrary custom sizes).",
     "sheet": {
       "enabled": true,
       "widthIn": 6.0,
       "heightIn": 4.0,
-      "cutMarks": true
+      "cutMarks": true,
+      "pageSize": "dnp6x4",
+      "//orientation": "orientation-requested: 3=portrait 4=landscape 5=reverse-landscape 6=reverse-portrait. 3 was confirmed wrong on a real DS40, 4 (pi/print.mjs's default) didn't fix the card either — trying 6 next. If still wrong, change to 5. offsetYIn/offsetXIn nudge the image within the sheet in inches (+down/+right) if it's still off-center once the rotation is right — no rebuild needed, just edit and reload.",
+      "lpOptions": ["orientation-requested=6"],
+      "offsetYIn": -0.15
     },
-    "//stripSheet": "A 2x6 strip can't be sent as its own page on a 4x6-only printer either — two copies side by side exactly fill a 4x6 sheet, which is also the layout DNP calls '2x6 (4x6 divided)' media: the driver's own cutter splits it into two strips. Set enabled:false only if your printer takes true 2x6 media directly.",
+    "//stripSheet": "Two 2x6 strips, printed so the DNP's own auto-cutter physically separates them — confirmed on a real DS40. Its Cutter option only cuts along the sheet's short (feed) axis, so this is a 6x4 sheet (matching PageSize dnp6x4, same as the card sheet) with each strip pre-rotated 90 and stacked top/bottom (rotateForCutter) rather than side by side — Cutter=2Inch then slices the 4in feed length into two 2in-tall halves, each 6in wide, which is the strip's own 6in length once you turn the cut piece back upright. If your printer takes true 2x6 media directly, or has no such cutter mode, set enabled:false and rotateForCutter/lpOptions become irrelevant.",
     "stripSheet": {
       "enabled": true,
-      "widthIn": 4.0,
-      "heightIn": 6.0,
-      "cutMarks": true
+      "widthIn": 6.0,
+      "heightIn": 4.0,
+      "cutMarks": true,
+      "pageSize": "dnp6x4",
+      "rotateForCutter": true,
+      "//orientation": "Same dnp6x4 media as the card sheet, which needed orientation-requested=6 (not pi/print.mjs's default of 4) on a real DS40 — trying 6 here too, since flipping the in-canvas pre-rotation direction made no visible difference (a sign the whole sheet's CUPS orientation dominates, same as the card). If still wrong, try 5.",
+      "lpOptions": ["Cutter=2Inch", "orientation-requested=6"],
+      "//windowsPaper": "Windows only: which of the driver's own 6x4 paper sizes to use, as a pattern. This one prefers the DNP's 2-inch-cut version so the two strips come out separated. See the paper list in the operator panel (Printers) to pick the exact name.",
+      "windowsPaper": "2\\s*inch|2in|x\\s*2|cut"
     },
     "silent": true,
+    "//windowsMethod": "Windows only. xps (default): print through Windows' XPS print path, the same as Ctrl+P photo printing, starting from the printer's Printing Preferences (its paper and 2inch cut setting) — DNP's driver discards Chromium's custom-size pages. Test by hand: powershell -STA -ExecutionPolicy Bypass -File .\\electron\\winprint-xps.ps1 -Printer \"DS40 (Copy 1)\". classic: a 6x4 sheet sent landscape through Chromium. driver: draw onto the driver's own paper size via PowerShell. browser: no page size, the printer's default paper. Switchable in the operator panel (Print method).",
+    "windowsMethod": "xps",
+    "//windowsTurn": "Windows xps only: wide sheets are turned 90 degrees and printed as portrait 4x6 pages (DNP drops landscape pages). right or left; flip it if prints come out upside down.",
+    "windowsTurn": "right",
     "copiesMax": 4,
     "lpOptions": [],
     "dryRun": false,

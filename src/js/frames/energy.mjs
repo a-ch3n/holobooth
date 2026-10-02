@@ -10,7 +10,7 @@
  * tofu box where the fire symbol should be is a card you refund.
  */
 
-import { TAU, roundRect, radGrad, shade, alpha } from './draw.mjs';
+import { TAU, roundRect, radGrad, alpha } from './draw.mjs';
 
 export const ENERGY = {
   ember:   { name: 'Fire',      base: '#e53935', light: '#ff9e9e', dark: '#8f1717', ink: '#4d0b0b', weak: 'wave',   resist: 'leaf'  },
@@ -31,7 +31,34 @@ export const ENERGY = {
 
 export const ENERGY_IDS = Object.keys(ENERGY);
 
+/** Same math as shade() in draw.mjs, but returns hex instead of rgb() —
+ *  themeFor() re-shades e.light/e.dark a second time (for `plate`), and
+ *  shade() can only parse its own hex input, not its own rgb() output. Real
+ *  ENERGY entries dodge this because light/dark/ink are hand-authored hex
+ *  literals; a customer-picked color has to produce the same shape itself. */
+function shadeHex(hex, amt) {
+  const c = hex.replace('#', '');
+  const n = parseInt(c.length === 3 ? c.split('').map(x => x + x).join('') : c, 16);
+  const clamp = v => Math.max(0, Math.min(255, Math.round(v)));
+  const r = clamp(((n >> 16) & 255) + amt * 255);
+  const g = clamp(((n >> 8) & 255) + amt * 255);
+  const b = clamp((n & 255) + amt * 255);
+  return '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('');
+}
+
+/** A hex color (from the strip theme picker's custom-color wheel) makes its
+ *  own light/dark/ink ramp the same shape as a real energy type, so anything
+ *  that calls energy(id) works unmodified whether id is a real type or a
+ *  customer-picked color — themeFor() in packs.mjs in particular. */
+function customEnergy(hex) {
+  return {
+    name: 'Custom', base: hex, light: shadeHex(hex, 0.35), dark: shadeHex(hex, -0.30), ink: shadeHex(hex, -0.55),
+    weak: null, resist: null,
+  };
+}
+
 export function energy(id) {
+  if (typeof id === 'string' && id.startsWith('#')) return customEnergy(id);
   return ENERGY[id] || ENERGY.plain;
 }
 

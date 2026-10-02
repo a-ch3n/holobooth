@@ -1138,7 +1138,11 @@ export function strip(ctx, o) {
 
   const ink = dark ? '#ffffff' : e.ink;
   const pad = W * 0.070;
-  const headerH = c.name === false ? 0 : H * 0.052;
+  // No fallback to a preset name — the header only exists at all once the
+  // customer has actually typed one, so an un-personalised strip prints
+  // clean instead of carrying the theme's own name. content.name:false still
+  // forces it off even when a name was typed, for a frame that wants none.
+  const headerH = (c.name === false || !p.provided) ? 0 : H * 0.052;
   const footerH = H * 0.098;
   const gap = W * 0.040;
   const cellW = W - pad * 2;
@@ -1149,8 +1153,7 @@ export function strip(ctx, o) {
     ctx.save();
     ctx.fillStyle = alpha(ink, 0.95);
     ctx.textAlign = 'center';
-    fitText(ctx, p.provided ? p.name : (c.header || frame.name),
-      W / 2, pad * 0.55 + headerH * 0.62, cellW * 0.92, headerH * 0.62, 800, t.fontDisplay, 'center');
+    fitText(ctx, p.name, W / 2, pad * 0.55 + headerH * 0.62, cellW * 0.92, headerH * 0.62, 800, t.fontDisplay, 'center');
     ctx.restore();
   }
 
