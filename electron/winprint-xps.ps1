@@ -8,13 +8,16 @@
   HoloBooth calls it with -Image. Run it by hand to test a printer:
     powershell -STA -ExecutionPolicy Bypass -File .\electron\winprint-xps.ps1 -Printer "DS40 (Copy 1)"
   With no -Image it prints a colour test sheet with TOP on it.
+  A wide sheet is turned and printed as a portrait 4x6 page; add -Turn left
+  if it comes out upside down.
 #>
 param(
   [Parameter(Mandatory = $true)][string]$Printer,
   [string]$Image = '',
   [double]$W = 6,
   [double]$H = 4,
-  [int]$Copies = 1
+  [int]$Copies = 1,
+  [ValidateSet('right', 'left')][string]$Turn = 'right'
 )
 $ErrorActionPreference = 'Stop'
 try {
@@ -42,6 +45,21 @@ try {
     $bmp.Dispose()
   }
 
+  # Never send a landscape page: on the DS40 every landscape job (Chromium,
+  # GDI, XPS) came out blank or not at all, while portrait pages (Windows'
+  # test page, Ctrl+P) print. So a wide sheet is turned 90 degrees here and
+  # sent as the driver's own portrait 4x6. -Turn picks the direction.
+  if ($W -gt $H) {
+    $bmp = New-Object System.Drawing.Bitmap($Image)
+    $rot = if ($Turn -eq 'left') { [System.Drawing.RotateFlipType]::Rotate270FlipNone } else { [System.Drawing.RotateFlipType]::Rotate90FlipNone }
+    $bmp.RotateFlip($rot)
+    $turned = Join-Path $env:TEMP ('holobooth-portrait-' + [guid]::NewGuid().ToString('N') + '.jpg')
+    $bmp.Save($turned, [System.Drawing.Imaging.ImageFormat]::Jpeg)
+    $bmp.Dispose()
+    $Image = $turned
+    $t = $W; $W = $H; $H = $t
+  }
+
   $server = New-Object System.Printing.LocalPrintServer
   $queue = $server.GetPrintQueue($Printer)
   $caps = $queue.GetPrintCapabilities()
@@ -65,7 +83,7 @@ try {
     $media = $caps.PageMediaSizeCapability | Where-Object { Fits $_ } | Select-Object -First 1
     if ($media) { $ticket.PageMediaSize = $media }
   }
-  $ticket.PageOrientation = if ($W -gt $H) { [System.Printing.PageOrientation]::Landscape } else { [System.Printing.PageOrientation]::Portrait }
+  $ticket.PageOrientation = [System.Printing.PageOrientation]::Portrait
   if ($caps.PageBorderlessCapability -contains [System.Printing.PageBorderless]::Borderless) {
     $ticket.PageBorderless = [System.Printing.PageBorderless]::Borderless
   }

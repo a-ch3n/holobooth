@@ -281,6 +281,8 @@
     "silent": true,
     "//windowsMethod": "Windows only. xps (default): print through Windows' XPS print path, the same as Ctrl+P photo printing, starting from the printer's Printing Preferences (its paper and 2inch cut setting) — DNP's driver discards Chromium's custom-size pages. Test by hand: powershell -STA -ExecutionPolicy Bypass -File .\\electron\\winprint-xps.ps1 -Printer \"DS40 (Copy 1)\". classic: a 6x4 sheet sent landscape through Chromium. driver: draw onto the driver's own paper size via PowerShell. browser: no page size, the printer's default paper. Switchable in the operator panel (Print method).",
     "windowsMethod": "xps",
+    "//windowsTurn": "Windows xps only: wide sheets are turned 90 degrees and printed as portrait 4x6 pages (DNP drops landscape pages). right or left; flip it if prints come out upside down.",
+    "windowsTurn": "right",
     "copiesMax": 4,
     "lpOptions": [],
     "dryRun": false,

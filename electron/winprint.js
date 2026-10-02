@@ -213,13 +213,13 @@ function ensureXpsScript() {
   return xpsScript;
 }
 
-async function printXps({ dataUrl, widthIn, heightIn, printer, copies = 1 }) {
+async function printXps({ dataUrl, widthIn, heightIn, printer, copies = 1, turn = 'right' }) {
   const img = path.join(os.tmpdir(), `holobooth-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.jpg`);
   fs.writeFileSync(img, Buffer.from(String(dataUrl).split(',')[1] || '', 'base64'));
   try {
     const out = await new Promise(resolve => {
       execFile('powershell.exe', ['-STA', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ensureXpsScript(),
-        '-Printer', printer, '-Image', img, '-W', String(widthIn), '-H', String(heightIn), '-Copies', String(copies)],
+        '-Printer', printer, '-Image', img, '-W', String(widthIn), '-H', String(heightIn), '-Copies', String(copies), '-Turn', turn === 'left' ? 'left' : 'right'],
       { timeout: 120000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) =>
         resolve({ err, out: String(stdout || '').trim(), stderr: String(stderr || '').trim() }));
     });

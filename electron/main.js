@@ -215,7 +215,7 @@ async function printImage({ dataUrl, widthIn, heightIn, printerName, copies = 1,
   const method = ['xps', 'driver', 'browser', 'classic'].includes(want) ? want : 'xps';
   if (method === 'xps') {
     const r = await wp.printXps({
-      dataUrl, widthIn, heightIn, printer: printerName,
+      dataUrl, widthIn, heightIn, printer: printerName, turn: config.printing?.windowsTurn || 'right',
       copies: Math.max(1, Math.min(copies, config.printing?.copiesMax || 4)),
     });
     await new Promise(res => setTimeout(res, 3000));
