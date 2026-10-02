@@ -44,18 +44,27 @@ $ps.Landscape = (($W -gt $H) -ne ($pick.Width -gt $pick.Height))
 $doc.PrinterSettings.Copies = [int16][math]::Max(1, $Copies)
 $doc.DocumentName = 'HoloBooth'
 $doc.PrintController = New-Object System.Drawing.Printing.StandardPrintController
-$img = [System.Drawing.Image]::FromFile($Image)
+$script:img = [System.Drawing.Image]::FromFile($Image)
+$script:ran = $false; $script:drawErr = $null; $script:info = ''
+# Errors inside the page handler would otherwise just leave a blank sheet:
+# catch them, and record what was drawn where, so the result says.
 $doc.add_PrintPage({
-  param($sender, $e)
-  $g = $e.Graphics
-  $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-  $b = $e.PageSettings.Bounds
-  # Origin is the printable area's corner; step back over the hard margin so the image covers the whole sheet.
-  $g.DrawImage($img, [single](-$e.PageSettings.HardMarginX), [single](-$e.PageSettings.HardMarginY), [single]$b.Width, [single]$b.Height)
-  $e.HasMorePages = $false
+  param($src, $ev)
+  try {
+    $g = $ev.Graphics
+    $b = $ev.PageBounds
+    $hx = [single]$ev.PageSettings.HardMarginX; $hy = [single]$ev.PageSettings.HardMarginY
+    # Origin is the printable area's corner; step back over the hard margin so the image covers the whole sheet.
+    $g.DrawImage($script:img, (New-Object System.Drawing.RectangleF((-$hx), (-$hy), [single]$b.Width, [single]$b.Height)))
+    $script:info = "page=$($b.Width)x$($b.Height) hardMargin=$hx,$hy dpi=$($g.DpiX) unit=$($g.PageUnit) image=$($script:img.Width)x$($script:img.Height)"
+    $script:ran = $true
+  } catch { $script:drawErr = $_.Exception.Message }
+  $ev.HasMorePages = $false
 })
-try { $doc.Print() } finally { $img.Dispose() }
-Write-Output ("OK {0}|{1}x{2}|landscape={3}" -f $pick.PaperName, $pick.Width, $pick.Height, $ps.Landscape)
+try { $doc.Print() } finally { $script:img.Dispose() }
+if ($script:drawErr) { Write-Output "ERR Drawing the page failed: $($script:drawErr)"; exit 5 }
+if (-not $script:ran) { Write-Output 'ERR The page was never drawn (print handler did not run)'; exit 6 }
+Write-Output ("OK {0}|{1}x{2}|landscape={3}|{4}" -f $pick.PaperName, $pick.Width, $pick.Height, $ps.Landscape, $script:info)
 `;
 
 let scriptPath = null;

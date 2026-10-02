@@ -1967,6 +1967,7 @@ async function doPrint() {
    *  extra per-job -o flags (e.g. the DS40's Cutter=2Inch for strip sheets). */
   const sendPage = async (dataUrl, widthIn, heightIn, printerName, copies, label, pageSize, lpOptions, windowsPaper) => {
     const r = await window.booth.printers.print({ dataUrl, widthIn, heightIn, printerName, copies, silent: p.silent, pageSize, lpOptions, windowsPaper });
+    clog(`print ${label} ${widthIn}x${heightIn}in: ${r.ok ? `ok ${r.paper || ''}` : `FAILED ${r.reason || ''}`}`);
     if (!r.ok) throw new Error(r.reason || `${label} print was rejected`);
   };
 
@@ -2084,7 +2085,16 @@ ON_ENTER.admin = async () => {
             : window.booth.printers.use ? `<button class="btn btn-ghost" style="padding:4px 12px;font-size:13px" data-use-printer="${escapeHtml(p.name)}">Use this printer</button>`
             : p.isDefault ? 'DEFAULT' : ''}</b></div>`).join('')
         : '<div class="kv"><span>None detected</span></div>'}
-      ${info.platform === 'win32' && printers.some(p => p.willUse) ? '<div class="kv"><span>Paper sizes</span><b id="paper-sizes" style="font-weight:400;font-size:12px;text-align:right">loading…</b></div>' : ''}
+      ${info.platform === 'win32' && printers.some(p => p.willUse) ? `
+        <div class="kv"><span>Paper sizes</span><b id="paper-sizes" style="font-weight:400;font-size:12px;text-align:right">loading…</b></div>
+        <div class="kv"><span>Print method</span><b>${['driver', 'browser'].map(m => {
+          const on = (S.cfg.printing?.windowsMethod === 'browser' ? 'browser' : 'driver') === m;
+          return `<button class="btn ${on ? '' : 'btn-ghost'}" style="padding:4px 12px;font-size:13px;margin-left:6px" data-print-method="${m}">${m === 'driver' ? 'Driver paper' : 'Browser'}</button>`;
+        }).join('')}</b></div>` : ''}
+      <div style="display:flex;gap:10px;align-items:center;margin-top:12px;flex-wrap:wrap">
+        <button class="btn btn-ghost" id="print-test">Print test sheet</button>
+        <span id="print-test-result" style="font-size:12px;color:var(--ink-dim)"></span>
+      </div>
       ${printers.length && !printers.some(p => p.willUse) && info.platform === 'win32'
         ? '<p style="color:var(--bad);font-size:13px;margin-top:10px">No photo printer installed — install the DNP driver (see README → Printing on Windows).</p>' : ''}
     </div>
@@ -2144,6 +2154,28 @@ ON_ENTER.admin = async () => {
     if (el) el.textContent = r.ok ? r.sizes.map(s => `${s.name} (${s.widthIn}×${s.heightIn})`).join(' · ') || 'none' : r.error;
   });
 
+  $$('[data-print-method]').forEach(b => b.addEventListener('click', async () => {
+    const r = await window.booth.printers.method?.(b.dataset.printMethod).catch(e => ({ ok: false, error: e.message }));
+    if (!r?.ok) { toast(r?.error || 'Could not change the print method', true); return; }
+    S.cfg = r.config;
+    ON_ENTER.admin();
+  }));
+
+  $('#print-test')?.addEventListener('click', async e => {
+    const btn = e.currentTarget, out = $('#print-test-result');
+    btn.disabled = true; out.textContent = 'Printing…';
+    const sheet = S.cfg.printing?.sheet?.enabled ? S.cfg.printing.sheet : { widthIn: 6, heightIn: 4 };
+    const r = await window.booth.printers.print({
+      dataUrl: testSheet(sheet.widthIn, sheet.heightIn, S.cfg.printing?.dpi || 300).toDataURL('image/jpeg', 0.95),
+      widthIn: sheet.widthIn, heightIn: sheet.heightIn, printerName: S.cfg.printing?.cardPrinterName || null,
+      copies: 1, silent: true, pageSize: sheet.pageSize, lpOptions: sheet.lpOptions,
+    }).catch(err => ({ ok: false, reason: err.message }));
+    clog(`print test sheet: ${r.ok ? `ok ${r.paper || ''}` : `FAILED ${r.reason || ''}`}`);
+    out.textContent = r.ok ? `Sent ✓ ${r.paper || ''}` : `Failed: ${r.reason}`;
+    out.style.color = r.ok ? '' : 'var(--bad)';
+    btn.disabled = false;
+  });
+
   $$('[data-use-printer]').forEach(b => b.addEventListener('click', async () => {
     b.disabled = true;
     const r = await window.booth.printers.use(b.dataset.usePrinter).catch(e => ({ ok: false, error: e.message }));
@@ -2170,6 +2202,29 @@ ON_ENTER.admin = async () => {
 };
 
 /* --------------------------------------------------------------- utils */
+
+/**
+ * A sheet that can't be mistaken for blank or for the wrong way round:
+ * colour bands, a border 0.1in in from every edge (shows any cropping), TOP
+ * with an arrow, and each corner labelled.
+ */
+function testSheet(widthIn, heightIn, dpi) {
+  const c = document.createElement('canvas');
+  c.width = Math.round(widthIn * dpi); c.height = Math.round(heightIn * dpi);
+  const x = c.getContext('2d'), W = c.width, H = c.height;
+  const colors = ['#e53935', '#fb8c00', '#fdd835', '#43a047', '#1e88e5', '#8e24aa'];
+  colors.forEach((col, i) => { x.fillStyle = col; x.fillRect(0, (i * H) / colors.length, W, H / colors.length + 1); });
+  x.strokeStyle = '#000'; x.lineWidth = dpi * 0.03;
+  x.strokeRect(dpi * 0.1, dpi * 0.1, W - dpi * 0.2, H - dpi * 0.2);
+  x.fillStyle = '#fff'; x.strokeStyle = '#000'; x.lineWidth = dpi * 0.02; x.textAlign = 'center'; x.textBaseline = 'middle';
+  const text = (t, px, cx, cy) => { x.font = `900 ${px}px system-ui, sans-serif`; x.strokeText(t, cx, cy); x.fillText(t, cx, cy); };
+  text('▲ TOP ▲', dpi * 0.55, W / 2, H * 0.2);
+  text(`HOLOBOOTH TEST · ${widthIn}×${heightIn} in`, dpi * 0.32, W / 2, H / 2);
+  text(new Date().toLocaleTimeString(), dpi * 0.2, W / 2, H * 0.72);
+  [['TOP-LEFT', 0.12, 0.08, 'left'], ['TOP-RIGHT', 0.88, 0.08, 'right'], ['BOTTOM-LEFT', 0.12, 0.92, 'left'], ['BOTTOM-RIGHT', 0.88, 0.92, 'right']]
+    .forEach(([t, fx, fy, al]) => { x.textAlign = al; text(t, dpi * 0.16, W * fx, H * fy); });
+  return c;
+}
 
 const escapeHtml = str => String(str).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
 

@@ -204,7 +204,7 @@ async function printImage({ dataUrl, widthIn, heightIn, printerName, copies = 1,
 
   // Default: through the driver's own paper sizes, like Windows' test page
   // (see electron/winprint.js). printing.windowsMethod: "chromium" = the old way.
-  if (config.printing?.windowsMethod !== 'chromium') {
+  if (!['chromium', 'browser'].includes(config.printing?.windowsMethod)) {
     const r = await require('./winprint').printWindows({
       dataUrl, widthIn, heightIn, printer: printerName,
       copies: Math.max(1, Math.min(copies, config.printing?.copiesMax || 4)),
@@ -241,6 +241,12 @@ async function printImage({ dataUrl, widthIn, heightIn, printerName, copies = 1,
       height: Math.round(heightIn * 25400),
     },
   };
+  // "browser": no custom size — print on the printer's own default paper
+  // (DNP's driver only accepts its own forms), turned to suit the sheet.
+  if (config.printing?.windowsMethod === 'browser') {
+    delete opts.pageSize;
+    opts.landscape = widthIn > heightIn;
+  }
   if (printerName) opts.deviceName = printerName;
 
   console.log('[print] windows webContents.print options:', JSON.stringify(opts));
@@ -281,6 +287,15 @@ ipcMain.handle('printers:papers', async () => {
   const choice = require('./printers').choosePrinter(list, config.printing?.cardPrinterName || null);
   if (choice.error) return { ok: false, error: choice.error };
   return { ok: true, printer: choice.name, sizes: await require('./winprint').paperSizes(choice.name) };
+});
+
+// Print method switch in the operator panel: this PC only.
+ipcMain.handle('printers:method', (_e, method) => {
+  if (!['driver', 'browser'].includes(method)) return { ok: false, error: `Unknown method ${method}` };
+  require('./local-config').writeLocalPatch(LOCAL_CONFIG_PATH, { printing: { windowsMethod: method } });
+  config = loadConfig();
+  console.log(`[print] operator chose print method "${method}"`);
+  return { ok: true, config };
 });
 
 // "Use this printer" in the operator panel. Saved to this PC's
