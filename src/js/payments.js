@@ -27,6 +27,7 @@ export function createPaymentProvider(cfg, { onStatus = () => {} } = {}) {
     case 'stripe-terminal':
     case 'stripe-smart-reader': return new StripeTerminalProvider(cfg, onStatus);
     case 'stripe-qr': return new StripeQrProvider(cfg, onStatus);
+    case 'free': return new FreeProvider(cfg, onStatus);
     default: return new MockProvider(cfg, onStatus);
   }
 }
@@ -36,6 +37,15 @@ class BaseProvider {
   async init() {}
   cancel() { this.cancelled = true; }
   async collect() { throw new Error('not implemented'); }
+}
+
+/* ---------------------------------------------------------------- free */
+
+/** Free event mode (the host has paid for the booth): every session is approved, nothing is charged. */
+class FreeProvider extends BaseProvider {
+  async collect(product) {
+    return { ok: true, method: 'free', paymentId: 'free_' + Date.now().toString(36), amount: 0, brand: null, last4: null };
+  }
 }
 
 /* ---------------------------------------------------------------- mock */

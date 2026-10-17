@@ -474,6 +474,9 @@ Webcam Utility or a capture card, see above).
 
 ## Payments
 
+> **Running events?** See **[docs/EVENT-GUIDE.md](docs/EVENT-GUIDE.md)**: free vs paid event modes,
+> how guests get their digital photos, and an event-day checklist.
+
 **Test vs real, without editing anything:**
 
 | Command | Payments | Window |

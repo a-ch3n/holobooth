@@ -188,6 +188,8 @@ function renderNameSuggestions(host, query, onPick) {
 /* ---------------------------------------------------------- navigation */
 
 function go(name) {
+  // Free event: no pay screen at all — straight from the product to the shoot.
+  if (name === 'pay' && S.cfg?.payments?.provider === 'free') return startFreeSession();
   if (name !== S.screen) clog(`screen: ${S.screen || '-'} → ${name}`);
   S.screen = name;
   $$('.screen').forEach(el => (el.hidden = el.dataset.screen !== name));
@@ -842,7 +844,7 @@ ON_ENTER.product = () => {
       ${p.featured ? '<span class="tag">MOST POPULAR</span>' : ''}
       <h3>${p.name}</h3>
       <div class="blurb">${p.blurb}</div>
-      <div class="price">${money(p.amount)}</div>
+      <div class="price">${S.cfg.payments?.provider === 'free' ? (S.cfg.payments?.freeLabel || 'Free') : money(p.amount)}</div>
     </div>`;
   }).join('');
 
@@ -868,6 +870,16 @@ ON_ENTER.product = () => {
 };
 
 /* ----------------------------------------------------------------- pay */
+
+/** Free event mode: record the session (amount 0) and go to the shoot. */
+async function startFreeSession() {
+  S.payment = { ok: true, method: 'free', paymentId: 'free_' + Date.now().toString(36), amount: 0 };
+  await window.booth.sales.record({
+    at: new Date().toISOString(), amount: 0, productId: S.product.id,
+    frameId: S.frameId, paymentId: S.payment.paymentId, method: 'free', boothId: S.cfg.booth.id,
+  }).catch(() => {});
+  go(cameraAngles().length >= 2 ? 'angle' : 'capture');
+}
 
 ON_ENTER.pay = async () => {
   $('#pay-amount').textContent = money(S.product.amount);
@@ -1781,13 +1793,16 @@ async function buildOutputs() {
   }
 
   await window.booth.cards.record(S.card);
+  // Every session is also kept on this PC (operator panel → Open photos folder),
+  // whatever happens with the upload — hosts usually want them all afterwards.
+  if (S.cfg.delivery?.saveLocal !== false) saveLocalCopies().catch(e => console.warn('local save failed', e));
   if (S.product.digital && S.cfg.delivery.uploadEnabled) {
     try { await uploadMedia(); }
     catch (e) { console.warn('upload failed', e); }
   }
 }
 
-async function uploadMedia() {
+async function sessionFiles() {
   const primaryIsStrip = isStrip(currentFrame());
   const files = [{
     name: primaryIsStrip ? 'strip.png' : `card-${S.card.serial.replace(/[^\w]+/g, '_')}.png`,
@@ -1796,6 +1811,17 @@ async function uploadMedia() {
   if (S.stripCanvas) files.push({ name: 'strip.png', dataUrl: S.stripCanvas.toDataURL('image/png') });
   S.filteredShots.forEach((c, i) => files.push({ name: `photo-${i + 1}.jpg`, dataUrl: c.toDataURL('image/jpeg', 0.9) }));
   if (S.gifBlob) files.push({ name: 'boomerang.gif', dataUrl: await blobToDataUrl(S.gifBlob) });
+  return files;
+}
+
+/** One file per item, named by time so a day's sessions sort in order. */
+async function saveLocalCopies() {
+  const stamp = new Date().toTimeString().slice(0, 8).replace(/:/g, '');
+  for (const f of await sessionFiles()) await window.booth.media.save({ name: `${stamp}-${f.name}`, dataUrl: f.dataUrl });
+}
+
+async function uploadMedia() {
+  const files = await sessionFiles();
 
   const res = await fetch(S.cfg.delivery.uploadUrl, {
     method: 'POST', headers: kioskHeaders(S.cfg.server?.kioskKey),
@@ -2120,6 +2146,12 @@ ON_ENTER.admin = async () => {
       <h3>System</h3>
       <div class="kv"><span>Booth</span><b>${S.cfg.booth.id}</b></div>
       <div class="kv"><span>Season</span><b>${S.cfg.collection.seasonId}</b></div>
+      ${window.booth.payments?.mode ? `<div class="kv"><span>Event mode</span><b>${[['free', 'Free event'], ['reader', 'Card reader + QR'], ['qr', 'QR only']].map(([m, label]) => {
+        const prov = S.cfg.payments.realProvider || S.cfg.payments.provider;
+        const cur = prov === 'free' ? 'free' : prov === 'stripe-qr' ? 'qr' : 'reader';
+        return `<button class="btn ${cur === m ? '' : 'btn-ghost'}" style="padding:4px 10px;font-size:12px;margin-left:6px" data-event-mode="${m}">${label}</button>`;
+      }).join('')}</b></div>` : ''}
+      ${window.booth.media?.openFolder ? '<div class="kv"><span>Photos</span><b><button class="btn btn-ghost" style="padding:4px 10px;font-size:12px" id="open-photos">Open photos folder</button></b></div>' : ''}
       <div class="kv"><span>Payments</span><b>${S.cfg.payments.provider === 'mock'
         ? `TEST (mock)${S.cfg.payments.realProvider ? ` — npm start uses ${S.cfg.payments.realProvider}` : ''}`
         : S.cfg.payments.provider}</b></div>
@@ -2215,6 +2247,17 @@ ON_ENTER.admin = async () => {
       getSelection().removeAllRanges(); getSelection().addRange(r);
       btn.textContent = 'Selected — press Ctrl+C';
     }
+  });
+
+  $$('[data-event-mode]').forEach(b => b.addEventListener('click', async () => {
+    const r = await window.booth.payments.mode(b.dataset.eventMode).catch(e => ({ ok: false, error: e.message }));
+    if (!r.ok) { toast(r.error, true); return; }
+    toast('Event mode saved — restarting the booth screen');
+    setTimeout(() => window.booth.app.reload(), 900);
+  }));
+  $('#open-photos')?.addEventListener('click', async () => {
+    const r = await window.booth.media.openFolder().catch(e => ({ ok: false, error: e.message }));
+    if (!r.ok) toast(r.error || 'Could not open the folder', true);
   });
 
   $('#admin-reload')?.addEventListener('click', () => window.booth.app.reload());

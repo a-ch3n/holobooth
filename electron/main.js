@@ -68,6 +68,8 @@ function loadConfig() {
  */
 function testPayments(cfg) {
   const env = process.env.HOLOBOOTH_PAYMENTS;
+  // A free event takes no payments either way: nothing to simulate.
+  if (cfg.payments?.provider === 'free' && env !== 'mock') return cfg;
   const mock = env ? env === 'mock' : DEV;
   if (!mock || !cfg.payments) return cfg;
   console.log(`[config] TEST MODE — payments are simulated (real provider: ${cfg.payments.provider})`);
@@ -322,6 +324,29 @@ ipcMain.handle('printers:papers', async () => {
   return { ok: true, printer: choice.name, sizes: await require('./winprint').paperSizes(choice.name) };
 });
 
+// Operator panel: open the folder with every session's photos (today's, if any).
+ipcMain.handle('media:openFolder', async () => {
+  const root = path.join(DATA_DIR, 'media');
+  const today = path.join(root, new Date().toISOString().slice(0, 10));
+  fs.mkdirSync(root, { recursive: true });
+  const err = await shell.openPath(fs.existsSync(today) ? today : root);
+  return { ok: !err, path: fs.existsSync(today) ? today : root, error: err || null };
+});
+
+// Operator panel "Event mode": how this booth takes payment, saved on this PC only.
+const EVENT_MODES = {
+  free: { provider: 'free' },
+  reader: { provider: 'stripe-smart-reader', offerQr: true },
+  qr: { provider: 'stripe-qr' },
+};
+ipcMain.handle('payments:mode', (_e, mode) => {
+  if (!EVENT_MODES[mode]) return { ok: false, error: `Unknown event mode ${mode}` };
+  require('./local-config').writeLocalPatch(LOCAL_CONFIG_PATH, { payments: EVENT_MODES[mode] });
+  config = loadConfig();
+  console.log(`[config] event mode → ${mode}`);
+  return { ok: true, config };
+});
+
 // "Check printer" in the operator panel: what Windows says about every
 // printer, port and queued job.
 ipcMain.handle('printers:diagnose', async () => {
@@ -393,7 +418,7 @@ ipcMain.handle('sales:summary', () => {
 ipcMain.handle('media:save', (_e, { name, dataUrl }) => {
   const dir = path.join(DATA_DIR, 'media', new Date().toISOString().slice(0, 10));
   fs.mkdirSync(dir, { recursive: true });
-  const file = path.join(dir, name);
+  const file = path.join(dir, path.basename(String(name)).replace(/[^\w.-]+/g, '_'));
   const b64 = dataUrl.split(',')[1];
   fs.writeFileSync(file, Buffer.from(b64, 'base64'));
   return file;
