@@ -381,9 +381,9 @@ picked and shot at full 1920×1080.
    resolution both **3840x1080**, FPS **30**.
 2. Make a new scene, e.g. **Booth**. Add both cameras to it with
    **Sources → + → Video Capture Device → Add Existing**:
-   - **M50 on the left half:** right-click → Transform → Edit Transform,
+   - **Logitech Brio (Standard) on the left half:** right-click → Transform → Edit Transform,
      Position **0, 0**, Size **1920 × 1080**.
-   - **GoPro on the right half:** Position **1920, 0**, Size **1920 × 1080**.
+   - **Canon M50 (High Angle, via the capture card) on the right half:** Position **1920, 0**, Size **1920 × 1080**.
 3. Select the **Booth** scene and click **Start Virtual Camera**.
 4. Start HoloBooth. Which half is which angle is `obsRegion` in each
    `camera.angles.list` entry: 0 = left, 1 = right.

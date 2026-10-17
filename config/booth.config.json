@@ -14,6 +14,8 @@
     "//": "HDMI capture cards present themselves as UVC webcams. Put distinctive substrings of your device label here, highest priority first. Run `Settings > Camera` in-app to see the live device list.",
     "preferredLabels": [
       "OBS Virtual Camera",
+      "Logitech BRIO",
+      "BRIO",
       "Cam Link",
       "Elgato",
       "HDMI",
@@ -59,7 +61,7 @@
       "gphoto2": { "bin": "gphoto2" }
     },
     "obsSplit": {
-      "//": "Both cameras through OBS. OBS holds the two capture cards and shows them side by side in ONE scene (Settings > Video: Base and Output 3840x1080, 30 fps; camera 1 at x=0, camera 2 at x=1920, each 1920x1080). Start Virtual Camera with that scene. HoloBooth opens OBS Virtual Camera once and cuts it in two, so every angle tile gets a live preview and either can be picked, without ever opening two cameras (which kills the first one on the booth PC). If OBS isn't running, the shoot falls back to opening the camera directly.",
+      "//": "Both cameras through OBS. OBS holds both cameras (Logitech Brio left, Canon M50 capture card right) and shows them side by side in ONE scene (Settings > Video: Base and Output 3840x1080, 30 fps; camera 1 at x=0, camera 2 at x=1920, each 1920x1080). Start Virtual Camera with that scene. HoloBooth opens OBS Virtual Camera once and cuts it in two, so every angle tile gets a live preview and either can be picked, without ever opening two cameras (which kills the first one on the booth PC). If OBS isn't running, the shoot falls back to opening the camera directly.",
       "enabled": true,
       "//layout": "side-by-side (3840x1080, left/right) or stacked (1920x2160, top/bottom).",
       "layout": "side-by-side",
@@ -75,23 +77,23 @@
       "list": [
         {
           "id": "standard",
-          "//obsRegion": "With obsSplit: which part of the OBS picture this angle is. 0 = left (the M50), 1 = right (the GoPro).",
+          "//obsRegion": "With obsSplit: which part of the OBS picture this angle is. 0 = left (the Logitech Brio), 1 = right (the Canon M50).",
           "obsRegion": 0,
           "label": "Standard",
           "sub": "Eye level",
           "icon": "📷",
-          "//": "The main camera: the Canon M50 over HDMI into a capture card (preferred), or over USB via Canon's EOS Webcam Utility. EOS Webcam is last because once installed it lists a virtual camera even when the M50 is on HDMI, and would otherwise win with a blank picture.",
-          "preferredLabels": ["OBS Virtual Camera", "Capture Card", "Cam Link", "Elgato", "HDMI", "USB Video", "USB3", "UVC", "Capture", "EOS Webcam"]
+          "//": "Logitech Brio 4K over USB. Through OBS (left half) normally; if OBS isn't running the shoot opens the Brio directly, which works on its own as a webcam. 1080p30 is plenty for 300dpi cards and keeps USB bandwidth low next to the capture card.",
+          "preferredLabels": ["OBS Virtual Camera", "Logitech BRIO", "BRIO", "Logitech"],
+          "constraints": { "width": 1920, "height": 1080, "frameRate": 30 }
         },
         {
           "id": "high",
           "obsRegion": 1,
           "label": "High Angle",
-          "sub": "GoPro overhead",
+          "sub": "Wide overhead",
           "icon": "🔝",
-          "//": "The second camera: a GoPro in USB webcam mode, so it enumerates as its own UVC device with 'GoPro' in the label — no second capture card needed.",
-          "preferredLabels": ["GoPro HERO10", "GoPro HERO 10", "HERO10", "HERO 10", "GoPro Webcam", "GoPro"],
-          "//constraints": "Without this, the GoPro inherits the capture card's 1080p60 ideal — most GoPro webcam-mode firmware can't do 60fps at full FOV and silently switches to a narrower digital crop to hit it instead of failing, which looks like the image not filling the frame. 1080p30 is well within every GoPro webcam mode's full-FOV range. If it's still cropped in, check the GoPro's own on-device webcam FOV setting (Wide/Linear/Narrow) — that's a camera-side setting this app can't reach.",
+          "//": "Canon M50 with the EF-M 10-18mm, over HDMI into the USB3.0 capture card. Through OBS (right half) normally; without OBS the shoot opens the capture card directly.",
+          "preferredLabels": ["OBS Virtual Camera", "USB3.0 Video", "USB Video", "Capture", "HDMI", "Cam Link", "Elgato", "UVC"],
           "constraints": { "width": 1920, "height": 1080, "frameRate": 30 }
         }
       ]
