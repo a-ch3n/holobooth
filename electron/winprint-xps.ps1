@@ -3,19 +3,20 @@
   print path: the same one Windows' own Ctrl+P photo printing uses. It
   starts from the printer's Printing Preferences (so a DNP entry's paper
   size and 2inch cut setting apply), picks the matching paper if needed,
-  and prints the image edge to edge on a portrait page.
+  and prints the image edge to edge on a 6x4 page.
 
   HoloBooth calls it with -Image. Run it by hand to test a printer:
     powershell -STA -ExecutionPolicy Bypass -File .\electron\winprint-xps.ps1 -Printer "DS40 (Copy 1)"
   With no -Image it prints a colour test sheet with TOP on it.
-  The image must already be portrait (HoloBooth turns landscape pages
-  before printing: printer.rotation). This script never rotates anything.
+  The image must already be the printer-native 6x4 landscape page
+  (HoloBooth's toPrinterNative). This script never rotates anything; the
+  orientation comes from the queue's Printing Preferences (Landscape).
 #>
 param(
   [Parameter(Mandatory = $true)][string]$Printer,
   [string]$Image = '',
-  [double]$W = 4,
-  [double]$H = 6,
+  [double]$W = 6,
+  [double]$H = 4,
   [int]$Copies = 1
 )
 $ErrorActionPreference = 'Stop'
@@ -44,11 +45,11 @@ try {
     $bmp.Dispose()
   }
 
-  # Portrait only: a landscape image is refused here, never turned.
+  # The native 6x4 landscape page only: anything else is refused, never turned.
   $probe = [System.Drawing.Image]::FromFile($Image)
-  $isLandscape = $probe.Width -gt $probe.Height
+  $isNative = $probe.Width -gt $probe.Height
   $probe.Dispose()
-  if ($isLandscape -or $W -gt $H) { Write-Output 'ERR Only portrait pages are printed; turn the page first (printer.rotation)'; exit 4 }
+  if (-not $isNative -or $W -le $H) { Write-Output 'ERR Only the printer-native 6x4 landscape page is printed (toPrinterNative)'; exit 4 }
 
   $server = New-Object System.Printing.LocalPrintServer
   $queue = $server.GetPrintQueue($Printer)
@@ -73,7 +74,6 @@ try {
     $media = $caps.PageMediaSizeCapability | Where-Object { Fits $_ } | Select-Object -First 1
     if ($media) { $ticket.PageMediaSize = $media }
   }
-  $ticket.PageOrientation = [System.Printing.PageOrientation]::Portrait
   if ($caps.PageBorderlessCapability -contains [System.Printing.PageBorderless]::Borderless) {
     $ticket.PageBorderless = [System.Printing.PageBorderless]::Borderless
   }
@@ -108,7 +108,7 @@ try {
 
   $m = $ticket.PageMediaSize
   $paper = if ($m -and $m.Width) { '{0}x{1}in' -f [math]::Round($m.Width / 96, 2), [math]::Round($m.Height / 96, 2) } else { "from Printing Preferences ($($m.PageMediaSizeName))" }
-  Write-Output ('OK xps printer="{0}" paper={1} orientation={2} borderless={3}' -f $Printer, $paper, $ticket.PageOrientation, $ticket.PageBorderless)
+  Write-Output ('OK xps printer="{0}" paper={1} borderless={2}' -f $Printer, $paper, $ticket.PageBorderless)
 } catch {
   Write-Output "ERR $($_.Exception.Message)"
   exit 1

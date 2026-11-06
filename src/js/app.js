@@ -20,7 +20,7 @@ import { renderCard, renderStrip, mintCard, printSize } from './frames/render.mj
 import { Camera, StillsCamera, applyPhotoFilter, cameraLog, clog, cameraRoles, matchRoles, stopActiveCamera } from './camera.js';
 import { loadFonts } from './frames/fonts.mjs';
 import { setStripEvent } from './frames/strips.mjs';
-import { toPortrait, coverCrop, coverPlacement, stripPageLayout, composeStripPage, composeCardSheet, cardSheetLayout, drawCalibration, pageSize } from './layout.mjs';
+import { toPrinterNative, printRotations, NATIVE, CALIBRATION_DESIGN, coverCrop, coverPlacement, cardSheetLayout, drawCalibration } from './layout.mjs';
 import { createPaymentProvider, kioskHeaders } from './payments.js';
 import { encodeGif } from './gif.js';
 
@@ -1959,12 +1959,12 @@ async function retake() {
 /* --------------------------------------------------------------- print */
 
 /**
- * DNP DS40 pages, built at its native 6x4 size (src/js/layout.mjs) so that
- * neither the browser nor the driver has anything to scale:
- *   cards   1844 x 1240 landscape, two 750 x 1050 cards per page, cut marks,
- *           cut by hand.                 → printer.queue4x6 (no cut)
- *   strips  1240 x 1844 portrait, the 620 x 1844 strip twice side by side.
- *                                        → printer.queueStrip (2-inch cut at x = 620)
+ * Print jobs. Each one is turned into the DNP DS40's native page, 1844 x 1240
+ * landscape with the 2-inch cut at y = 620, by toPrinterNative()
+ * (src/js/layout.mjs), the only place in the print path that rotates:
+ *   cards   two upright 750 x 1050 cards per page, cut by hand → printer.queue4x6 (no cut)
+ *   strips  the 620 x 1844 strip turned by rotation.strip, twice → printer.queueStrip (2-inch cut)
+ *   jumbo   the 1240 x 1844 page turned by rotation.portrait4x6 → printer.queue4x6
  * Identical pages go as one job with that many copies. The main process
  * saves every page as a PNG before printing it.
  */
@@ -1976,44 +1976,42 @@ function newCanvas({ W, H }) {
 
 function cardJobs(card, count) {
   const per = cardSheetLayout(card.width, card.height).slots.length;
-  const page = n => { const c = newCanvas(pageSize('landscape')); composeCardSheet(c.getContext('2d'), card, n); return c; };
   const jobs = [];
   const full = Math.floor(count / per), rest = count % per;
-  if (full) jobs.push({ canvas: page(per), copies: full });
-  if (rest) jobs.push({ canvas: page(rest), copies: 1 });
+  if (full) jobs.push({ type: 'cards', canvas: card, count: per, copies: full });
+  if (rest) jobs.push({ type: 'cards', canvas: card, count: rest, copies: 1 });
   return jobs;
 }
 
-/** A Jumbo strip is a whole 1240 x 1844 page: one per print, on the 4x6 queue, uncut. */
 function jumboJobs(jumbo, count) {
-  if (jumbo.width !== 1240 || jumbo.height !== 1844) throw new Error(`Jumbo strip must be 1240x1844 px, got ${jumbo.width}x${jumbo.height}`);
-  return [{ canvas: jumbo, copies: Math.max(1, count) }];
+  return [{ type: '4x6', canvas: jumbo, copies: Math.max(1, count) }];
 }
 
 function stripJobs(strip, count) {
-  const c = newCanvas(stripPageLayout());
-  composeStripPage(c.getContext('2d'), strip);
   // Every page carries two strips.
-  return [{ canvas: c, copies: Math.max(1, Math.ceil(count / 2)) }];
+  return [{ type: 'strip', canvas: strip, copies: Math.max(1, Math.ceil(count / 2)) }];
 }
 
 /**
- * Every print goes through here. The printer always gets a portrait
- * 1240 x 1844 page: a landscape composite (a card sheet) is turned here, by
- * printer.rotation (layout.mjs toPortrait), and nowhere else. Strip pages
- * are already portrait and are sent as they are.
+ * Every print goes through here: the job becomes the native 1844 x 1240
+ * page (toPrinterNative) and is sent. Strips go to the strip (cut) queue,
+ * everything else to the 4x6 queue.
  */
-async function sendPage(job, kind, label) {
-  const rotation = S.cfg.printer?.rotation ?? 90;
-  const page = toPortrait(job.canvas, rotation, (w, h) => newCanvas({ W: w, H: h }));
-  if (page.width !== 1240 || page.height !== 1844) throw new Error(`The print page is ${page.width}x${page.height}; it must be 1240x1844`);
-  const turned = page !== job.canvas;
+async function sendPage(job, label) {
+  const rot = printRotations(S.cfg.printer);
+  rot.problems.forEach(p => clog(`print warn: ${p}`));
+  const page = toPrinterNative(job, rot, (w, h) => newCanvas({ W: w, H: h }));
+  if (page.width !== NATIVE.W || page.height !== NATIVE.H) throw new Error(`The print page is ${page.width}x${page.height}; it must be ${NATIVE.W}x${NATIVE.H}`);
+  const kind = job.type === 'strip' ? 'strip' : '4x6';
   const r = await window.booth.printers.print({ dataUrl: page.toDataURL('image/png'), kind, copies: job.copies, label })
     .catch(err => ({ ok: false, reason: err.message }));
-  clog(`print ${label} (${kind}, ${job.canvas.width}x${job.canvas.height}${turned ? ` turned ${rotation}° → ${page.width}x${page.height}` : ''}, x${job.copies}): ${r.ok ? 'ok' : `FAILED ${r.reason || ''}`}${r.file ? ` — saved ${r.file}` : ''}${r.paper ? `\n  ${r.paper}` : ''}`);
+  const how = job.type === 'strip' ? `strip turned ${rot.strip}°, two copies`
+    : job.type === 'cards' ? `${job.count} upright card${job.count > 1 ? 's' : ''}`
+    : job.canvas.width === NATIVE.W ? 'not turned' : `turned ${rot.portrait4x6}°`;
+  clog(`print ${label} (${job.type}, ${job.canvas.width}x${job.canvas.height}, ${how} → ${page.width}x${page.height}, x${job.copies}): ${r.ok ? 'ok' : `FAILED ${r.reason || ''}`}${r.file ? ` — saved ${r.file}` : ''}${r.paper ? `\n  ${r.paper}` : ''}`);
   (r.notes || []).forEach(n => clog(`print warn: ${n}`));
   if (!r.ok) throw new Error(r.reason || `${label} print was rejected`);
-  return r;
+  return { ...r, how, notes: [...rot.problems, ...(r.notes || [])] };
 }
 
 async function doPrint() {
@@ -2031,7 +2029,7 @@ async function doPrint() {
     if (isJumbo(currentFrame())) {
       const n = S.product.prints.jumbo || S.product.prints.strip || 1;
       st.textContent = `Printing your Jumbo strip${n > 1 ? 's' : ''}…`;
-      for (const job of jumboJobs(S.cardCanvas, n)) await sendPage(job, '4x6', 'jumbo');
+      for (const job of jumboJobs(S.cardCanvas, n)) await sendPage(job, 'jumbo');
       st.textContent = 'Sent to the printer.';
       await sleep(900);
       go('thanks');
@@ -2041,12 +2039,12 @@ async function doPrint() {
     if (cardCount) {
       st.textContent = `Printing ${cardCount} ${cardIsStrip ? 'strip' : 'card'}${cardCount > 1 ? 's' : ''}…`;
       for (const job of cardIsStrip ? stripJobs(S.cardCanvas, cardCount) : cardJobs(S.cardCanvas, cardCount)) {
-        await sendPage(job, cardIsStrip ? 'strip' : '4x6', cardIsStrip ? 'strip' : 'card');
+        await sendPage(job, cardIsStrip ? 'strip' : 'card');
       }
     }
     if (S.product.prints.strip && S.stripCanvas) {
       st.textContent = 'Printing your strip…';
-      for (const job of stripJobs(S.stripCanvas, S.product.prints.strip)) await sendPage(job, 'strip', 'strip');
+      for (const job of stripJobs(S.stripCanvas, S.product.prints.strip)) await sendPage(job, 'strip');
     }
     st.textContent = 'Sent to the printer.';
     await sleep(900);
@@ -2147,6 +2145,7 @@ ON_ENTER.admin = async () => {
       <div style="display:flex;gap:10px;align-items:center;margin-top:12px;flex-wrap:wrap">
         <button class="btn btn-ghost" id="print-test">Test print 4x6</button>
         <button class="btn btn-ghost" id="print-test-strip">Test print strips</button>
+        <button class="btn btn-ghost" id="print-test-cards">Test print cards</button>
         ${window.booth.printers.diagnose ? '<button class="btn btn-ghost" id="print-check">Check printer</button>' : ''}
         <span id="print-test-result" style="font-size:12px;color:var(--ink-dim)"></span>
       </div>
@@ -2225,17 +2224,19 @@ ON_ENTER.admin = async () => {
     ON_ENTER.admin();
   }));
 
-  // Calibration pages (layout.mjs drawCalibration): edge line, 20 px safe
-  // border, 10 px ruler ticks, the cut line for strips, the pixel size as text.
-  const printTest = async (e, kind) => {
+  // Calibration test prints (layout.mjs drawCalibration): each built in its
+  // design orientation, then through toPrinterNative like a real job.
+  const printTest = async (e, job) => {
     const btn = e.currentTarget, out = $('#print-test-result');
     btn.disabled = true; out.textContent = 'Printing…'; out.style.color = '';
-    const c = newCanvas(kind === 'strip' ? stripPageLayout() : pageSize('landscape'));
-    drawCalibration(c.getContext('2d'), { kind, orientation: 'landscape', label: new Date().toLocaleString() });
+    const d = CALIBRATION_DESIGN[job];
+    const c = newCanvas(d);
+    const rot = printRotations(S.cfg.printer);
+    drawCalibration(c.getContext('2d'), { job, rotation: d.rotationKey ? rot[d.rotationKey] : null, label: new Date().toLocaleString() });
     try {
-      const r = await sendPage({ canvas: c, copies: 1 }, kind, `test-${kind}`);
+      const r = await sendPage({ type: job, canvas: c, count: 2, copies: 1 }, `test-${job}`);
       out.style.whiteSpace = 'pre-wrap';
-      out.textContent = `Sent ✓ as a 1240x1844 portrait page${c.width > c.height ? ` (turned ${S.cfg.printer?.rotation ?? 90}°)` : ''} — saved ${r.file || ''}${(r.notes || []).map(n => `\n⚠ ${n}`).join('')}\n${r.paper || ''}`;
+      out.textContent = `Sent ✓ ${d.W}x${d.H} design, ${r.how} → ${NATIVE.W}x${NATIVE.H} — saved ${r.file || ''}${(r.notes || []).map(n => `\n⚠ ${n}`).join('')}\n${r.paper || ''}`;
     } catch (err) {
       out.textContent = `Failed: ${err.message}`;
       out.style.color = 'var(--bad)';
@@ -2253,6 +2254,7 @@ ON_ENTER.admin = async () => {
   });
   $('#print-test')?.addEventListener('click', e => printTest(e, '4x6'));
   $('#print-test-strip')?.addEventListener('click', e => printTest(e, 'strip'));
+  $('#print-test-cards')?.addEventListener('click', e => printTest(e, 'cards'));
 
   $$('[data-use-printer]').forEach(b => b.addEventListener('click', async () => {
     b.disabled = true;

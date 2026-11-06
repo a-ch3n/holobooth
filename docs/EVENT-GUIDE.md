@@ -139,9 +139,10 @@ Do these in this order:
    - **Cameras:** both say which device they matched (not "not found").
      **Camera diagnostics** opens each camera in turn and shows its
      picture and real resolution.
-   - **Printers:** press **Test print 4x6** (and **Test print strips** if
-     you sell strips). The black edge line and red line 20 px in should
-     show, and strips should come out as two pieces cut on the blue line.
+   - **Printers:** press **Test print 4x6**, **Test print cards** (and
+     **Test print strips** if you sell strips). The black edge line and red
+     line 20 px in should show, TOP ↑ should be the right way up, and
+     strips should come out as two pieces.
 6. **Paid events:** one real sale with your own card, then refund it.
 7. During the event, the **Camera log** in the operator screen records
    what went wrong if something does. **Copy camera log** and send it to

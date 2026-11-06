@@ -337,7 +337,7 @@
     }
   },
   "printer": {
-    "//": "DNP DS40, 300 dpi, 6x4 media. Every page is built at its native size: 1844x1240 (cards, landscape) or 1240x1844 (two 2x6 strips, portrait), and saved as a PNG before printing (media/<date>/prints/).",
+    "//": "DNP DS40, 300 dpi, 6x4 media. Every page goes to the printer as its native page, 1844x1240 (6x4 landscape, 2-inch cut at y = 620), and is saved as a PNG before printing (media/<date>/prints/).",
     "//os": "auto = Windows printing on Windows, CUPS (lp) on Linux / Raspberry Pi / macOS. Or force \"windows\" or \"cups\".",
     "os": "auto",
     "//queue4x6": "Printer name for 4x6 pages (cards). Windows: the DS40 entry set to 4x6 with NO cut. null = the photo printer found by name. Also settable in the operator panel (Printers → 4x6).",
@@ -348,8 +348,11 @@
     "finish": "glossy",
     "//copies": "Copies of every page on top of what the order needs: 1 = just the order.",
     "copies": 1,
-    "//rotation": "The printer always gets a portrait 1240x1844 page. A landscape card page (1844x1240) has its pixels turned clockwise by this many degrees first: 90 (default) or 270. If cards come out upside down, change 90 to 270. 0 and 180 leave a landscape page landscape, so printing it is refused. Strip pages are never turned.",
-    "rotation": 90,
+    "//rotation": "Every print reaches the printer as its native page: 6x4 LANDSCAPE, 1844x1240 px, the 2-inch cut a horizontal line at y = 620. portrait4x6: how a portrait 4x6 page (a Jumbo strip, 1240x1844) is turned to fit it. strip: how each 620x1844 strip is turned to 1844x620 (one copy above the cut, one below). 90 or 270, clockwise. If those prints come out upside down, change that value to 270. Trading cards are never turned: two upright cards per sheet, cut by hand, on the uncut 4x6 queue.",
+    "rotation": {
+      "portrait4x6": 90,
+      "strip": 90
+    },
     "//lpOptions": "CUPS only: extra -o options added after the detected ones, e.g. [\"StpColorCorrection=Accurate\"]. `lpoptions -p <printer> -l` lists them.",
     "lpOptions": []
   },
@@ -357,10 +360,8 @@
     "enabled": true,
     "//": "Which printer, finish and copies: see \"printer\" above. dpi is the render resolution of cards and strips (DS40 = 300).",
     "dpi": 300,
-    "//windowsMethod": "Windows only. chromium (default): a hidden print window holding only the page image, printed silently on a portrait 4x6 page (landscape: false), no margins, scale 100. xps: Windows' XPS print path (what Ctrl+P photo printing uses), starting from the queue's Printing Preferences. Test by hand: powershell -STA -ExecutionPolicy Bypass -File .\\electron\\winprint-xps.ps1 -Printer \"DS40\". Switchable in the operator panel (Print method).",
+    "//windowsMethod": "Windows only. chromium (default): a hidden print window holding only the page image, printed silently on a 6 in x 4 in page (the native page, image filling it), no margins, scale 100. xps: Windows' XPS print path (what Ctrl+P photo printing uses), starting from the queue's Printing Preferences. Test by hand: powershell -STA -ExecutionPolicy Bypass -File .\\electron\\winprint-xps.ps1 -Printer \"DS40\". Switchable in the operator panel (Print method).",
     "windowsMethod": "chromium",
-    "//chromiumPage": "Windows chromium method: \"4x6\" (default) prints a 4 x 6 in page with the image cover-fitted onto it (97.6%, ~5 px trimmed off the long edges). \"native\" prints a page of exactly the image's pixels at 300 dpi (4.13 x 6.15 in), nothing scaled. Compare with the test prints.",
-    "chromiumPage": "4x6",
     "//copiesMax": "Upper limit on copies of one page in one job.",
     "copiesMax": 10,
     "//dryRun": "true: build and save the pages but send nothing to the printer.",

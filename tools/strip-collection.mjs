@@ -5,7 +5,7 @@
  *
  * print/      every design × colour, print-ready at native DS40 size, photo
  *             boxes blank: 620x1844 (2x6 strip) and 1240x1844 (4x6 Jumbo)
- * pages/      what goes to the printer: two strips on a 1240x1844 page
+ * pages/      what goes to the printer: the native 1844x1240 page (toPrinterNative)
  * mockups/    front-facing mockups of the physical prints
  * index.html  the lookbook
  */
@@ -16,7 +16,8 @@ import { fileURLToPath } from 'node:url';
 import { FONT_FILES } from '../src/js/frames/fonts.mjs';
 import { styledStrip, collectionFrames, STYLES, JUMBO_STYLES, FORMATS, COLLECTION_NAME } from '../src/js/frames/strips.mjs';
 import { buildPersonal } from '../src/js/frames/render.mjs';
-import { composeStripPage } from '../src/js/layout.mjs';
+import { toPrinterNative, printRotations } from '../src/js/layout.mjs';
+const toNative = (type, canvas) => toPrinterNative({ type, canvas }, printRotations({}), (w, h) => createCanvas(w, h));
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = process.env.OUT || join(ROOT, 'out', 'strip-collection');
@@ -48,9 +49,9 @@ const t0 = Date.now();
 for (const fr of list) {
   const { canvas } = render(fr);
   writeFileSync(join(OUT, 'print', `${fr.id}.png`), canvas.toBuffer('image/png'));
+  if (fr.format === 'jumbo') writeFileSync(join(OUT, 'pages', `${fr.id}-page.png`), toNative('4x6', canvas).toBuffer('image/png'));
   if (fr.format === 'strip') {
-    const page = createCanvas(1240, 1844);
-    composeStripPage(page.getContext('2d'), canvas);
+    const page = toNative('strip', canvas);
     writeFileSync(join(OUT, 'pages', `${fr.id}-page.png`), page.toBuffer('image/png'));
   }
 }
@@ -133,8 +134,7 @@ for (const st of [...STYLES, ...JUMBO_STYLES]) {
 {
   const W = 1800, H = 1600;
   const { c, x } = surface(W, H);
-  const page = createCanvas(1240, 1844);
-  composeStripPage(page.getContext('2d'), renders.get('sc-keepsake-sage'));
+  const page = toNative('strip', renders.get('sc-keepsake-sage'));
   print(x, page, W / 2, H / 2, 1240, 0);
   jpeg(c, 'ds40-sheet.jpg');
 }

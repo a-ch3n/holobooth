@@ -5,22 +5,14 @@
  * by the unit tests (test/layout.test.mjs), so what the tests check is what
  * prints.
  *
- * DNP DS40, 300 dpi, 6x4 media. Its printable 6x4 area, bleed included, is
- * 1844 x 1240 px (Gutenprint's PPD: ImageableArea 297.6 x 442.56 pt). Every
- * page is built at exactly that size so nothing downstream rescales it.
+ * DNP DS40, 300 dpi, 6x4 media. Its native page is 6x4 LANDSCAPE, bleed
+ * included: 1844 x 1240 px, with the 2-inch cut at y = 620. Every print job
+ * is turned into exactly that page by toPrinterNative() (below), the only
+ * place in the print path that rotates anything.
  */
-
-export const DS40 = { long: 1844, short: 1240, dpi: 300 };
 
 /** Keep important content this far from every strip edge and the cut line. */
 export const SAFE_PX = 20;
-
-/** The 4x6 page in pixels: 1844 x 1240 landscape or 1240 x 1844 portrait. */
-export function pageSize(orientation = 'landscape', media = DS40) {
-  return orientation === 'portrait'
-    ? { W: media.short, H: media.long }
-    : { W: media.long, H: media.short };
-}
 
 /**
  * Centre crop ("cover"): the largest rectangle of the source with the
@@ -50,32 +42,17 @@ export function coverPlacement(srcW, srcH, boxW, boxH) {
   return { x: (boxW - w) / 2, y: (boxH - h) / 2, w, h, scale };
 }
 
-/**
- * Two 2x6 strips on one portrait 4x6 page: 1240 x 1844, each strip
- * 620 x 1844, side by side. The DS40's 2-inch cut (PageSize w288h432-div2, or
- * the "2inch cut" driver setting on Windows) cuts at x = 620.
- */
-export function stripPageLayout(media = DS40, safe = SAFE_PX) {
-  const { W, H } = pageSize('portrait', media);
-  const sw = W / 2;
-  const strips = [0, 1].map(i => ({ x: i * sw, y: 0, w: sw, h: H }));
-  return {
-    W, H, cutX: sw,
-    strips,
-    safe: strips.map(s => ({ x: s.x + safe, y: s.y + safe, w: s.w - safe * 2, h: s.h - safe * 2 })),
-    unit: { W: sw, H },
-  };
-}
-
-/** The strip itself (one of the two): 620 x 1844. */
-export const STRIP_PX = { W: DS40.short / 2, H: DS40.long };
+/** The strip itself, as designed (portrait): 620 x 1844. */
+export const STRIP_PX = { W: 620, H: 1844 };
 
 /**
- * Trading cards (750 x 1050 at 300 dpi) on a landscape 4x6 page: two side
- * by side, centred, cut out by hand along the cut marks.
+ * Trading cards (750 x 1050 at 300 dpi), upright, two side by side on the
+ * native 1844 x 1240 page, centred, cut out by hand along the cut marks.
+ * A 2.5 in card is taller than a 2-inch half, so card sheets always cross
+ * y = 620 and always print on the uncut queue.
  */
-export function cardSheetLayout(unitW, unitH, media = DS40) {
-  const { W, H } = pageSize('landscape', media);
+export function cardSheetLayout(unitW, unitH) {
+  const { W, H } = NATIVE;
   const cols = Math.max(1, Math.floor(W / unitW));
   const rows = Math.max(1, Math.floor(H / unitH));
   const x0 = Math.round((W - cols * unitW) / 2);
@@ -92,23 +69,107 @@ export function inside(rect, box) {
     rect.x + rect.w <= box.x + box.w + e && rect.y + rect.h <= box.y + box.h + e;
 }
 
-/* ------------------------------------------------------------- compose */
+/* ================================================= printer-native page */
 
-/** Draw the strip twice on the 1240 x 1844 page, pixel for pixel (no scaling). */
-export function composeStripPage(ctx, strip, media = DS40) {
-  const L = stripPageLayout(media);
-  if (strip.width !== L.unit.W || strip.height !== L.unit.H) {
-    throw new Error(`Strip must be ${L.unit.W}x${L.unit.H} px, got ${strip.width}x${strip.height}`);
-  }
-  ctx.fillStyle = '#fff';
-  ctx.fillRect(0, 0, L.W, L.H);
-  for (const s of L.strips) ctx.drawImage(strip, s.x, s.y);
-  return L;
+/**
+ * The DNP DS40 prints on 6-inch-wide media. Its native page is 6 x 4 in
+ * LANDSCAPE: 1844 x 1240 px at 300 dpi. The 2-inch cut is the horizontal
+ * line y = 620 (top half / bottom half). Every job reaches the printer as
+ * one page in exactly this layout.
+ */
+export const NATIVE = { W: 1844, H: 1240, cutY: 620 };
+
+/** Strips on the native page: two 1844 x 620 halves, cut at y = 620. */
+export function stripNativeLayout(safe = SAFE_PX) {
+  const halves = [0, 1].map(i => ({ x: 0, y: i * NATIVE.cutY, w: NATIVE.W, h: NATIVE.cutY }));
+  return {
+    W: NATIVE.W, H: NATIVE.H, cutY: NATIVE.cutY, halves,
+    safe: halves.map(h => ({ x: h.x + safe, y: h.y + safe, w: h.w - 2 * safe, h: h.h - 2 * safe })),
+  };
 }
 
-/** Cards onto 1844 x 1240 pages; returns how many cards each page holds. */
-export function composeCardSheet(ctx, card, count, media = DS40) {
-  const L = cardSheetLayout(card.width, card.height, media);
+/** Allowed values for printer.rotation.portrait4x6 and printer.rotation.strip. */
+export const PRINT_ROTATIONS = [90, 270];
+
+/**
+ * printer.rotation from the config: { portrait4x6, strip }, each 90 or 270
+ * (default 90). Anything else is reported in `problems` and the default used.
+ */
+export function printRotations(printer = {}) {
+  const r = printer?.rotation;
+  const out = { portrait4x6: 90, strip: 90, problems: [] };
+  if (r == null) return out;
+  if (typeof r !== 'object') { out.problems.push(`printer.rotation is now { "portrait4x6": 90, "strip": 90 }, not ${JSON.stringify(r)}; using 90 for both`); return out; }
+  for (const key of ['portrait4x6', 'strip']) {
+    if (r[key] == null) continue;
+    const v = Number(r[key]);
+    if (PRINT_ROTATIONS.includes(v)) out[key] = v;
+    else out.problems.push(`printer.rotation.${key} must be 90 or 270 (it is ${JSON.stringify(r[key])}); using 90`);
+  }
+  return out;
+}
+
+/**
+ * The only rotation in the print path: the canvas turned clockwise by 90 or
+ * 270 degrees. Width and height swap; translate, rotate, draw.
+ */
+function rotateCanvas(src, deg, makeCanvas) {
+  if (!PRINT_ROTATIONS.includes(deg)) throw new Error(`rotation must be 90 or 270, not ${deg}`);
+  const out = makeCanvas(src.height, src.width);
+  const ctx = out.getContext('2d');
+  if (deg === 90) { ctx.translate(out.width, 0); ctx.rotate(Math.PI / 2); }
+  else { ctx.translate(0, out.height); ctx.rotate(-Math.PI / 2); }
+  ctx.drawImage(src, 0, 0);
+  return out;
+}
+
+function whitePage(makeCanvas) {
+  const page = makeCanvas(NATIVE.W, NATIVE.H);
+  const ctx = page.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, NATIVE.W, NATIVE.H);
+  return { page, ctx };
+}
+
+/**
+ * Every print job → ONE 1844 x 1240 page in the DS40's native layout.
+ *
+ *   { type: '4x6', canvas }          1844 x 1240: used as is.
+ *                                    1240 x 1844 (e.g. a Jumbo strip): turned by rotation.portrait4x6.
+ *   { type: 'strip', canvas }        the 620 x 1844 strip: turned by rotation.strip to 1844 x 620,
+ *                                    copy 1 at y = 0, copy 2 at y = 620 (the 2-inch cut).
+ *   { type: 'cards', canvas, count } one 750 x 1050 card, upright, count (1 or 2) side by side.
+ *                                    Not turned; cut by hand; never sent to the cut queue.
+ *
+ * @param {{type:'4x6'|'strip'|'cards', canvas:any, count?:number}} job
+ * @param {{portrait4x6:number, strip:number}} rotation  from printRotations()
+ * @param {(w:number,h:number)=>any} makeCanvas
+ */
+export function toPrinterNative(job, rotation, makeCanvas) {
+  const src = job.canvas;
+  if (job.type === '4x6') {
+    if (src.width === NATIVE.W && src.height === NATIVE.H) return src;
+    if (src.width === NATIVE.H && src.height === NATIVE.W) return rotateCanvas(src, rotation.portrait4x6, makeCanvas);
+    throw new Error(`A 4x6 page must be 1844x1240 or 1240x1844, got ${src.width}x${src.height}`);
+  }
+  if (job.type === 'strip') {
+    if (src.width !== STRIP_PX.W || src.height !== STRIP_PX.H) throw new Error(`A strip must be ${STRIP_PX.W}x${STRIP_PX.H}, got ${src.width}x${src.height}`);
+    const turned = rotateCanvas(src, rotation.strip, makeCanvas);
+    const { page, ctx } = whitePage(makeCanvas);
+    for (const h of stripNativeLayout().halves) ctx.drawImage(turned, h.x, h.y);
+    return page;
+  }
+  if (job.type === 'cards') {
+    const { page, ctx } = whitePage(makeCanvas);
+    composeCardSheet(ctx, src, job.count || 1);
+    return page;
+  }
+  throw new Error(`Unknown print job type "${job.type}"`);
+}
+
+/** Cards onto the native page, upright; returns how many it holds. */
+export function composeCardSheet(ctx, card, count) {
+  const L = cardSheetLayout(card.width, card.height);
   ctx.fillStyle = '#fff';
   ctx.fillRect(0, 0, L.W, L.H);
   const n = Math.min(count, L.slots.length);
@@ -138,51 +199,28 @@ function drawCutMarks(ctx, L) {
   ctx.restore();
 }
 
-/* ---------------------------------------------------- printer rotation */
-
-export const ROTATIONS = [0, 90, 180, 270];
-
-/**
- * The page the printer gets is always portrait, 1240 x 1844. This is the ONE
- * place a page is turned: a landscape composite (1844 x 1240, the card
- * sheet) has its pixels rotated clockwise by printer.rotation (90 by
- * default; 270 if prints come out upside down). A portrait page (a strip
- * page) is returned as it is, never rotated. Nothing after this turns the
- * page again: the print path is portrait only.
- *
- * @param {{width:number,height:number}} src  canvas or image
- * @param {number} rotation  0, 90, 180 or 270 (only 90 and 270 make a landscape page portrait)
- * @param {(w:number,h:number)=>any} makeCanvas
- */
-export function toPortrait(src, rotation = 90, makeCanvas) {
-  const r = Number(rotation);
-  if (!ROTATIONS.includes(r)) throw new Error(`printer.rotation must be 0, 90, 180 or 270 (it is ${rotation})`);
-  if (src.height >= src.width) return src;
-  if (r === 0 || r === 180) throw new Error(`printer.rotation ${r} leaves a landscape page landscape; use 90 or 270`);
-  const out = makeCanvas(src.height, src.width);
-  const ctx = out.getContext('2d');
-  if (r === 90) { ctx.translate(out.width, 0); ctx.rotate(Math.PI / 2); }
-  else { ctx.translate(0, out.height); ctx.rotate(-Math.PI / 2); }
-  ctx.drawImage(src, 0, 0);
-  return out;
-}
-
 /* --------------------------------------------------------- calibration */
 
+/** Each test print's design, in its own design orientation, before toPrinterNative. */
+export const CALIBRATION_DESIGN = {
+  '4x6': { W: 1240, H: 1844, name: '4x6 portrait (Jumbo)', rotationKey: 'portrait4x6' },
+  strip: { W: 620, H: 1844, name: 'photo strip', rotationKey: 'strip' },
+  cards: { W: 750, H: 1050, name: 'trading card', rotationKey: null },
+};
+
 /**
- * The test-print image. A 1 px black border on the very edge pixels, a red
- * border SAFE_PX inside it, ruler ticks every 10 px (long every 50) along all
- * four edges, and the page's pixel size as text. For strips: the cut line in
- * blue and each strip's own safe border.
- *
- * Reading it: if the black edge line is missing on a side, the printer crops
- * there; the ticks say by how much. If the red line is missing, important
- * content would be lost. If the text size or the 10 px ticks measure wrong,
- * something scaled the page.
+ * The test-print design for a job type, drawn in its DESIGN orientation (it
+ * then goes through toPrinterNative like a real job):
+ *   - a big "TOP ↑" at the top, "LEFT" and "RIGHT" on the sides
+ *   - a 1 px black border on the very edge pixels, a red one SAFE_PX inside
+ *   - ruler ticks every 10 px along the edges
+ *   - strips and cards: where the cut falls, as a dashed blue line
+ *   - the job type and its rotation value
  */
-export function drawCalibration(ctx, { kind = '4x6', orientation = 'landscape', media = DS40, label = '' } = {}) {
-  const strip = kind === 'strip';
-  const { W, H } = strip ? pageSize('portrait', media) : pageSize(orientation, media);
+export function drawCalibration(ctx, { job = '4x6', rotation = null, label = '' } = {}) {
+  const d = CALIBRATION_DESIGN[job];
+  if (!d) throw new Error(`Unknown test print "${job}"`);
+  const { W, H } = d;
   ctx.save();
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, W, H);
@@ -199,61 +237,46 @@ export function drawCalibration(ctx, { kind = '4x6', orientation = 'landscape', 
     ctx.fillRect(0, Math.min(y, H - 1), len, 1);
     ctx.fillRect(W - len, Math.min(y, H - 1), len, 1);
   }
-
-  // 1 px border on the outermost pixels.
+  // 1 px border on the outermost pixels, and the safe border SAFE_PX in.
   ctx.fillRect(0, 0, W, 1); ctx.fillRect(0, H - 1, W, 1);
   ctx.fillRect(0, 0, 1, H); ctx.fillRect(W - 1, 0, 1, H);
+  ctx.fillStyle = '#e00000';
+  ctx.fillRect(SAFE_PX, SAFE_PX, W - 2 * SAFE_PX, 1); ctx.fillRect(SAFE_PX, H - SAFE_PX - 1, W - 2 * SAFE_PX, 1);
+  ctx.fillRect(SAFE_PX, SAFE_PX, 1, H - 2 * SAFE_PX); ctx.fillRect(W - SAFE_PX - 1, SAFE_PX, 1, H - 2 * SAFE_PX);
 
-  // Safe border, SAFE_PX in.
-  const box = (x, y, w, h, color) => {
-    ctx.fillStyle = color;
-    ctx.fillRect(x, y, w, 1); ctx.fillRect(x, y + h - 1, w, 1);
-    ctx.fillRect(x, y, 1, h); ctx.fillRect(x + w - 1, y, 1, h);
-  };
-  const lines = [];
-  if (strip) {
-    const L = stripPageLayout(media);
-    L.safe.forEach(s => box(s.x, s.y, s.w, s.h, '#e00000'));
-    // The cut line: solid 1 px at x = cutX, with arrows above and below.
-    ctx.fillStyle = '#0050ff';
-    ctx.fillRect(L.cutX, 0, 1, H);
-    for (const y of [40, H - 40]) {
-      ctx.beginPath();
-      ctx.moveTo(L.cutX - 18, y - (y < H / 2 ? 18 : -18)); ctx.lineTo(L.cutX + 18, y - (y < H / 2 ? 18 : -18)); ctx.lineTo(L.cutX, y);
-      ctx.closePath(); ctx.fill();
-    }
-    lines.push(`${W} x ${H} px`, 'two strips', `${L.unit.W} x ${L.unit.H} each`, `cut at x = ${L.cutX}`);
-  } else {
-    box(SAFE_PX, SAFE_PX, W - SAFE_PX * 2, H - SAFE_PX * 2, '#e00000');
-    lines.push(`${W} x ${H} px`, `${orientation} 4x6`);
-  }
-  lines.push(`black = edge pixel`, `red = ${SAFE_PX} px inside`);
-  if (label) lines.push(label);
+  // Where the cut falls, dashed: a strip's long edges (one of them is the
+  // printer's 2-inch cut, the other the paper edge); a card's outline (cut by hand).
+  ctx.strokeStyle = '#0050ff';
+  ctx.lineWidth = 3;
+  ctx.setLineDash([18, 12]);
+  ctx.beginPath();
+  if (job === 'strip') { ctx.moveTo(8.5, 0); ctx.lineTo(8.5, H); ctx.moveTo(W - 8.5, 0); ctx.lineTo(W - 8.5, H); }
+  if (job === 'cards') ctx.rect(8.5, 8.5, W - 17, H - 17);
+  ctx.stroke();
+  ctx.setLineDash([]);
 
-  // Text, centred in each strip (or the page), "TOP" first.
-  const columns = strip ? stripPageLayout(media).strips : [{ x: 0, y: 0, w: W, h: H }];
+  // Labels.
+  const big = Math.round(Math.min(W, H) * 0.14);
+  const small = Math.max(22, Math.round(big * 0.3));
   ctx.fillStyle = '#000';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  for (const col of columns) {
-    const big = Math.round(Math.min(col.w, col.h) * 0.14);
-    const small = Math.round(big * 0.33);
-    const cx = col.x + col.w / 2;
-    // A big "TOP ↑" at the top of the design, so a print shows at a glance
-    // which way the page went through the printer.
-    ctx.font = `bold ${big}px sans-serif`;
-    ctx.fillText('TOP ↑', cx, col.y + SAFE_PX + 30 + big * 0.55);
-    ctx.font = `${small}px sans-serif`;
-    const y0 = col.y + col.h / 2 - (lines.length - 1) * small * 0.75;
-    lines.forEach((t, i) => ctx.fillText(t, cx, y0 + i * small * 1.5));
-    // An arrow pointing at the design's right edge.
-    const ay = col.y + col.h * 0.8, ax1 = col.x + col.w - SAFE_PX - 34, ax0 = Math.max(col.x + SAFE_PX + 30, ax1 - col.w * 0.45);
-    const head = Math.min(46, col.w * 0.08);
-    ctx.fillRect(ax0, ay - 5, ax1 - ax0 - head, 10);
-    ctx.beginPath(); ctx.moveTo(ax1, ay); ctx.lineTo(ax1 - head, ay - head * 0.7); ctx.lineTo(ax1 - head, ay + head * 0.7); ctx.closePath(); ctx.fill();
-    ctx.font = `bold ${small}px sans-serif`;
-    ctx.fillText('RIGHT EDGE', (ax0 + ax1) / 2, ay - head * 0.7 - small * 0.5);
-  }
+  ctx.font = `bold ${big}px sans-serif`;
+  ctx.fillText('TOP ↑', W / 2, SAFE_PX + 30 + big * 0.55);
+  ctx.font = `bold ${small}px sans-serif`;
+  ctx.textAlign = 'left';
+  ctx.fillText('LEFT', SAFE_PX + 18, H / 2);
+  ctx.textAlign = 'right';
+  ctx.fillText('RIGHT', W - SAFE_PX - 18, H / 2);
+  ctx.textAlign = 'center';
+  ctx.font = `${small}px sans-serif`;
+  const rot = d.rotationKey ? `rotation.${d.rotationKey} = ${rotation ?? '?'}` : 'not rotated (upright, 2 per sheet)';
+  const lines = [`TEST: ${d.name}`, `${W} x ${H} px design`, rot,
+    job === 'strip' ? 'blue dashes = cut / paper edge' : job === 'cards' ? 'blue dashes = cut by hand' : 'no cut',
+    `black = edge, red = ${SAFE_PX} px in`];
+  if (label) lines.push(label);
+  const y0 = H / 2 + small * 2.2;
+  lines.forEach((t, i) => ctx.fillText(t, W / 2, y0 + i * small * 1.45, W - 2 * SAFE_PX - 40));
   ctx.restore();
   return { W, H };
 }

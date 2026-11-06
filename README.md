@@ -732,52 +732,55 @@ Printer: **DNP DS40**, 300 dpi, 6×4 media. Settings are under `printer` in
 | Key | What |
 |---|---|
 | `os` | `auto` (Windows printing on Windows, CUPS `lp` on Linux / Raspberry Pi / macOS), or force `windows` / `cups` |
-| `queue4x6` | Printer name for 4×6 pages (cards). `null` = the photo printer found by name |
+| `queue4x6` | Printer name for 4×6 pages and trading cards (the queue with NO cut). `null` = the photo printer found by name |
 | `queueStrip` | Printer name for strip pages (the 2-inch-cut queue on Windows) |
 | `finish` | `glossy` or `matte` |
 | `copies` | Copies of every page on top of what the order needs (1 = just the order) |
-| `rotation` | `90` (default) or `270`: how far a landscape card page is turned, clockwise, to make it portrait. If cards come out upside down, change 90 to 270 |
+| `rotation.portrait4x6` | `90` (default) or `270`: how a portrait 4×6 page (a Jumbo strip) is turned, clockwise, into the native page |
+| `rotation.strip` | `90` (default) or `270`: how each 620 × 1844 strip is turned, clockwise, into an 1844 × 620 half |
 
-### Pages at the DS40's native size
+### One printer-native page for everything
 
-Every page is built at exactly the DS40's 6×4 size with bleed, so nothing
-has to scale it (`src/js/layout.mjs`):
+The DS40 prints on 6-inch-wide media. Its native page is **6×4 LANDSCAPE:
+1844 × 1240 px** at 300 dpi, and its 2-inch cut is a **horizontal line at
+y = 620** (top half / bottom half). Every job becomes exactly that page in
+one function, `toPrinterNative()` in `src/js/layout.mjs`, the only place in
+the print path that rotates anything:
 
-- **4×6 (cards):** built 1844 × 1240 px, landscape. Two 2.5×3.5″ cards
-  (750 × 1050 px) side by side, centred, with cut marks; cut by hand.
-  Printed to `printer.queue4x6`.
+| Job | Designed as | On the native page |
+|---|---|---|
+| 4×6 landscape | 1844 × 1240 | used as is |
+| 4×6 portrait (Jumbo strip) | 1240 × 1844 | turned 90° by `rotation.portrait4x6` |
+| Photo strips | one 620 × 1844 strip | turned by `rotation.strip` to 1844 × 620; copy 1 at y = 0, copy 2 at y = 620. The cut separates them. Content stays 20 px from every edge and the cut |
+| Trading cards | 750 × 1050 (2.5 × 3.5 in) | **not turned**: two upright cards side by side, centred, with cut marks, cut by hand |
 
-**The printer only ever gets portrait 1240 × 1844 pages.** A landscape card
-page has its pixels turned once, clockwise by `printer.rotation` (90 by
-default), just before it's sent (`toPortrait()` in `src/js/layout.mjs`).
-Strip pages are portrait already and aren't turned. Nothing after that
-rotates a page: Chromium prints with `landscape: false` and a 4 in × 6 in
-page, the XPS script refuses landscape images, and CUPS gets
-`orientation-requested=3`. If cards print upside down, set
-`printer.rotation` to `270`.
-- **2×6 strips:** one 1240 × 1844 px portrait page with **two identical
-  620 × 1844 px strips side by side**. The DS40's 2-inch cut splits it at
-  x = 620 into two strips. Photos and text stay at least 20 px from every
-  strip edge and the cut line. Printed to `printer.queueStrip`.
+A 2.5 × 3.5 in card is taller than a 2-inch half, so card sheets always
+cross y = 620: **cards must print on the uncut 4×6 queue, never the strip
+queue**, or the printer cuts every card in half.
 
-Every page is **saved as a PNG before it's printed**, under the app's data
-folder: `media/<date>/prints/` (operator panel → Open photos folder), so
-the file can be compared with the print.
+If strips or Jumbos come out upside down, change that `rotation` value from
+90 to 270. Nothing else needs to change.
 
-**Test prints** (operator panel → Printers): **Test print 4x6** and **Test
-print strips** print a calibration page:
-- a 1 px black line on the very edge pixels
-- a red line 20 px inside it (the safe area)
+Every page is **saved as a PNG before it's printed**, exactly as sent:
+`media/<date>/prints/` under the app's data folder (operator panel → Open
+photos folder), and test prints in `media/test-prints/`.
+
+**Test prints** (operator panel → Printers): **Test print 4x6**, **Test
+print strips** and **Test print cards**. Each is drawn in its design
+orientation (a portrait Jumbo-shaped 4×6, one strip, one card) and goes
+through `toPrinterNative()` like a real job. Each shows:
+- a big **TOP ↑** at the top of the design, **LEFT** and **RIGHT** on the sides
+- a 1 px black line on the very edge pixels, and a red line 20 px inside it
 - ruler ticks every 10 px (long ones every 50 px) along all four edges
-- for strips, the blue cut line at x = 620
-- the page's pixel size as text
+- for strips and cards, where the cut falls, as a dashed blue line
+- the job type and its rotation value
 
 Reading it: a missing black line on a side means the printer crops there,
 and the ticks say by how much. If a red line is cut off, content would be
-lost. If the ticks measure wrong, something scaled the page. On strips, the
-cut should fall on the blue line.
+lost. A strip test should come out as two strips with TOP ↑ at the same end
+of each; a card test as two upright cards.
 
-### Windows: two DS40 queues (needed for strips)
+### Windows: two DS40 queues
 
 Windows doesn't install DNP's driver by itself. Download the **DS40 Windows
 driver** from DNP's support site (dnpphoto.com → Support → Drivers), turn
@@ -785,12 +788,14 @@ the printer on, plug it in by USB and run the installer. Check **Settings →
 Bluetooth & devices → Printers & scanners** lists it.
 
 Electron can't set the DS40's cut per job on Windows, so the same printer
-is added **twice**: one queue that never cuts (4×6), one that always cuts
-(strips).
+is added **twice**: one queue that never cuts (4×6 and cards), one that
+always cuts (strips). Both get the same orientation and paper, because the
+app always sends the same 6×4 landscape page and never relies on the driver
+to turn anything.
 
-1. **4×6 queue (no cut).** On the DS40 entry the installer made (e.g.
-   "DS40"): **Printing preferences → Paper Size (6x4), 2inch cut: Disable**.
-   Set Glossy or Matte here too.
+1. **4×6 / card queue (no cut).** On the DS40 entry the installer made (e.g.
+   "DS40"): **Printing preferences → Orientation: Landscape, Paper Size:
+   (6x4), 2inch cut: Disable**. Set Glossy or Matte here too.
 2. **Add the second queue** on the same port. In PowerShell as
    administrator (use your entry's exact name):
    ```powershell
@@ -801,35 +806,38 @@ is added **twice**: one queue that never cuts (4×6), one that always cuts
    want isn't listed" → Add a local printer → *use the DS40's existing USB
    port* → the DNP DS40 driver → name it "DS40 Strips".)
 3. **Strip queue (cut).** On "DS40 Strips": **Printing preferences →
-   Paper Size (6x4), 2inch cut: Enable**, and the same finish.
+   Orientation: Landscape, Paper Size: (6x4), 2inch cut: Enable**, and the
+   same finish.
 4. **Tell HoloBooth.** Operator panel → Printers: tap **4x6** on "DS40"
    and **Strips** on "DS40 Strips". Or put them in the config:
    ```json
    "printer": { "queue4x6": "DS40", "queueStrip": "DS40 Strips" }
    ```
    (Saved on this PC, in `config/booth.config.local.json`.)
-5. **Test print strips** should come out as two pieces, cut on the blue
-   line. **Test print 4x6** should come out uncut.
+5. **Test print strips** should come out as two pieces, cut between the
+   two copies. **Test print 4x6** and **Test print cards** come out uncut.
 
 With `queueStrip` unset, strips go to the 4×6 queue and come out uncut;
 the operator panel shows that in red.
 
 **Print method** (operator panel, or `printing.windowsMethod`):
 - `chromium` (default): a hidden print window holding only the page image,
-  printed silently: `@page { size: 4in 6in; margin: 0 }`, the image
-  `object-fit: cover`, and `webContents.print` with `silent`,
-  `printBackground`, the queue as `deviceName`, `marginType: 'none'`,
-  `landscape: false`, `scaleFactor: 100`, the copies,
-  and `pageSize` in microns (101600 × 152400). It waits for the image's load
-  event, and a failure's reason is shown on screen. Covering 6 in with
-  1844 px is a 97.6% scale, which trims about 5 px off the two long edges
-  (inside the 20 px safe area). `printing.chromiumPage: "native"` prints a
-  page of exactly the image's pixels at 300 dpi (4.13 × 6.15 in) instead;
-  compare the two with the test prints.
+  printed silently: `@page { size: 6in 4in; margin: 0 }`, the image exactly
+  6 in × 4 in (it already matches the page, so no cropping), and
+  `webContents.print` with `silent`, `printBackground`, the queue as
+  `deviceName`, `marginType: 'none'`, `scaleFactor: 100`, the copies, and
+  `pageSize` 152400 × 101600 microns (6 in wide × 4 in tall). It waits for
+  the image's load event, and a failure's reason is shown on screen.
+  Checked with `printToPDF` on that exact print page: one page, 6 × 4 in
+  landscape (432 × 288 pt), no `/Rotate`, the image upright and filling it
+  edge to edge with no crop. The CSS `@page` size decides the orientation;
+  the `landscape` flag made no difference, so it isn't set. The queue's own
+  paper size still applies, which is why it must be **(6x4)**: a PDF
+  printer with no 6×4 size fitted the page onto its nearest size instead.
 - `xps`: Windows' XPS print path (what Ctrl+P photo printing uses),
   starting from the queue's Printing Preferences. Test by hand:
   `powershell -STA -ExecutionPolicy Bypass -File .\electron\winprint-xps.ps1 -Printer "DS40"`.
-  It prints portrait pages only and never rotates.
+  It prints the native 6×4 landscape page only and never rotates.
 
 Glossy/matte on Windows is set in each queue's Printing Preferences.
 Chromium can't pass it per job.
@@ -849,17 +857,20 @@ driver (checked against `gutenprint.5.3://dnp-ds40/expert`) that gives:
 
 | Page | Options sent |
 |---|---|
-| 4×6 | `PageSize=w288h432` `StpLaminate=Glossy` (or `Matte`) `StpiShrinkOutput=Crop` `orientation-requested=3` `print-scaling=none` |
-| strips | `PageSize=w288h432-div2` (the driver's "2x6*2": 4×6 cut in two), the same finish and no-scaling options |
+| 4×6 and cards | `PageSize=w288h432` `StpLaminate=Glossy` (or `Matte`) `StpiShrinkOutput=Crop` `orientation-requested=4` `print-scaling=none` |
+| strips | `PageSize=w288h432-div2` (the driver's "2x6*2": 4×6 cut in two), the same finish and other options |
 
-The page goes to CUPS as a one-page PDF exactly 1240 × 1844 px at 300 dpi
-(297.6 × 442.56 pt, which is Gutenprint's 4×6 printable area), so it's
-printed at native size. It's always portrait (already turned by the
-kiosk), and `orientation-requested=3` tells CUPS so, with no fit-to-page or
-auto-rotate options. Run through the DS40's CUPS filters, the page came out
-1240 × 1844 px with the edge, safe and cut lines on the same pixel
-columns as the file. Vertically it lands 1 px lower: Ghostscript's
-rounding, 0.08 mm. DNP's own macOS driver names things differently (e.g.
+The native page goes to CUPS as a one-page PDF exactly 1844 × 1240 px at
+300 dpi (442.56 × 297.6 pt), no fit-to-page. **Gutenprint's DS40 driver
+only has portrait paper sizes**: its 4×6 is a 1240 × 1844 raster, with the
+2-inch cut running down it at x = 620. So the job says the page is
+landscape (`orientation-requested=4`), and CUPS lays it onto that frame
+turned 90°. Checked through the DS40's CUPS filters: the whole page
+arrives, and the native cut line y = 620 lands on x = 620 of the driver's
+frame. Without it (`orientation-requested=3`, or auto-rotate switched off)
+the landscape page is cropped onto the portrait frame and loses two corners.
+If a CUPS print comes out upside down, add `"orientation-requested=5"` to
+`printer.lpOptions`. DNP's own macOS driver names things differently (e.g.
 `PageSize=dnp6x4` plus `Cutter=2Inch`); the same matching finds those.
 Extra options for every job: `printer.lpOptions`.
 

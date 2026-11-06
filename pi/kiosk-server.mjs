@@ -97,9 +97,9 @@ const METHODS = {
     const png = Buffer.from(String(dataUrl).split(',')[1] || '', 'base64');
     const sharp = (await import('sharp')).default;
     const { width, height } = await sharp(png).metadata();
-    // Always portrait: the kiosk turns landscape pages first (printer.rotation).
-    if (width !== 1240 || height !== 1844) {
-      return { ok: false, reason: `The page is ${width}x${height} px; the printer is only sent portrait 1240x1844 pages` };
+    // Only the printer-native page (toPrinterNative in src/js/layout.mjs).
+    if (width !== 1844 || height !== 1240) {
+      return { ok: false, reason: `The page is ${width}x${height} px; the printer is only sent its native 1844x1240 page` };
     }
     const now = new Date();
     const dir = join(DATA_DIR, 'media', now.toISOString().slice(0, 10), 'prints');

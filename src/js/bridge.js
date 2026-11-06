@@ -157,15 +157,18 @@ function makeMemoryBridge() {
   };
 }
 
-/** Plain browser preview: the system print dialog, same 4x6 page CSS as the Electron print page. */
+/** Plain browser preview: the system print dialog, the same 6in x 4in native page as the Electron print page. */
 function printInBrowser({ dataUrl, copies = 1 } = {}) {
   if (!dataUrl) return Promise.reject(new Error('Print requires an image'));
   return new Promise((resolve, reject) => {
     const probe = new Image();
     probe.onerror = () => reject(new Error('Print image failed to load'));
     probe.onload = () => {
-      const landscape = probe.naturalWidth > probe.naturalHeight;
-      const [w, h] = landscape ? ['6in', '4in'] : ['4in', '6in'];
+      // Only the printer-native page (toPrinterNative): 1844 x 1240, never turned here.
+      if (probe.naturalWidth !== 1844 || probe.naturalHeight !== 1240) {
+        reject(new Error(`Print page is ${probe.naturalWidth}x${probe.naturalHeight}, expected the native 1844x1240`));
+        return;
+      }
       const frame = document.createElement('iframe');
       Object.assign(frame.style, { position: 'fixed', width: '1px', height: '1px', opacity: '0', border: '0' });
       frame.onload = () => {
@@ -180,11 +183,11 @@ function printInBrowser({ dataUrl, copies = 1 } = {}) {
         }
       };
       const pages = Array.from({ length: Math.max(1, copies) }, () =>
-        `<img src="${dataUrl}" style="width:${w};height:${h}">`).join('');
+        `<img src="${dataUrl}">`).join('');
       frame.srcdoc = `<!doctype html><html><head><style>
-        @page { size: ${w} ${h}; margin: 0 }
+        @page { size: 6in 4in; margin: 0 }
         html, body { margin: 0; padding: 0 }
-        img { display: block; object-fit: cover }
+        img { display: block; width: 6in; height: 4in }
       </style></head><body>${pages}</body></html>`;
       document.body.append(frame);
     };

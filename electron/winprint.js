@@ -101,8 +101,8 @@ function ensureXpsScript() {
   return xpsScript;
 }
 
-/** file: the page image on disk (the saved PNG), always portrait. */
-async function printXps({ file, widthIn = 4, heightIn = 6, printer, copies = 1 }) {
+/** file: the page image on disk (the saved PNG): the printer-native 6x4 landscape page. */
+async function printXps({ file, widthIn = 6, heightIn = 4, printer, copies = 1 }) {
   const out = await new Promise(resolve => {
     execFile('powershell.exe', ['-STA', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ensureXpsScript(),
       '-Printer', printer, '-Image', file, '-W', String(widthIn), '-H', String(heightIn), '-Copies', String(copies)],

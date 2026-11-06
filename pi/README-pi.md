@@ -130,9 +130,10 @@ e.g. `["StpColorCorrection=Accurate"]`. Paper size, cut, finish
 Set `printing.dryRun: true` to have the service build the PDF and log the exact
 `lp` command without printing. Use it to burn in the flow without burning ribbon.
 
-**Media:** the DS40 loads 6×4. Cards go two to a 1844×1240 page with cut
-marks; strips go two to a 1240×1844 page that the printer cuts in half (see
-the main README → Printing).
+**Media:** the DS40 loads 6×4. Every job is sent as its native page,
+1844×1240 landscape: cards two upright with cut marks, strips turned and
+stacked above and below the 2-inch cut at y = 620 (see the main README →
+Printing).
 
 ---
 

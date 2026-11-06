@@ -2,11 +2,19 @@
  * print.mjs — native-size printing through CUPS (Linux / Raspberry Pi, and
  * macOS), shared by electron/main.js and pi/kiosk-server.mjs.
  *
- * The page arrives already portrait, 1240 x 1844 px (the kiosk turns
- * landscape pages: printer.rotation). It's wrapped in a one-page PDF whose
- * MediaBox is exactly those pixels at 300 dpi (297.6 x 442.56 pt), and sent
- * with orientation-requested=3 (portrait) and no scaling, so CUPS neither
- * fits nor rotates it.
+ * The page arrives as the printer-native 6x4 landscape page, 1844 x 1240
+ * px (the kiosk's toPrinterNative), wrapped in a one-page PDF exactly that
+ * size at 300 dpi (442.56 x 297.6 pt), with no scaling.
+ *
+ * Gutenprint's DS40 driver only has PORTRAIT paper sizes: its 4x6
+ * (w288h432) is a 1240 x 1844 raster, with the 2-inch cut (w288h432-div2)
+ * running down it at x = 620. A landscape page has to be laid onto that
+ * frame turned 90 degrees, so the job says so explicitly:
+ * orientation-requested=4 (landscape). Checked through the DS40's CUPS
+ * filters: the whole page arrives, and the native cut line y = 620 lands
+ * on x = 620 of the driver's frame. Without it (orientation-requested=3,
+ * or nopdfAutoRotate) the landscape page is cropped onto the portrait
+ * frame. No fit-to-page.
  *
  * Option names come from the printer itself (`lpoptions -p <printer> -l`),
  * never hardcoded. Gutenprint's DS40 driver reports (checked against
@@ -46,13 +54,14 @@ export function jpegSize(buf) {
 }
 
 /**
- * One-page PDF, exactly the image's pixels at dpi. Portrait only: the kiosk
- * turns a landscape page before it gets here (printer.rotation), so a
- * landscape image is refused rather than turned a second time.
+ * One-page PDF, exactly the image's pixels at dpi: the printer-native page,
+ * 1844 x 1240 = 6.15 x 4.13 in, landscape. Anything not landscape is
+ * refused rather than turned: the kiosk's toPrinterNative() is the only
+ * place a page is rotated.
  */
 export function jpegToPdf(jpeg, { dpi = 300 } = {}) {
   const { width: pw, height: ph } = jpegSize(jpeg);
-  if (pw > ph) throw new Error(`Only portrait pages are printed (got ${pw}x${ph}); turn it first (printer.rotation)`);
+  if (pw <= ph) throw new Error(`Only the printer-native landscape page is printed (got ${pw}x${ph}); build it with toPrinterNative()`);
   const W = +(pw / dpi * PT_PER_IN).toFixed(3);
   const H = +(ph / dpi * PT_PER_IN).toFixed(3);
   const cm = `${W} 0 0 ${H} 0 0`;
@@ -181,7 +190,7 @@ export async function listPrinters() {
 
 /**
  * @param {object} o
- * @param {Buffer} o.jpeg        the page as a JPEG at native size, portrait (1240x1844)
+ * @param {Buffer} o.jpeg        the printer-native page as a JPEG, 1844x1240
  * @param {'4x6'|'strip'} o.kind
  * @param {string} [o.printerName]
  * @param {number} [o.copies]
@@ -208,10 +217,10 @@ export async function printImage(o) {
   const args = [];
   if (printerName) args.push('-d', printerName);
   args.push('-n', String(Math.max(1, copies)));
-  // Already portrait and exactly the printable area at 300 dpi: tell CUPS
-  // it's portrait (3) so it doesn't rotate it, and don't scale it. No
-  // fit-to-page or auto-rotate options.
-  for (const opt of ['orientation-requested=3', 'print-scaling=none', ...detected.set, ...(lpOptions || [])]) args.push('-o', opt);
+  // The native landscape page: say it's landscape (4), so the driver's
+  // portrait frame takes it whole (see the top of this file). No scaling,
+  // no fit-to-page.
+  for (const opt of ['orientation-requested=4', 'print-scaling=none', ...detected.set, ...(lpOptions || [])]) args.push('-o', opt);
   args.push(file);
 
   const info = {
