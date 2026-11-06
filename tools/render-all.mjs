@@ -10,7 +10,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { allFrames, RARITY_ORDER, frameBox } from '../src/js/frames/packs.mjs';
-import { renderCard, renderStrip, mintCard, printSize } from '../src/js/frames/render.mjs';
+import { renderCard, renderStrip, mintCard, printSize, printKindFor } from '../src/js/frames/render.mjs';
 import { drawFakePhoto, drawFakeCharacter } from './fixtures.mjs';
 import { companionCanvas, companionById, COMPANIONS } from '../src/js/frames/companions.mjs';
 import { setCanvasFactory } from '../src/js/frames/draw.mjs';
@@ -80,7 +80,7 @@ for (const frame of allFrames()) {
   const rarity = RARITY_ORDER[i % RARITY_ORDER.length];
   const card = mintCard({ frameId: frame.id, mint: 12 + i * 37, forcedRarity: frame.rarityFloor || rarity });
   // Strips are 2:6, cards 2.5:3.5 — render each at its own aspect.
-  const isStripFrame = frame.template === 'strip';
+  const isStripFrame = printKindFor(frame) !== 'card';
   const box = frameBox(frame, isStripFrame ? Math.round(H / 3) : W);
   const canvas = createCanvas(box.W, box.H);
   const ctx = canvas.getContext('2d');

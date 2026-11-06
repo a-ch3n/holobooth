@@ -9,6 +9,7 @@
  * thumbnail and a 750x1050 300dpi print master.
  */
 
+import { stripDesign } from './strips/catalog.mjs';
 import {
   roundRect, notchRect, scallopRect, heartPath, confetti,
   linGrad, radGrad, shade, alpha, bevel, inset,
@@ -1189,4 +1190,4 @@ export function strip(ctx, o) {
   ctx.restore();
 }
 
-export const TEMPLATES = { creature, creatureMax, creatureFullArt, party, kawaii, assetPack, strip };
+export const TEMPLATES = { creature, creatureMax, creatureFullArt, party, kawaii, assetPack, strip, stripDesign };
