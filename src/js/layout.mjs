@@ -280,3 +280,52 @@ export function drawCalibration(ctx, { job = '4x6', rotation = null, label = '' 
   ctx.restore();
   return { W, H };
 }
+
+/* ---------------------------------------------------------- build stamp */
+
+/** 8 pt at 300 dpi. */
+export const STAMP_PX = Math.round(8 / 72 * 300);
+
+/**
+ * The build stamp's text: the code version, the job type and its rotation.
+ * @param {{ build?: { commit?: string|null, time?: string|null, packaged?: boolean },
+ *           job: { type: string, canvas: { width: number, height: number } },
+ *           rotation: { portrait4x6: number, strip: number } }} o
+ */
+export function buildStampText({ build = {}, job, rotation }) {
+  const ver = build.commit ? build.commit.slice(0, 7)
+    : build.time ? `built ${String(build.time).slice(0, 16).replace('T', ' ')}` : 'unknown build';
+  const rot = job.type === 'strip' ? `rotation.strip ${rotation.strip}`
+    : job.type === 'cards' ? 'cards upright (no rotation)'
+    : job.canvas.width === NATIVE.W ? '4x6 landscape (no rotation)'
+    : `rotation.portrait4x6 ${rotation.portrait4x6}`;
+  return `${ver}${build.packaged ? ' pkg' : ''} · ${job.type} · ${rot}`;
+}
+
+/**
+ * Draws the build stamp in the bottom-right corner of the native page, in
+ * 8 pt grey, inside the 20 px safe margin (with a thin white edge so it
+ * reads on dark designs). Returns its box.
+ */
+export function drawBuildStamp(ctx, text, { W = NATIVE.W, H = NATIVE.H } = {}) {
+  ctx.save();
+  ctx.font = `${STAMP_PX}px sans-serif`;
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'alphabetic';
+  const m = ctx.measureText(text);
+  const pad = 6;
+  const right = W - SAFE_PX - pad;
+  const bottom = H - SAFE_PX - pad;
+  const descent = Math.ceil(m.actualBoundingBoxDescent || STAMP_PX * 0.22);
+  const ascent = Math.ceil(m.actualBoundingBoxAscent || STAMP_PX * 0.78);
+  const y = bottom - descent;
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+  ctx.strokeText(text, right, y);
+  ctx.fillStyle = '#808080';
+  ctx.fillText(text, right, y);
+  ctx.restore();
+  const w = Math.ceil(m.width) + 4;
+  return { x: right - w + 2, y: y - ascent - 2, w, h: ascent + descent + 4 };
+}

@@ -88,9 +88,11 @@ const METHODS = {
   'config.reload': () => (config = loadConfig()),
 
   'printers.list': () => listPrinters(),
-  // Same job shape as Electron (electron/main.js printImage): a PNG at the
-  // DS40's native 1844x1240 / 1240x1844, saved to disk before it's sent.
-  'printers.print': async ({ dataUrl, kind = '4x6', copies = 1, label = '' } = {}) => {
+  // Same job shape as Electron (electron/main.js printImage), the back end
+  // of the kiosk's sendToPrinter(): the DS40's native 1844x1240 PNG, saved
+  // to disk before it's sent. printer.dryRun (default on): nothing is sent;
+  // the PNG and the exact PDF lp would get go to previews/.
+  'printers.print': async ({ dataUrl, kind = '4x6', copies = 1, label = '', jobType = null, force = false } = {}) => {
     if (config.printing?.enabled === false) return { ok: false, reason: 'Printing is disabled in booth.config.json' };
     const pc = { queue4x6: null, queueStrip: null, finish: 'glossy', copies: 1, lpOptions: [], ...(config.printer || {}) };
     kind = kind === 'strip' ? 'strip' : '4x6';
@@ -102,6 +104,23 @@ const METHODS = {
       return { ok: false, reason: `The page is ${width}x${height} px; the printer is only sent its native 1844x1240 page` };
     }
     const now = new Date();
+    jobType = ['4x6', 'strip', 'cards'].includes(jobType) ? jobType : kind;
+    const queue0 = kind === 'strip' ? (pc.queueStrip || pc.queue4x6) : pc.queue4x6;
+    if (pc.dryRun !== false && !force) {
+      const pdir = join(DATA_DIR, 'previews');
+      await mkdir(pdir, { recursive: true });
+      const p2 = v => String(v).padStart(2, '0');
+      const ts = `${now.getFullYear()}${p2(now.getMonth() + 1)}${p2(now.getDate())}-${p2(now.getHours())}${p2(now.getMinutes())}${p2(now.getSeconds())}-${String(now.getMilliseconds()).padStart(3, '0')}`;
+      const base = join(pdir, `${ts}_${jobType}${/^test-/.test(String(label)) ? '-test' : ''}`);
+      await writeFile(`${base}.png`, png);
+      const jpegP = await sharp(png).flatten({ background: '#ffffff' }).jpeg({ quality: 100, chromaSubsampling: '4:4:4' }).toBuffer();
+      const r = await printImage({ jpeg: jpegP, kind, printerName: queue0, copies: 1, finish: pc.finish, lpOptions: pc.lpOptions, dryRun: true });
+      if (!r.ok) return { ok: false, dryRun: true, reason: r.reason, png: `${base}.png` };
+      await writeFile(`${base}.pdf`, await readFile(r.file));
+      console.log(`[print] PREVIEW ONLY (printer.dryRun) ${jobType} → ${base}.png + .pdf; ${r.command}`);
+      return { ok: true, dryRun: true, png: `${base}.png`, pdf: `${base}.pdf`, file: `${base}.png`, jobType, kind, how: `the PDF lp would get: ${r.command}`,
+        paper: `PREVIEW ONLY, nothing sent to the printer (printer.dryRun)\nPNG ${base}.png\nPDF ${base}.pdf`, notes: [] };
+    }
     const dir = join(DATA_DIR, 'media', now.toISOString().slice(0, 10), 'prints');
     await mkdir(dir, { recursive: true });
     const file = join(dir, `${now.toTimeString().slice(0, 8).replace(/:/g, '')}${String(now.getMilliseconds()).padStart(3, '0')}-${kind}${label ? `-${String(label).replace(/[^\w-]+/g, '_').slice(0, 40)}` : ''}.png`);
@@ -112,12 +131,17 @@ const METHODS = {
     const jpeg = await sharp(png).flatten({ background: '#ffffff' }).jpeg({ quality: 100, chromaSubsampling: '4:4:4' }).toBuffer();
     const r = await printImage({
       jpeg, kind, printerName: auto.name,
-      copies: Math.max(1, Math.min(Math.round(copies * (pc.copies || 1)), config.printing?.copiesMax || 10)),
+      copies: force ? 1 : Math.max(1, Math.min(Math.round(copies * (pc.copies || 1)), config.printing?.copiesMax || 10)),
       finish: pc.finish, lpOptions: pc.lpOptions,
-      dryRun: !!config.printing?.dryRun,
     });
     console.log('[print]', JSON.stringify(r));
     return { ...r, file, notes: r.problems || [], paper: `${r.command || ''}${r.options?.length ? ` (${r.options.join(', ')})` : ''}` };
+  },
+
+  'printers.dryRun': on => {
+    writeLocalPatch(LOCAL_CONFIG_PATH, { printer: { dryRun: !!on } });
+    config = loadConfig();
+    return { ok: true, dryRun: config.printer?.dryRun !== false, config };
   },
 
   'cameras.remember': async ({ role, deviceId, label } = {}) => {
@@ -299,7 +323,7 @@ createServer(async (req, res) => {
   console.log(`  model    ${piModel()}`);
   console.log(`  ui       http://localhost:${PORT}/src/index.html`);
   console.log(`  data     ${DATA_DIR}`);
-  console.log(`  printing ${config.printing?.enabled === false ? 'disabled' : (config.printing?.dryRun ? 'DRY RUN' : 'enabled')}\n`);
+  console.log(`  printing ${config.printing?.enabled === false ? 'disabled' : (config.printer?.dryRun !== false ? 'PREVIEW ONLY (printer.dryRun)' : 'enabled')}\n`);
 });
 
 process.on('SIGTERM', () => process.exit(0));

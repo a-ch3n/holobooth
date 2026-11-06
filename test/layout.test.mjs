@@ -8,6 +8,7 @@ import { createCanvas } from '@napi-rs/canvas';
 import {
   SAFE_PX, STRIP_PX, NATIVE, PRINT_ROTATIONS, CALIBRATION_DESIGN, coverCrop, coverPlacement,
   stripNativeLayout, cardSheetLayout, inside, toPrinterNative, printRotations, drawCalibration,
+  buildStampText, drawBuildStamp, STAMP_PX,
 } from '../src/js/layout.mjs';
 import { renderStrip, printSize, mintCard } from '../src/js/frames/render.mjs';
 import { allFrames } from '../src/js/frames/packs.mjs';
@@ -188,6 +189,30 @@ test('rotation config: 90 or 270 per job, default 90, anything else reported', (
   const old = printRotations({ rotation: 270 });
   assert.equal(old.strip, 90); assert.match(old.problems[0], /portrait4x6/);
   assert.deepEqual(PRINT_ROTATIONS, [90, 270]);
+});
+
+test('build stamp: 8 pt, bottom right, inside the 20 px safe margin, clear of the cut, names the job and rotation', () => {
+  assert.equal(STAMP_PX, 33);
+  const build = { commit: 'e3486bf1234567890', packaged: false };
+  const jobs = [
+    [{ type: 'strip', canvas: { width: 620, height: 1844 } }, /e3486bf · strip · rotation\.strip 270/],
+    [{ type: 'cards', canvas: { width: 750, height: 1050 } }, /cards upright/],
+    [{ type: '4x6', canvas: { width: 1240, height: 1844 } }, /rotation\.portrait4x6 270/],
+    [{ type: '4x6', canvas: { width: 1844, height: 1240 } }, /4x6 landscape \(no rotation\)/],
+  ];
+  for (const [job, re] of jobs) {
+    const text = buildStampText({ build, job, rotation: ROT270 });
+    assert.match(text, re);
+    const c = createCanvas(1844, 1240);
+    const box = drawBuildStamp(c.getContext('2d'), text);
+    assert.ok(inside(box, { x: SAFE_PX, y: SAFE_PX, w: 1844 - 2 * SAFE_PX, h: 1240 - 2 * SAFE_PX }), `${text}: ${JSON.stringify(box)}`);
+    assert.ok(box.y > NATIVE.cutY, 'in the bottom half, clear of the cut');
+    assert.ok(box.x + box.w > 1844 - 60 && box.y + box.h > 1240 - 60, 'bottom-right corner');
+    const g = c.getContext('2d').getImageData(box.x, box.y, box.w, box.h).data;
+    let grey = 0; for (let i = 0; i < g.length; i += 4) if (g[i + 3] > 200 && Math.abs(g[i] - 128) < 30 && g[i] === g[i + 1]) grey++;
+    assert.ok(grey > 50, 'grey text drawn');
+  }
+  assert.match(buildStampText({ build: { time: '2026-11-06T15:52:00Z' }, job: jobs[0][0], rotation: ROT90 }), /built 2026-11-06 15:52/);
 });
 
 /* ------------------------------------------------------------ calibration */

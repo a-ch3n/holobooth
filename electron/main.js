@@ -21,6 +21,42 @@ let win = null;
 let config = loadConfig();
 
 /**
+ * Which code is running, for the build stamp on every print and preview:
+ * the commit of this checkout (read from .git, no git needed), or for a
+ * packaged build the commit `npm run dist` wrote to electron/build-info.json.
+ * time: when the print code on disk last changed (or the build time).
+ */
+function readBuildInfo() {
+  const info = { commit: null, time: null, source: 'unknown', packaged: app.isPackaged, root: ROOT };
+  try {
+    const b = JSON.parse(fs.readFileSync(path.join(__dirname, 'build-info.json'), 'utf8'));
+    Object.assign(info, { commit: b.commit || null, time: b.time || null, source: 'build-info.json (packaged build)' });
+  } catch {}
+  if (!info.commit) {
+    try {
+      const gitDir = path.join(ROOT, '.git');
+      let head = fs.readFileSync(path.join(gitDir, 'HEAD'), 'utf8').trim();
+      if (head.startsWith('ref: ')) {
+        const ref = head.slice(5);
+        const loose = path.join(gitDir, ref);
+        head = fs.existsSync(loose)
+          ? fs.readFileSync(loose, 'utf8').trim()
+          : ((fs.readFileSync(path.join(gitDir, 'packed-refs'), 'utf8').split('\n').find(l => l.endsWith(` ${ref}`)) || '').split(' ')[0]);
+      }
+      if (/^[0-9a-f]{40}$/.test(head)) Object.assign(info, { commit: head, source: 'git checkout' });
+    } catch {}
+  }
+  if (!info.time) {
+    const files = ['src/js/app.js', 'src/js/layout.mjs', 'electron/main.js'].map(f => path.join(ROOT, f));
+    const t = Math.max(...files.map(f => { try { return fs.statSync(f).mtimeMs; } catch { return 0; } }));
+    if (t) info.time = new Date(t).toISOString();
+  }
+  return info;
+}
+const BUILD = readBuildInfo();
+console.log(`[build] commit ${BUILD.commit ? BUILD.commit.slice(0, 7) : 'unknown'} (${BUILD.source}${BUILD.packaged ? ', packaged app' : ''}) at ${BUILD.root}, print code changed ${BUILD.time}`);
+
+/**
  * Windows camera API. Media Foundation (Chromium's default) is what the
  * Windows Camera app uses. camera.windowsCaptureApi: "directshow" switches
  * to the API OBS uses instead: turning the Media Foundation feature off
@@ -220,13 +256,26 @@ function savePrintFile(dataUrl, kind, label) {
   return file;
 }
 
+/** printer.dryRun: on unless the config says false. */
+function isDryRun(pc = printerCfg()) {
+  return pc.dryRun !== false;
+}
+
 /**
- * @param {{ dataUrl: string, kind: '4x6'|'strip', copies?: number, label?: string }} job
+ * The back end of the renderer's sendToPrinter() (src/js/app.js), the one
+ * function every print goes through after toPrinterNative(). Nothing else
+ * in the app prints.
+ *
+ * @param {{ dataUrl: string, kind: '4x6'|'strip', copies?: number, label?: string,
+ *           jobType?: '4x6'|'strip'|'cards', force?: boolean }} job
  *   dataUrl: PNG, the native page: exactly 1844x1240.
+ *   force: print for real although printer.dryRun is on (the preview
+ *   panel's "print for real" button, one copy).
  */
-async function printImage({ dataUrl, kind = '4x6', copies = 1, label = '' } = {}) {
+async function printImage({ dataUrl, kind = '4x6', copies = 1, label = '', jobType = null, force = false } = {}) {
   const pc = printerCfg();
   kind = kind === 'strip' ? 'strip' : '4x6';
+  jobType = ['4x6', 'strip', 'cards'].includes(jobType) ? jobType : kind;
   if (config.printing?.enabled === false) return { ok: false, reason: 'Printing is turned off (printing.enabled in booth.config.json)' };
   if (!/^data:image\/png;base64,/.test(String(dataUrl))) return { ok: false, reason: 'print: expected a PNG data URL' };
 
@@ -236,19 +285,19 @@ async function printImage({ dataUrl, kind = '4x6', copies = 1, label = '' } = {}
   if (width !== NATIVE.W || height !== NATIVE.H) {
     return { ok: false, reason: `The page is ${width}x${height} px; the printer is only sent its native ${NATIVE.W}x${NATIVE.H} page` };
   }
+  const os = printOs(pc);
+  const queue = kind === 'strip' ? (pc.queueStrip || pc.queue4x6) : pc.queue4x6;
+
+  if (isDryRun(pc) && !force) return previewPage({ dataUrl, img, kind, jobType, label, width, height, os, queue });
 
   // Saved before anything is sent, so a failed print still leaves the file.
   const file = savePrintFile(dataUrl, kind, label);
-  const n = Math.max(1, Math.min(Math.round(copies * (pc.copies || 1)), config.printing?.copiesMax || 10));
-  const queue = kind === 'strip' ? (pc.queueStrip || pc.queue4x6) : pc.queue4x6;
-  const os = printOs(pc);
+  const n = force ? 1 : Math.max(1, Math.min(Math.round(copies * (pc.copies || 1)), config.printing?.copiesMax || 10));
   const notes = [];
   if (kind === 'strip' && !pc.queueStrip && os === 'windows') {
     notes.push('printer.queueStrip is not set: strips go to the 4x6 queue and will NOT be cut (README → Two DS40 queues)');
   }
-  console.log(`[print] ${kind} ${width}x${height} native x${n} → ${os} queue "${queue || '(auto)'}" — saved ${file}`);
-
-  if (config.printing?.dryRun) return { ok: true, dryRun: true, file, paper: `dry run: ${kind} ${width}x${height} → "${queue || '(auto)'}"`, notes };
+  console.log(`[print] ${jobType} ${width}x${height} native x${n}${force ? ' (from the preview)' : ''} → ${os} queue "${queue || '(auto)'}" — saved ${file}`);
 
   if (os === 'cups') {
     const { printImage: printViaCups, listPrinters } = await import('../pi/print.mjs');
@@ -285,9 +334,97 @@ async function printImage({ dataUrl, kind = '4x6', copies = 1, label = '' } = {}
 }
 
 /**
- * The print page: a window holding only the image, a 6 in x 4 in page,
- * printed silently once the image has loaded. The image is the printer's
- * native page and fills the page exactly; no cropping, no rotation.
+ * printer.dryRun: nothing goes to the printer. The exact native PNG is
+ * saved to previews/<timestamp>_<jobtype>.png, and the PDF of what the
+ * printer would get to previews/<timestamp>_<jobtype>.pdf, which is opened
+ * in the system viewer:
+ *   Windows: printToPDF of the SAME print page printChromium() prints
+ *            (openPrintPage), 6 x 4 in, margins 0, printBackground,
+ *            preferCSSPageSize.
+ *   CUPS:    the exact PDF that would be handed to lp (pi/print.mjs).
+ */
+async function previewPage({ dataUrl, img, kind, jobType, label, width, height, os, queue }) {
+  const dir = path.join(DATA_DIR, 'previews');
+  fs.mkdirSync(dir, { recursive: true });
+  const now = new Date();
+  const p2 = v => String(v).padStart(2, '0');
+  const ts = `${now.getFullYear()}${p2(now.getMonth() + 1)}${p2(now.getDate())}-${p2(now.getHours())}${p2(now.getMinutes())}${p2(now.getSeconds())}-${String(now.getMilliseconds()).padStart(3, '0')}`;
+  const base = path.join(dir, `${ts}_${jobType}${/^test-/.test(String(label)) ? '-test' : ''}`);
+  const png = `${base}.png`, pdf = `${base}.pdf`;
+  fs.writeFileSync(png, Buffer.from(String(dataUrl).split(',')[1] || '', 'base64'));
+
+  let how;
+  if (os === 'cups') {
+    const { printImage: printViaCups } = await import('../pi/print.mjs');
+    const pc = printerCfg();
+    const r = await printViaCups({ jpeg: img.toJPEG(100), kind, printerName: queue, copies: 1, finish: pc.finish, lpOptions: pc.lpOptions, dryRun: true });
+    if (!r.ok) return { ok: false, dryRun: true, reason: r.reason, png };
+    fs.copyFileSync(r.file, pdf);
+    how = `the PDF lp would get: ${r.command}`;
+  } else {
+    const page = await openPrintPage({ file: png, width, height });
+    if (!page.ok) return { ok: false, dryRun: true, reason: page.reason, png };
+    try {
+      fs.writeFileSync(pdf, await page.win.webContents.printToPDF(PREVIEW_PDF));
+    } finally {
+      page.close();
+    }
+    how = `printToPDF of the print page (${JSON.stringify(PREVIEW_PDF)})`;
+  }
+  const openError = process.env.HOLOBOOTH_NO_OPEN ? 'not opened (HOLOBOOTH_NO_OPEN)' : await shell.openPath(pdf);
+  console.log(`[print] PREVIEW ONLY (printer.dryRun) ${jobType} → ${png} + ${pdf}; ${how}${openError ? ` — ${openError}` : ''}`);
+  return {
+    ok: true, dryRun: true, png, pdf, jobType, kind, queue: queue || '(auto)', os, how,
+    file: png,
+    paper: `PREVIEW ONLY, nothing sent to the printer (printer.dryRun)\nPNG ${png}\nPDF ${pdf}`,
+    notes: openError && !process.env.HOLOBOOTH_NO_OPEN ? [`couldn't open the PDF: ${openError}`] : [],
+  };
+}
+
+/** The preview PDF: the print page at 6 x 4 in, nothing added or scaled. */
+const PREVIEW_PDF = {
+  pageSize: { width: 6, height: 4 },                     // inches
+  margins: { top: 0, bottom: 0, left: 0, right: 0 },
+  printBackground: true,
+  preferCSSPageSize: true,
+};
+
+/**
+ * The print page: a hidden window holding only the image, a 6 in x 4 in
+ * page. The image is the printer's native page and fills the page exactly;
+ * no cropping, no rotation. Used by printChromium() for real prints and by
+ * previewPage() for the preview PDF, so the PDF is what the printer gets.
+ */
+async function openPrintPage({ file, width, height }) {
+  const html = `<!doctype html><html><head><meta charset="utf-8"><style>
+  @page { size: 6in 4in; margin: 0 }
+  html, body { margin: 0; padding: 0; background: #fff;
+               -webkit-print-color-adjust: exact; print-color-adjust: exact }
+  img { display: block; width: 6in; height: 4in }
+</style></head><body><img id="page" src="${pathToFileURL(file).href}"></body></html>`;
+  const htmlPath = file.replace(/\.png$/i, '.print.html');
+  fs.writeFileSync(htmlPath, html);
+  const printWin = new BrowserWindow({ show: false, webPreferences: { backgroundThrottling: false } });
+  const close = () => setTimeout(() => { try { printWin.destroy(); } catch {} fs.rm(htmlPath, { force: true }, () => {}); }, 1000);
+  try {
+    await printWin.loadFile(htmlPath);
+    // Wait for the image's load event before printing.
+    const size = await printWin.webContents.executeJavaScript(`new Promise(r => {
+      const i = document.getElementById('page');
+      const done = () => r(i.naturalWidth ? [i.naturalWidth, i.naturalHeight] : null);
+      if (i.complete) done(); else { i.onload = done; i.onerror = () => r(null); }
+    })`);
+    if (!size) { close(); return { ok: false, reason: `The print page couldn't load ${file}` }; }
+    if (size[0] !== width || size[1] !== height) { close(); return { ok: false, reason: `The print page loaded ${size[0]}x${size[1]}, expected ${width}x${height}` }; }
+    return { ok: true, win: printWin, close };
+  } catch (e) {
+    close();
+    return { ok: false, reason: `The print page failed: ${e.message}` };
+  }
+}
+
+/**
+ * Prints the print page silently.
  *
  * On Windows, Chromium writes two things into the driver's DEVMODE
  * (printing/printing_context_win.cc): dmOrientation from `landscape`
@@ -304,25 +441,9 @@ async function printImage({ dataUrl, kind = '4x6', copies = 1, label = '' } = {}
  * webContents.print with this paper + landscape lays out the same page.
  */
 async function printChromium({ file, width, height, deviceName, copies }) {
-  const html = `<!doctype html><html><head><meta charset="utf-8"><style>
-  @page { size: 6in 4in; margin: 0 }
-  html, body { margin: 0; padding: 0; background: #fff;
-               -webkit-print-color-adjust: exact; print-color-adjust: exact }
-  img { display: block; width: 6in; height: 4in }
-</style></head><body><img id="page" src="${pathToFileURL(file).href}"></body></html>`;
-  const htmlPath = file.replace(/\.png$/i, '.print.html');
-  fs.writeFileSync(htmlPath, html);
-  const printWin = new BrowserWindow({ show: false, webPreferences: { backgroundThrottling: false } });
+  const page = await openPrintPage({ file, width, height });
+  if (!page.ok) return { ok: false, reason: page.reason };
   try {
-    await printWin.loadFile(htmlPath);
-    // Wait for the image's load event before printing.
-    const size = await printWin.webContents.executeJavaScript(`new Promise(r => {
-      const i = document.getElementById('page');
-      const done = () => r(i.naturalWidth ? [i.naturalWidth, i.naturalHeight] : null);
-      if (i.complete) done(); else { i.onload = done; i.onerror = () => r(null); }
-    })`);
-    if (!size) return { ok: false, reason: `The print page couldn't load ${file}` };
-    if (size[0] !== width || size[1] !== height) return { ok: false, reason: `The print page loaded ${size[0]}x${size[1]}, expected ${width}x${height}` };
     const opts = {
       silent: true,
       printBackground: true,
@@ -336,10 +457,10 @@ async function printChromium({ file, width, height, deviceName, copies }) {
       landscape: true,
     };
     console.log('[print] webContents.print', JSON.stringify(opts));
-    return await new Promise(resolve => printWin.webContents.print(opts, (success, failureReason) =>
+    return await new Promise(resolve => page.win.webContents.print(opts, (success, failureReason) =>
       resolve({ ok: success, reason: success ? null : (failureReason || 'print failed'), paper: `6x4in copies=${copies}` })));
   } finally {
-    setTimeout(() => { try { printWin.destroy(); } catch {} fs.rm(htmlPath, { force: true }, () => {}); }, 1000);
+    page.close();
   }
 }
 
@@ -421,6 +542,15 @@ ipcMain.handle('printers:method', (_e, method) => {
   config = loadConfig();
   console.log(`[print] operator chose print method "${method}"`);
   return { ok: true, config };
+});
+
+// Preview mode (printer.dryRun), switched on the diagnostics screen.
+// Saved to this PC's booth.config.local.json.
+ipcMain.handle('printers:dryRun', (_e, on) => {
+  writeLocalPatch(LOCAL_CONFIG_PATH, { printer: { dryRun: !!on } });
+  config = loadConfig();
+  console.log(`[print] preview mode (printer.dryRun) ${on ? 'ON: nothing is sent to the printer' : 'OFF: prints go to the printer'}`);
+  return { ok: true, dryRun: isDryRun(), config };
 });
 
 // "4x6" / "Strips" in the operator panel's printer list: which queue each
@@ -510,6 +640,7 @@ ipcMain.handle('app:info', () => ({
   hostname: os.hostname(),
   dataDir: DATA_DIR,
   dev: DEV,
+  build: BUILD,
 }));
 
 ipcMain.handle('app:quit', () => app.quit());

@@ -765,6 +765,43 @@ Every page is **saved as a PNG before it's printed**, exactly as sent:
 `media/<date>/prints/` under the app's data folder (operator panel → Open
 photos folder), and test prints in `media/test-prints/`.
 
+**One print path.** Every print, customer cards, strips, Jumbos and the
+test prints alike, goes through `sendToPrinter()` in `src/js/app.js`:
+`toPrinterNative()`, then the build stamp, then the main process
+(`print:image` → `printImage()` in `electron/main.js`; on a Raspberry Pi
+`printers.print` in `pi/kiosk-server.mjs`; in a plain browser tab the
+system print dialog). Nothing else in the app prints.
+
+**Build stamp** (`printer.buildStamp`, on): every print and preview carries
+a small grey line in the bottom-right corner, inside the 20 px margin: the
+code's git commit, the job type and its rotation, e.g.
+`a1b2c3d · strip · rotation.strip 90`. If a print doesn't have it, or shows
+an old commit, the booth is running old code (see below). The operator
+panel → Printers shows the same commit under **Running code**, with where
+the app runs from.
+
+**Preview mode** (`printer.dryRun`, **on by default**): nothing is sent to
+the printer. Each page is saved as `previews/<timestamp>_<jobtype>.png` and
+`.pdf` under the app's data folder, the PDF opens in the system viewer, and
+the screen shows the page with the 2-inch cut (y = 620) dashed for strips
+and cards. **Looks right — print for real** sends that one page once,
+after a second tap. The PDF is made from the same print page, by the same
+code, that real prints use (`openPrintPage()` in `electron/main.js`,
+`printToPDF`: 6 × 4 in, margins 0, background on, CSS page size); on
+Linux/CUPS it's the exact PDF `lp` would get. Switch preview mode on the
+**Camera diagnostics** screen (operator panel), which saves it to this
+PC's `booth.config.local.json`. **Turn it off before the event**, or
+nothing prints.
+
+**Is the booth running the new code?** `npm start` runs straight from this
+folder's `src/` and `electron/`; there's no build step and no cache, so a
+`git pull` and a restart (close the app, `npm start` again) is enough. An
+installed copy (`npm run dist` → `dist/HoloBooth Setup *.exe`, installed
+under `%LOCALAPPDATA%\Programs`) does NOT update itself: rebuild with
+`npm run dist`, run the new installer, and start it again. The stamp and
+**Running code** say which one you're looking at (`packaged app` = the
+installed copy).
+
 **Test prints** (operator panel → Printers): **Test print 4x6**, **Test
 print strips** and **Test print cards**. Each is drawn in its design
 orientation (a portrait Jumbo-shaped 4×6, one strip, one card) and goes

@@ -20,7 +20,7 @@ import { renderCard, renderStrip, mintCard, printSize } from './frames/render.mj
 import { Camera, StillsCamera, applyPhotoFilter, cameraLog, clog, cameraRoles, matchRoles, stopActiveCamera } from './camera.js';
 import { loadFonts } from './frames/fonts.mjs';
 import { setStripEvent } from './frames/strips.mjs';
-import { toPrinterNative, printRotations, NATIVE, CALIBRATION_DESIGN, coverCrop, coverPlacement, cardSheetLayout, drawCalibration } from './layout.mjs';
+import { toPrinterNative, printRotations, NATIVE, CALIBRATION_DESIGN, coverCrop, coverPlacement, cardSheetLayout, drawCalibration, buildStampText, drawBuildStamp } from './layout.mjs';
 import { createPaymentProvider, kioskHeaders } from './payments.js';
 import { encodeGif } from './gif.js';
 
@@ -1993,32 +1993,114 @@ function stripJobs(strip, count) {
 }
 
 /**
- * Every print goes through here: the job becomes the native 1844 x 1240
- * page (toPrinterNative) and is sent. Strips go to the strip (cut) queue,
- * everything else to the 4x6 queue.
+ * THE print function. Every print (customer cards, strips, Jumbos and the
+ * operator's test prints) goes through here and nowhere else:
+ *   1. toPrinterNative(job): the native 1844 x 1240 page (the only rotation)
+ *   2. the build stamp, bottom right (printer.buildStamp)
+ *   3. window.booth.printers.print: the main process (electron/main.js
+ *      printImage), the Pi kiosk server or the browser preview, which either
+ *      print it or, with printer.dryRun on, save the PNG + PDF preview.
+ * With dryRun on, the preview panel shows the page and nothing has printed.
+ * Strips go to the strip (cut) queue, everything else to the 4x6 queue.
  */
-async function sendPage(job, label) {
+async function sendToPrinter(job, label) {
   const rot = printRotations(S.cfg.printer);
   rot.problems.forEach(p => clog(`print warn: ${p}`));
   const page = toPrinterNative(job, rot, (w, h) => newCanvas({ W: w, H: h }));
   if (page.width !== NATIVE.W || page.height !== NATIVE.H) throw new Error(`The print page is ${page.width}x${page.height}; it must be ${NATIVE.W}x${NATIVE.H}`);
+  const stamp = buildStampText({ build: await buildInfo(), job, rotation: rot });
+  if (S.cfg.printer?.buildStamp !== false) {
+    // On a copy: toPrinterNative may hand back the job's own canvas (4x6 landscape).
+    const out = page === job.canvas ? newCanvas({ W: page.width, H: page.height }) : page;
+    if (out !== page) out.getContext('2d').drawImage(page, 0, 0);
+    drawBuildStamp(out.getContext('2d'), stamp);
+    return deliver(out, job, label, rot, stamp);
+  }
+  return deliver(page, job, label, rot, stamp);
+}
+
+let buildInfoCache = null;
+async function buildInfo() {
+  if (!buildInfoCache) buildInfoCache = (await window.booth.app.info().catch(() => ({})))?.build || {};
+  return buildInfoCache;
+}
+
+async function deliver(page, job, label, rot, stamp) {
   const kind = job.type === 'strip' ? 'strip' : '4x6';
-  const r = await window.booth.printers.print({ dataUrl: page.toDataURL('image/png'), kind, copies: job.copies, label })
+  const dataUrl = page.toDataURL('image/png');
+  const send = (extra = {}) => window.booth.printers.print({ dataUrl, kind, copies: job.copies, label, jobType: job.type, ...extra })
     .catch(err => ({ ok: false, reason: err.message }));
+  const r = await send();
   const how = job.type === 'strip' ? `strip turned ${rot.strip}°, two copies`
     : job.type === 'cards' ? `${job.count} upright card${job.count > 1 ? 's' : ''}`
     : job.canvas.width === NATIVE.W ? 'not turned' : `turned ${rot.portrait4x6}°`;
-  clog(`print ${label} (${job.type}, ${job.canvas.width}x${job.canvas.height}, ${how} → ${page.width}x${page.height}, x${job.copies}): ${r.ok ? 'ok' : `FAILED ${r.reason || ''}`}${r.file ? ` — saved ${r.file}` : ''}${r.paper ? `\n  ${r.paper}` : ''}`);
+  clog(`print ${label} (${job.type}, ${job.canvas.width}x${job.canvas.height}, ${how} → ${page.width}x${page.height}, x${job.copies}, stamp "${stamp}"): ${r.dryRun ? 'PREVIEW ONLY' : r.ok ? 'ok' : `FAILED ${r.reason || ''}`}${r.file ? ` — saved ${r.file}` : ''}${r.paper ? `\n  ${r.paper}` : ''}`);
   (r.notes || []).forEach(n => clog(`print warn: ${n}`));
   if (!r.ok) throw new Error(r.reason || `${label} print was rejected`);
-  return { ...r, how, notes: [...rot.problems, ...(r.notes || [])] };
+  const result = { ...r, how, stamp, notes: [...rot.problems, ...(r.notes || [])] };
+  if (r.dryRun) result.real = await showPrintPreview({ dataUrl, job, label, r, how, stamp, printOnce: () => send({ copies: 1, force: true }) });
+  return result;
 }
+
+/**
+ * printer.dryRun: the page as the printer would get it, the 2-inch cut
+ * (y = 620) dashed for strips and cards, the saved files, and "Looks right —
+ * print for real", which sends ONE print of this exact page after a second
+ * tap to confirm. Resolves when closed: the real print's result, or null.
+ */
+function showPrintPreview({ dataUrl, job, label, r, how, stamp, printOnce }) {
+  return new Promise(resolve => {
+    const cut = job.type === 'strip' || job.type === 'cards';
+    const el = document.createElement('div');
+    el.className = 'print-preview';
+    el.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(8,8,12,.94);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:16px;color:#fff;font:14px system-ui,sans-serif;text-align:center';
+    el.innerHTML = `
+      <div style="font-size:20px;font-weight:800;color:#ffcc00">PRINT PREVIEW: nothing was sent to the printer</div>
+      <div style="color:#ddd">${escapeHtml(label)} · ${escapeHtml(job.type)} · ${escapeHtml(how)} · 1844 × 1240, 6 × 4 in landscape${cut ? ' · <span style="color:#ff5577">dashed line = 2-inch cut (y = 620)</span>' : ''}</div>
+      <div style="position:relative;width:min(94vw,1300px,calc((100vh - 250px) * 1844 / 1240));aspect-ratio:1844/1240;background:#fff;outline:1px solid #777">
+        <img src="${dataUrl}" alt="print preview" style="display:block;width:100%;height:100%">
+        ${cut ? '<svg viewBox="0 0 1844 1240" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none"><line x1="0" y1="620" x2="1844" y2="620" stroke="#ff2d55" stroke-width="4" stroke-dasharray="26 16"/></svg>' : ''}
+      </div>
+      <div style="color:#aaa;font-size:12px;white-space:pre-wrap;max-width:94vw;word-break:break-all">${escapeHtml(`stamp: ${stamp}\n${r.png ? `PNG ${r.png}\n` : ''}${r.pdf ? `PDF ${r.pdf}` : ''}`)}</div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;justify-content:center">
+        <button class="btn" data-pp="print">Looks right — print for real</button>
+        <button class="btn btn-ghost" data-pp="cancel">Cancel</button>
+      </div>
+      <div data-pp="status" style="min-height:1.4em;white-space:pre-wrap"></div>`;
+    document.body.append(el);
+    const status = el.querySelector('[data-pp="status"]');
+    const printBtn = el.querySelector('[data-pp="print"]');
+    let armed = false, real = null;
+    const close = () => { el.remove(); resolve(real); };
+    el.querySelector('[data-pp="cancel"]').onclick = close;
+    printBtn.onclick = async () => {
+      if (!armed) {
+        armed = true;
+        printBtn.textContent = 'Tap again to send ONE print to the printer';
+        status.textContent = 'Preview mode stays on: this sends just this page, once.';
+        return;
+      }
+      printBtn.disabled = true;
+      status.textContent = 'Printing…';
+      real = await printOnce();
+      clog(`print ${label} from the preview: ${real.ok ? 'ok' : `FAILED ${real.reason || ''}`}${real.file ? ` — saved ${real.file}` : ''}${real.paper ? `\n  ${real.paper}` : ''}`);
+      status.textContent = real.ok ? `Sent ✓ ${real.paper || ''}` : `Print failed: ${real.reason || ''}`;
+      status.style.color = real.ok ? '' : 'var(--bad)';
+      printBtn.textContent = real.ok ? 'Sent' : 'Looks right — print for real';
+      printBtn.disabled = real.ok;
+      armed = false;
+    };
+  });
+}
+
+const PREVIEW_DONE = 'Preview mode: nothing was printed (operator: printer.dryRun).';
 
 async function doPrint() {
   const btn = $('#btn-print');
   btn.disabled = true;
   const st = $('#print-status');
   st.classList.remove('bad');
+  let preview = false;
   try {
     // Normally S.cardCanvas holds a card and its count is prints.card. But when
     // the customer's chosen frame is itself a strip style (e.g. the "2 Photo
@@ -2029,8 +2111,8 @@ async function doPrint() {
     if (isJumbo(currentFrame())) {
       const n = S.product.prints.jumbo || S.product.prints.strip || 1;
       st.textContent = `Printing your Jumbo strip${n > 1 ? 's' : ''}…`;
-      for (const job of jumboJobs(S.cardCanvas, n)) await sendPage(job, 'jumbo');
-      st.textContent = 'Sent to the printer.';
+      for (const job of jumboJobs(S.cardCanvas, n)) preview = (await sendToPrinter(job, 'jumbo')).dryRun || preview;
+      st.textContent = preview ? PREVIEW_DONE : 'Sent to the printer.';
       await sleep(900);
       go('thanks');
       return;
@@ -2039,14 +2121,14 @@ async function doPrint() {
     if (cardCount) {
       st.textContent = `Printing ${cardCount} ${cardIsStrip ? 'strip' : 'card'}${cardCount > 1 ? 's' : ''}…`;
       for (const job of cardIsStrip ? stripJobs(S.cardCanvas, cardCount) : cardJobs(S.cardCanvas, cardCount)) {
-        await sendPage(job, cardIsStrip ? 'strip' : 'card');
+        preview = (await sendToPrinter(job, cardIsStrip ? 'strip' : 'card')).dryRun || preview;
       }
     }
     if (S.product.prints.strip && S.stripCanvas) {
       st.textContent = 'Printing your strip…';
-      for (const job of stripJobs(S.stripCanvas, S.product.prints.strip)) await sendPage(job, 'strip');
+      for (const job of stripJobs(S.stripCanvas, S.product.prints.strip)) preview = (await sendToPrinter(job, 'strip')).dryRun || preview;
     }
-    st.textContent = 'Sent to the printer.';
+    st.textContent = preview ? PREVIEW_DONE : 'Sent to the printer.';
     await sleep(900);
     go('thanks');
   } catch (e) {
@@ -2127,6 +2209,11 @@ ON_ENTER.admin = async () => {
 
     <div class="card-panel">
       <h3>Printers</h3>
+      <div class="kv"><span>Running code</span><b>${escapeHtml(info.build?.commit ? info.build.commit.slice(0, 7) : 'unknown')}${info.build?.packaged ? ' · packaged app' : ''}</b></div>
+      <div class="kv"><span style="color:var(--ink-dim);font-size:12px;word-break:break-all">${escapeHtml(`${info.build?.source || ''} · ${info.build?.root || ''} · print code changed ${info.build?.time ? new Date(info.build.time).toLocaleString() : '?'}`)}</span></div>
+      ${S.cfg.printer?.dryRun !== false
+        ? '<div class="kv"><span><b style="color:#ffcc00">Preview mode ON</b>: nothing is sent to the printer; each page is saved as PNG + PDF and shown on screen.</span><b><button class="btn btn-ghost" style="padding:4px 10px;font-size:12px" data-go="diagnostics">Switch</button></b></div>'
+        : '<div class="kv"><span>Preview mode off: prints go to the printer.</span><b><button class="btn btn-ghost" style="padding:4px 10px;font-size:12px" data-go="diagnostics">Switch</button></b></div>'}
       ${printers.length
         ? printers.map(p => {
             const tag = [p.willUse && '4x6', p.willUseStrips && 'STRIPS'].filter(Boolean).join(' + ');
@@ -2234,9 +2321,9 @@ ON_ENTER.admin = async () => {
     const rot = printRotations(S.cfg.printer);
     drawCalibration(c.getContext('2d'), { job, rotation: d.rotationKey ? rot[d.rotationKey] : null, label: new Date().toLocaleString() });
     try {
-      const r = await sendPage({ type: job, canvas: c, count: 2, copies: 1 }, `test-${job}`);
+      const r = await sendToPrinter({ type: job, canvas: c, count: 2, copies: 1 }, `test-${job}`);
       out.style.whiteSpace = 'pre-wrap';
-      out.textContent = `Sent ✓ ${d.W}x${d.H} design, ${r.how} → ${NATIVE.W}x${NATIVE.H} — saved ${r.file || ''}${(r.notes || []).map(n => `\n⚠ ${n}`).join('')}\n${r.paper || ''}`;
+      out.textContent = `${r.dryRun ? (r.real?.ok ? 'Preview, then sent ✓' : 'Preview only (printer.dryRun), nothing printed:') : 'Sent ✓'} ${d.W}x${d.H} design, ${r.how} → ${NATIVE.W}x${NATIVE.H} — stamp "${r.stamp}" — saved ${r.file || ''}${(r.notes || []).map(n => `\n⚠ ${n}`).join('')}\n${r.paper || ''}`;
     } catch (err) {
       out.textContent = `Failed: ${err.message}`;
       out.style.color = 'var(--bad)';
@@ -2301,6 +2388,30 @@ ON_ENTER.admin = async () => {
  * the resolution each camera really streams at. The cameras are opened one
  * after the other, never together.
  */
+/**
+ * Preview mode (printer.dryRun) switch, on the diagnostics screen: saved to
+ * this PC's booth.config.local.json, no file editing.
+ */
+function renderPreviewToggle() {
+  let box = $('#diag-print-mode');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'diag-print-mode';
+    box.style.cssText = 'display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:10px 14px;margin:0 0 12px;border-radius:10px;background:rgba(255,255,255,.06)';
+    $('#diag-body').before(box);
+  }
+  const on = S.cfg.printer?.dryRun !== false;
+  box.innerHTML = `<b>Print preview mode (printer.dryRun):</b>
+    <span style="color:${on ? '#ffcc00' : 'var(--ink-dim)'}">${on ? 'ON: nothing is sent to the printer; pages are saved as PNG + PDF and shown on screen' : 'OFF: prints go to the printer'}</span>
+    <button class="btn btn-ghost" id="diag-dryrun" style="padding:6px 14px">${on ? 'Turn preview mode OFF (print for real)' : 'Turn preview mode ON'}</button>`;
+  $('#diag-dryrun').onclick = async () => {
+    const r = await window.booth.printers.dryRun?.(!on).catch(e => ({ ok: false, error: e.message }));
+    if (r?.config) S.cfg = r.config;
+    else if (r?.ok) S.cfg.printer = { ...(S.cfg.printer || {}), dryRun: !on };
+    renderPreviewToggle();
+  };
+}
+
 ON_ENTER.diagnostics = async () => {
   S.camera?.stop('diagnostics');
   S.camera = null;
@@ -2311,6 +2422,7 @@ ON_ENTER.diagnostics = async () => {
   const alive = () => S.diagToken === token && S.screen === 'diagnostics';
   body.innerHTML = '<p>Listing cameras…</p>';
   $('#diag-refresh').onclick = () => ON_ENTER.diagnostics();
+  renderPreviewToggle();
   let devices = [], matches = {};
   try { ({ devices, matches } = await matchRoles(S.cfg)); } catch (e) {
     body.innerHTML = `<p style="color:var(--bad)">${escapeHtml(e.message)}</p>`;
