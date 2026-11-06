@@ -14,6 +14,7 @@
     "reader:register": "node tools/register-reader.mjs",
     "render": "node tools/render-all.mjs",
     "gallery": "node tools/build-gallery.mjs",
+    "strips": "node tools/strip-collection.mjs",
     "dist": "electron-builder",
     "web": "node tools/serve.mjs",
     "doctor": "node tools/doctor.mjs",

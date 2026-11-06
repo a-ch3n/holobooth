@@ -48,6 +48,12 @@ The host pays you a flat fee; guests use the booth as much as they like.
   (see section 3). Every session is also saved on the booth PC, so you can
   hand the host **all the photos** after the event: operator screen →
   **Open photos folder**.
+- **Their names on every strip:** in `config/booth.config.json`, set
+  `strips.event`: `title` ("Sarah & James"), `date` (`2026-06-14`),
+  `message` ("Thank you for celebrating with us"), and optionally a `logo`
+  PNG. The Strip Collection and Jumbo Strips designs print them. Good fits:
+  **Keepsake** (weddings), **Love Letter** (couples), **Party Pop**
+  (birthdays), **Grand Gallery** (Jumbo, for a premium keepsake).
 - **Tip:** bring extra paper and ribbon. Free booths print a lot more. A
   DS40 6×4 roll is about 400 sheets.
 
@@ -157,6 +163,8 @@ Packages and prices live in `config/booth.config.json` under
 | 2 Photo Strips | $7 | 2 strips |
 | 1 Pokémon Card + 1 Photo Strip | $12 | 1 card + 1 strip |
 | 2 Pokémon Cards + 2 Photo Strips | $18 | 2 cards + 2 strips |
+| Jumbo Photo Strip | $10 | 1 Jumbo 4×6 strip |
+| 2 Jumbo Photo Strips | $16 | 2 Jumbo 4×6 strips |
 
 Every package includes the digital download.
 

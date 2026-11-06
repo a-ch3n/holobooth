@@ -134,14 +134,72 @@ stay in the catalogue and come back by adding their id (`party`, `cutie`,
 ## Photo strips
 
 Strips are a style you pick, not a by-product of buying a card: 2×6, four
-frames, six themes, and they take the same name and stickers as the cards. A
-sticker can straddle two frames the way it does on a real strip, because the
-whole photo column is one window.
+frames, and they take the same name and stickers as the cards. A sticker can
+straddle two frames the way it does on a real strip, because the whole photo
+column is one window.
 
 Because a strip is 2:6 and a card is 2.5:3.5, **nothing may assume the card
 aspect** — `frameAspect()` and `frameBox()` in `packs.mjs` are the only place
 that decides, and the picker tiles, decorate preview, swatch row, reveal
 carousel and print master all size themselves from it.
+
+### The Photo Strip Collection
+
+![The twelve strip concepts](docs/images/strip-collection.jpg)
+
+Two picker groups on top of the classic strips (`src/js/frames/strips.mjs`):
+
+- **Strip Collection:** twelve designer 2×6 strips in 30 colourways. Each
+  prints as two identical strips on one DS40 sheet, cut apart by the printer.
+
+  | Code | Design | Direction | Colourways |
+  |---|---|---|---|
+  | HB-S01 | Atelier | Minimalist luxury | Ivory, Noir, Blanc |
+  | HB-S02 | Darkroom 400 | Retro film | Gold 400, Sepia, Booth 1972 |
+  | HB-S03 | Cyber Babe | Y2K | Bubblegum, Cyber Blue |
+  | HB-S04 | Four Cut | Korean photo booth | Milk, Peach, Sky |
+  | HB-S05 | Cover Story | Editorial magazine | White, Black, Sand |
+  | HB-S06 | Instant | Polaroid collection | Classic, Vintage |
+  | HB-S07 | Liquid Metal | Chrome / futuristic | Silver, Holo Night |
+  | HB-S08 | Cut & Paste | Scrapbook | Kraft, Notebook |
+  | HB-S09 | Love Letter | Date night / couples | Rouge, Blush, Midnight |
+  | HB-S10 | Party Pop | Birthday | Confetti Pop, Pastel Party |
+  | HB-S11 | Keepsake | Event / wedding | Ivory & Sage, Black Tie, Blush & Gold |
+  | HB-S12 | Off Grid | Streetwear / urban | Blackout, Silver |
+
+- **Jumbo Strips:** a whole 4×6 sheet, portrait (1240 × 1844 px), twice the
+  width of a classic strip, printed uncut on `printer.queue4x6`. HB-J01 Grand
+  Gallery (3 uncropped 16:9 photos), HB-J02 Contact Sheet (an oversized film
+  strip of 4), HB-J03 The Issue (a magazine cover: hero + 3 squares). Sold as
+  the **Jumbo Photo Strip** products (`prints.jumbo` in `pricing.products`).
+
+  ![A classic strip beside a Jumbo, to scale](docs/images/jumbo-vs-classic.jpg)
+
+**Event text.** `strips.event` in `config/booth.config.json` fills every
+design for the whole event: `title` (e.g. "Sarah & James"), `date`
+(`YYYY-MM-DD`, each design formats it its own way), `message`, `age` (the
+birthday badge) and `logo` (a PNG that replaces the title). A name the
+customer types wins over `title`. The couples, birthday, wedding and Korean
+designs open the name screen (with an `&` key for couples; the age pad only
+for birthdays).
+
+**Print-ready files and mockups:** `npm run strips` renders every design at
+native size with blank photo boxes (`out/strip-collection/print/`), the
+two-up DS40 pages (`pages/`), front-facing mockups of the prints
+(`mockups/`) and small previews. Photo boxes use real camera shapes (16:9,
+4:3, 3:2, 1:1), and `npm test` checks every design keeps photos and text
+20 px inside the cut and the edges.
+
+**Typefaces** are bundled in `src/fonts` (SIL Open Font License), so prints
+look the same offline on any booth PC: Playfair Display, Cormorant Garamond,
+Great Vibes, Caveat, Orbitron, Anton, Permanent Marker, Courier Prime,
+Quicksand, Fredoka, Inter, and a Hangul subset of NanumSquareRound renamed
+"HoloBooth Hangul".
+
+**A new design:** write a draw function with the kit in `strips.mjs` (photo
+boxes, fitted and tracked text, the brand mark, tape, torn paper, sprockets,
+confetti, hearts, sparks), add it to `STYLES` (or `JUMBO_STYLES`) with its
+colourways, and it appears in the picker, the tests and `npm run strips`.
 
 ## The session flow
 

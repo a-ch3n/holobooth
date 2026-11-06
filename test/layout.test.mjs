@@ -161,3 +161,36 @@ test('calibration image: edge pixels black, red border 20 px in, cut line marked
 test('DS40 constants', () => {
   assert.deepEqual(DS40, { long: 1844, short: 1240, dpi: 300 });
 });
+
+/* ------------------------------------------- Photo Strip Collection */
+
+test('collection: every design renders at print size, 3-4 photo boxes at camera-friendly shapes, content inside the safe area', async () => {
+  const { collectionFrames, styledStrip, FORMATS } = await import('../src/js/frames/strips.mjs');
+  const { buildPersonal } = await import('../src/js/frames/render.mjs');
+  const frames = collectionFrames();
+  assert.ok(frames.filter(f => f.format === 'strip').length >= 12 * 2, 'at least 12 designs with variants');
+  assert.ok(new Set(frames.filter(f => f.format === 'strip').map(f => f.style)).size >= 12, '12+ distinct strip concepts');
+  assert.ok(frames.some(f => f.format === 'jumbo'), 'a Jumbo collection');
+  for (const fr of frames) {
+    const { W, H } = FORMATS[fr.format];
+    for (const personal of [buildPersonal({}), buildPersonal({ name: 'ALEXANDRIA & MAXIMILIAN', age: 30 })]) {
+      const cv = createCanvas(W, H);
+      const meta = styledStrip(cv.getContext('2d'), { W, H, frame: fr, photos: [], meta: { personal, event: { date: '2026-06-14' } } });
+      assert.ok(meta.cells.length >= 3 && meta.cells.length <= 4, `${fr.id}: ${meta.cells.length} photos`);
+      for (const c of meta.cells) {
+        const a = c.w / c.h;
+        assert.ok(a >= 0.75 && a <= 16 / 9 + 1e-6, `${fr.id}: photo box ${c.w.toFixed(0)}x${c.h.toFixed(0)} (aspect ${a.toFixed(2)})`);
+        assert.ok(c.w >= W * 0.25, `${fr.id}: photo box ${c.w.toFixed(0)} px wide is too small`);
+      }
+      assert.ok(Math.max(...meta.cells.map(c => c.w)) >= W * 0.4, `${fr.id}: photos are the main focus`);
+      // A 2x6 strip prints twice on a page cut at x = 620; a Jumbo is the whole page.
+      const safe = fr.format === 'jumbo' ? { x: SAFE_PX, y: SAFE_PX, w: W - 2 * SAFE_PX, h: H - 2 * SAFE_PX } : stripPageLayout().safe[0];
+      meta.contentRects.forEach((r, k) => assert.ok(inside(r, safe), `${fr.id}: item ${k} ${JSON.stringify(r)} outside the safe area`));
+    }
+  }
+});
+
+test('Jumbo strip print size is a whole DS40 4x6 page, 1240 x 1844', () => {
+  const s = printSize('jumbo', 300);
+  assert.equal(s.W, 1240); assert.equal(s.H, 1844);
+});

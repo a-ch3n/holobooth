@@ -249,10 +249,53 @@
         "digital": true,
         "gif": false,
         "rarityBoost": 1.0
+      },
+      {
+        "id": "jumbo_strip",
+        "name": "Jumbo Photo Strip",
+        "blurb": "One oversized 4×6 photo strip + digital copy",
+        "amount": 1000,
+        "prints": {
+          "card": 0,
+          "strip": 0,
+          "jumbo": 1
+        },
+        "digital": true,
+        "gif": false,
+        "rarityBoost": 1.0
+      },
+      {
+        "id": "two_jumbo_strips",
+        "name": "2 Jumbo Photo Strips",
+        "blurb": "Two oversized 4×6 photo strips + digital copies",
+        "amount": 1600,
+        "prints": {
+          "card": 0,
+          "strip": 0,
+          "jumbo": 2
+        },
+        "digital": true,
+        "gif": false,
+        "rarityBoost": 1.0
       }
     ],
     "tipEnabled": false,
     "taxRateBps": 0
+  },
+  "strips": {
+    "//": "The Photo Strip Collection (Strip Collection and Jumbo Strips in the picker; npm run strips renders the lookbook). These fill in the designs' title, date and message for the whole event. A name the customer types wins over title. Leave a field null for each design's own default.",
+    "event": {
+      "//title": "e.g. \"Sarah & James\", \"Mia's 25th\", \"Acme Summer Party\". null = the design's own title.",
+      "title": null,
+      "//date": "YYYY-MM-DD (each design formats it its own way), or any text. null = today.",
+      "date": null,
+      "//message": "e.g. \"Thank you for celebrating with us\". null = the design's own line.",
+      "message": null,
+      "//age": "Birthday edition: the age on the badge when the customer doesn't type one.",
+      "age": null,
+      "//logo": "A PNG with transparency, path from the app folder (e.g. \"images/event-logo.png\"). Replaces the title on designs with a title slot.",
+      "logo": null
+    }
   },
   "ai": {
     "//": "Real AI names for the 'Surprise me' button, via server/index.js (GEMINI_API_KEY — free tier, no credit card, see ai.google.dev/gemini-api/docs/pricing). Set enabled:false to always use the offline generator. If the server has no key configured, or doesn't answer within timeoutMs, the kiosk silently falls back to it anyway.",
@@ -404,9 +447,11 @@
     "defaultScale": 0.26
   },
   "picker": {
-    "//": "Which style groups appear in the picker, and in what order. Remove or reorder freely; anything not listed still exists but is hidden. Group ids: strips, party, cutie, promo, basics, max, fullart, secret, and assetpack:<pack-id>.",
+    "//": "Which style groups appear in the picker, and in what order. Remove or reorder freely; anything not listed still exists but is hidden. Group ids: strips, collection (the Photo Strip Collection), jumbo (Jumbo strips), party, cutie, promo, basics, max, fullart, secret, and assetpack:<pack-id>.",
     "show": [
       "strips",
+      "collection",
+      "jumbo",
       "promo",
       "basics",
       "max",

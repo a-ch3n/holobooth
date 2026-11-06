@@ -18,6 +18,8 @@ import { loadPack, packFrames } from './frames/assetpack.mjs';
 import { stickerCatalog, stickerCanvas, newPlacement, stickerAt, DECOS } from './frames/stickers.mjs';
 import { renderCard, renderStrip, mintCard, printSize } from './frames/render.mjs';
 import { Camera, StillsCamera, applyPhotoFilter, cameraLog, clog, cameraRoles, matchRoles, stopActiveCamera } from './camera.js';
+import { loadFonts } from './frames/fonts.mjs';
+import { setStripEvent } from './frames/strips.mjs';
 import { coverCrop, coverPlacement, stripPageLayout, composeStripPage, composeCardSheet, cardSheetLayout, drawCalibration, pageSize } from './layout.mjs';
 import { createPaymentProvider, kioskHeaders } from './payments.js';
 import { encodeGif } from './gif.js';
@@ -256,7 +258,7 @@ async function boot() {
     // Party cards need a name before they mean anything; everything else can
     // go straight to the till.
     const tpl = currentFrame()?.template;
-    go(['party', 'kawaii', 'assetPack'].includes(tpl) ? 'personalize' : 'product');
+    go(['party', 'kawaii', 'assetPack'].includes(tpl) || currentFrame()?.personalize ? 'personalize' : 'product');
   });
   $('#pz-done').addEventListener('click', () => go('product'));
   $('#pay-cancel').addEventListener('click', () => { S.pay?.cancel(); go('product'); });
@@ -282,6 +284,9 @@ async function boot() {
     if (e.key === '`') document.body.classList.toggle('debug');
   });
 
+  // The strip collection's typefaces (src/fonts) and the event's own text/logo.
+  clog(`fonts: ${await loadFonts('fonts/').catch(() => 0)} loaded`);
+  await setupStripEvent();
   await loadAssetPacks();
   await loadPokemonCharacters();
   buildPicker();
@@ -431,8 +436,36 @@ function boxFor(frame, width) {
   return frameBox(frame, width);
 }
 
+/** Strips (2x6) and Jumbo strips (4x6) both use every shot. */
 function isStrip(frame) {
-  return frame?.template === 'strip';
+  return frame?.template === 'strip' || frame?.template === 'jumbo';
+}
+
+function isJumbo(frame) {
+  return frame?.template === 'jumbo';
+}
+
+/** printSize() kind for a frame: 'card' 750x1050, 'strip' 620x1844, 'jumbo' 1240x1844. */
+function sizeKind(frame) {
+  return isJumbo(frame) ? 'jumbo' : isStrip(frame) ? 'strip' : 'card';
+}
+
+/**
+ * strips.event in booth.config.json: the host's event title, date, message
+ * and logo, shown by the Photo Strip Collection designs.
+ */
+async function setupStripEvent() {
+  const ev = S.cfg.strips?.event || {};
+  let logo = null;
+  if (ev.logo) {
+    logo = await new Promise(resolve => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => { clog(`warn: strips.event.logo "${ev.logo}" didn't load`); resolve(null); };
+      img.src = /^(https?:|data:|\/)/.test(ev.logo) ? ev.logo : `../${ev.logo}`;
+    });
+  }
+  setStripEvent(ev, logo);
 }
 
 /** Strips need every shot; cards need the chosen one. */
@@ -478,7 +511,7 @@ function renderGrid(packId) {
 
   for (const f of group.frames) {
     const tile = document.createElement('div');
-    tile.className = 'frame-tile' + (isStrip(f) ? ' tall' : '');
+    tile.className = 'frame-tile' + (isStrip(f) && !isJumbo(f) ? ' tall' : '') + (isJumbo(f) ? ' jumbo' : '');
     tile.dataset.frame = f.id;
     const cv = document.createElement('canvas');
     const box = boxFor(f, 360);
@@ -486,12 +519,12 @@ function renderGrid(packId) {
     tile.append(cv);
     const e = energy(f.energyType);
     tile.insertAdjacentHTML('beforeend', `
-      <div class="nm"><i class="type-dot" style="background:${e.base}"></i>${f.name}</div>
+      <div class="nm"><i class="type-dot" style="background:${f.swatch || e.base}"></i>${f.name}</div>
       <div class="mt">
         <span class="num">${f.collectorNumber}</span>
         ${f.availability?.mintLimit
           ? `<span class="badge-limited">${f.availability.mintLimit} only</span>`
-          : `<span>${e.name} · ${f.hp} HP</span>`}
+          : f.family ? `<span>${f.family}</span>` : `<span>${e.name} · ${f.hp} HP</span>`}
       </div>`);
     grid.append(tile);
 
@@ -507,7 +540,8 @@ function renderGrid(packId) {
       stock: S.cfg.cards?.stock || null,
       // The picker preview uses the actual Pokémon name; customers can change
       // it later in the decorate screen before printing.
-      personalization: { name: f.name, age: 7 },
+      // (Collection strips show their own default text, not the frame's name.)
+      personalization: f.style ? {} : { name: f.name, age: 7 },
       foil: true,
     });
 
@@ -619,11 +653,20 @@ function placeholderCharacter() {
 
 /* --------------------------------------------------------- personalize */
 
-const KB_ROWS = ['QWERTYUIOP', 'ASDFGHJKL', 'ZXCVBNM'];
+const KB_ROWS = ['QWERTYUIOP', 'ASDFGHJKL', 'ZXCVBNM&'];
 let pzBuilt = false;
 
 ON_ENTER.personalize = () => {
   if (!pzBuilt) buildPersonalizeUI();
+  // Collection strips: names (and an age for birthdays), no buddy.
+  const pf = currentFrame();
+  const strip = !!pf?.style;
+  $('#buddies').closest('.fld').hidden = strip;
+  $('#fld-age').closest('.fld').hidden = strip && pf.style !== 'partypop';
+  $('#pad').hidden = strip && pf.style !== 'partypop';
+  $('#fld-name').closest('.fld').querySelector('span').textContent = strip
+    ? (['loveletter', 'keepsake'].includes(pf.style) ? 'Your names (e.g. SARAH & JAMES)' : 'Name on the strip')
+    : 'Name on the card';
   // Default the buddy to one matching the chosen card's colour, so the card
   // already looks finished before they touch anything.
   if (!S.personal.companionId) {
@@ -638,7 +681,7 @@ function buildPersonalizeUI() {
   pzBuilt = true;
 
   buildKeyboard($('#kb'), {
-    max: 14,
+    max: 18,
     get: () => S.personal.name,
     set: v => { S.personal.name = v; },
     onChange: refreshPersonalize,
@@ -714,7 +757,7 @@ function refreshPersonalize() {
   const ready = S.personal.name.trim().length >= 1;
   $('#pz-done').disabled = !ready;
   $('#pz-summary').textContent = ready
-    ? `${S.personal.name.trim()}${S.personal.age ? `, ${S.personal.age}` : ''} · ${companionById(S.personal.companionId)?.name || ''}`
+    ? `${S.personal.name.trim()}${S.personal.age ? `, ${S.personal.age}` : ''}${currentFrame()?.style ? '' : ` · ${companionById(S.personal.companionId)?.name || ''}`}`
     : 'Type a name to start';
 
   // Live preview, debounced — every keypress would otherwise redraw a card.
@@ -725,9 +768,13 @@ function refreshPersonalize() {
 async function drawPersonalizePreview() {
   const cv = $('#pz-canvas');
   const pf = currentFrame();
+  // Shaped like the frame: a card, a 2x6 strip or a 4x6 Jumbo.
+  const b = boxFor(pf, 1000);
+  cv.height = 700; cv.width = Math.round(700 * b.W / b.H);
   renderCard(cv.getContext('2d'), {
     frame: pf, frameId: S.frameId, W: cv.width, H: cv.height,
     photo: placeholderPhoto(),
+    photos: isStrip(pf) ? [0, 1, 2, 3].map(() => placeholderPhoto()) : [],
     companion: await companionImage(),
     card: mintCard({
       frame: pf, frameId: S.frameId, seasonId: S.cfg.collection.seasonId, mint: 1, forcedRarity: 'rare',
@@ -740,8 +787,9 @@ async function drawPersonalizePreview() {
 /** What the renderer needs, from what the customer typed. */
 function personalizationPayload() {
   const typedName = S.personal.name.trim();
+  // Collection strips show their own title when nothing's typed, never the frame's name.
   return {
-    name: typedName || currentFrame()?.name || '',
+    name: typedName || (currentFrame()?.style ? '' : currentFrame()?.name || ''),
     age: S.personal.age === '' ? null : Number(S.personal.age),
     companionId: S.personal.companionId,
   };
@@ -786,7 +834,7 @@ function showStripThemePicker() {
   picker.hidden = false;
   grid.innerHTML = choices.map(f => `
     <button class="strip-theme ${!S.stripCustomColor && f.id === S.stripFrameId ? 'on' : ''}" data-strip-theme="${f.id}" type="button" aria-label="${f.name}">
-      <span class="strip-theme-swatch" style="--strip-color:${energy(f.energyType).base}"></span>
+      <span class="strip-theme-swatch" style="--strip-color:${f.swatch || energy(f.energyType).base}"></span>
     </button>`).join('') + `
     <label class="strip-theme strip-theme-custom${S.stripCustomColor ? ' on' : ''}">
       <span class="strip-theme-swatch${S.stripCustomColor ? '' : ' rainbow'}" style="--strip-color:${S.stripCustomColor || 'transparent'}"></span>
@@ -817,7 +865,7 @@ function showCardThemePicker() {
   picker.hidden = false;
   grid.innerHTML = choices.map(f => `
     <button class="strip-theme ${f.id === S.frameId ? 'on' : ''}" data-card-theme="${f.id}" type="button">
-      <span class="strip-theme-swatch" style="--strip-color:${energy(f.energyType).base}"></span>${f.name}
+      <span class="strip-theme-swatch" style="--strip-color:${f.swatch || energy(f.energyType).base}"></span>${f.name}
     </button>`).join('');
   grid.querySelectorAll('[data-card-theme]').forEach(button => button.addEventListener('click', () => {
     S.frameId = button.dataset.cardTheme;
@@ -832,9 +880,11 @@ ON_ENTER.product = () => {
   const visibleProducts = S.cfg.pricing.products.filter(p => {
     const cardCount = p.prints?.card || 0;
     const stripCount = p.prints?.strip || 0;
+    const jumboCount = p.prints?.jumbo || 0;
     // Keep checkout offers focused on the format the customer selected.
-    if (selectedStrip) return stripCount > 0 || p.id === 'digital_strip';
-    return cardCount > 0 || p.id === 'digital_card';
+    if (isJumbo(frame)) return jumboCount > 0 || p.id === 'digital_strip';
+    if (selectedStrip) return (stripCount > 0 && !jumboCount) || p.id === 'digital_strip';
+    return (cardCount > 0 && !jumboCount) || p.id === 'digital_card';
   });
 
   $('#products').innerHTML = visibleProducts.map(p => {
@@ -1181,7 +1231,7 @@ function photoWindowAspect() {
   const key = `${frame.id}|${frame.template}`;
   if (S._aspectKey === key) return S._aspect;
   const strip = isStrip(frame);
-  const { W, H } = printSize(strip ? 'strip' : 'card', 300);
+  const { W, H } = printSize(sizeKind(frame), 300);
   const c = document.createElement('canvas');
   c.width = W; c.height = H;
   let aspect = null;
@@ -1697,7 +1747,7 @@ async function buildOutputs() {
 
   const dpi = S.cfg.printing.dpi || 300;
   const stripStyle = isStrip(frameDef);
-  const { W, H } = printSize(stripStyle ? 'strip' : 'card', dpi);
+  const { W, H } = printSize(sizeKind(frameDef), dpi);
 
   // Do NOT pre-crop here. Cropping the camera frame to the CARD's portrait
   // aspect and then fitting that into a LANDSCAPE art window crops twice — it
@@ -1767,7 +1817,7 @@ async function buildOutputs() {
 async function sessionFiles() {
   const primaryIsStrip = isStrip(currentFrame());
   const files = [{
-    name: primaryIsStrip ? 'strip.png' : `card-${S.card.serial.replace(/[^\w]+/g, '_')}.png`,
+    name: isJumbo(currentFrame()) ? 'jumbo-strip.png' : primaryIsStrip ? 'strip.png' : `card-${S.card.serial.replace(/[^\w]+/g, '_')}.png`,
     dataUrl: S.cardCanvas.toDataURL('image/png'),
   }];
   if (S.stripCanvas) files.push({ name: 'strip.png', dataUrl: S.stripCanvas.toDataURL('image/png') });
@@ -1814,7 +1864,7 @@ ON_ENTER.reveal = () => {
     ? `Limited edition — only ${S.card.mintLimit} of these will ever be printed.`
     : '';
   $('#btn-retake').hidden = !(S.cfg.capture.allowRetake && S.retakes < S.cfg.capture.maxRetakes);
-  $('#btn-print').disabled = !(S.product.prints.card || S.product.prints.strip);
+  $('#btn-print').disabled = !(S.product.prints.card || S.product.prints.strip || S.product.prints.jumbo);
   $('#print-status').textContent = '';
   $('#dl-block').hidden = !S.downloadUrl;
 
@@ -1880,6 +1930,12 @@ function cardJobs(card, count) {
   return jobs;
 }
 
+/** A Jumbo strip is a whole 1240 x 1844 page: one per print, on the 4x6 queue, uncut. */
+function jumboJobs(jumbo, count) {
+  if (jumbo.width !== 1240 || jumbo.height !== 1844) throw new Error(`Jumbo strip must be 1240x1844 px, got ${jumbo.width}x${jumbo.height}`);
+  return [{ canvas: jumbo, copies: Math.max(1, count) }];
+}
+
 function stripJobs(strip, count) {
   const c = newCanvas(stripPageLayout());
   composeStripPage(c.getContext('2d'), strip);
@@ -1908,6 +1964,15 @@ async function doPrint() {
     // S.cardCanvas and prints.card is 0 — the print count to use is
     // prints.strip instead, since that's what was actually paid for.
     const cardIsStrip = isStrip(currentFrame());
+    if (isJumbo(currentFrame())) {
+      const n = S.product.prints.jumbo || S.product.prints.strip || 1;
+      st.textContent = `Printing your Jumbo strip${n > 1 ? 's' : ''}…`;
+      for (const job of jumboJobs(S.cardCanvas, n)) await sendPage(job, '4x6', 'jumbo');
+      st.textContent = 'Sent to the printer.';
+      await sleep(900);
+      go('thanks');
+      return;
+    }
     const cardCount = cardIsStrip ? S.product.prints.strip : S.product.prints.card;
     if (cardCount) {
       st.textContent = `Printing ${cardCount} ${cardIsStrip ? 'strip' : 'card'}${cardCount > 1 ? 's' : ''}…`;

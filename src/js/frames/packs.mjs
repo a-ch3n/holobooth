@@ -15,6 +15,7 @@
  * knock-offs is a booth with a shelf life.
  */
 
+import { collectionFrames } from './strips.mjs';
 import { ENERGY, ENERGY_IDS, energy } from './energy.mjs';
 import { shade, alpha } from './draw.mjs';
 
@@ -564,12 +565,46 @@ STRIP_THEMES.forEach((st, i) => {
   });
 });
 
+/* --- the Photo Strip Collection (strips.mjs) ------------------------- */
+
+// Designer 2x6 strips (template 'strip' + a style) and 4x6 Jumbo strips.
+collectionFrames().forEach((c, i) => {
+  const jumbo = c.format === 'jumbo';
+  push({
+    id: c.id,
+    name: c.name,
+    baseName: c.baseName,
+    family: c.family,
+    variant: jumbo ? 'jumbo' : 'strip',
+    strip: true,
+    jumbo,
+    packId: jumbo ? 'jumbo' : 'collection',
+    energyType: 'plain',
+    stage: jumbo ? 'Jumbo' : 'Strip',
+    hp: 0,
+    stock: 'none',
+    template: jumbo ? 'jumbo' : 'strip',
+    format: c.format,
+    style: c.style,
+    styleVariant: c.styleVariant,
+    swatch: c.swatch,
+    personalize: c.personalize,
+    aspect: jumbo ? [1240, 1844] : [620, 1844],
+    theme: themeFor('plain', 'strip'),
+    rarityFloor: 'common',
+    collectionCode: c.code,
+    stripNumber: i + 1,
+    content: { ability: null, attacks: [], cells: c.cells, flavor: null, footer: {}, maxRule: null },
+  });
+});
+
 /* Collector numbers, assigned in set order. */
 FRAMES.forEach((f, i) => {
   f.setNumber = i + 1;
   f.setSize = SET_SIZE;
   if (f.party) f.collectorNumber = `PARTY ${String(f.partyNumber).padStart(2, '0')}`;
   else if (f.cutie) f.collectorNumber = `CUTIE ${String(f.cutieNumber).padStart(2, '0')}`;
+  else if (f.collectionCode) f.collectorNumber = `HB-${f.collectionCode}`;
   else if (f.strip) f.collectorNumber = `STRIP ${String(f.stripNumber).padStart(2, '0')}`;
   else if (f.promo) f.collectorNumber = `PR${String(PROMOS.findIndex(p => f.id.includes(p.id)) + 1).padStart(2, '0')}`;
   else f.collectorNumber = `${String(i + 1).padStart(3, '0')}/${String(SET_SIZE).padStart(3, '0')}`;
@@ -580,6 +615,8 @@ FRAMES.forEach((f, i) => {
 const PACK_META = [
   { id: 'basics', name: 'Pokémon Cards', tagline: 'Standard energy colors and classic yellow card borders', order: 1 },
   { id: 'strips', name: 'Photo Strips', tagline: 'The classic four-frame photo strip', order: 2 },
+  { id: 'collection', name: 'Strip Collection', tagline: 'Twelve designer photo strips', order: 3 },
+  { id: 'jumbo', name: 'Jumbo Strips', tagline: 'Oversized 4×6 photo strips', order: 4 },
   { id: 'party', name: 'Party Cards', tagline: 'Personalised party cards', order: 10 },
   { id: 'cutie', name: 'Cutie Club', tagline: 'Pastel personalised cards', order: 11 },
   { id: 'promo', name: 'Limited Promos', tagline: 'Limited promotional cards', order: 12, limited: true },
@@ -655,7 +692,7 @@ export function pickerGroups(now = new Date()) {
       id: p.id, name: p.name, tagline: p.tagline, limited: !!p.limited,
       frames: live.filter(f => f.packId === p.id),
     }))
-    .filter(g => g.id === 'basics' || g.id === 'strips')
+    .filter(g => ['basics', 'strips', 'collection', 'jumbo'].includes(g.id))
     .filter(g => g.frames.length);
 }
 

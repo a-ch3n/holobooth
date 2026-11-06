@@ -9,6 +9,7 @@
  * thumbnail and a 750x1050 300dpi print master.
  */
 
+import { styledStrip } from './strips.mjs';
 import {
   roundRect, notchRect, scallopRect, heartPath, confetti,
   linGrad, radGrad, shade, alpha, bevel, inset,
@@ -1201,4 +1202,9 @@ export function strip(ctx, o) {
   ];
 }
 
-export const TEMPLATES = { creature, creatureMax, creatureFullArt, party, kawaii, assetPack, strip };
+// A strip frame with a style is one of the Photo Strip Collection designs (strips.mjs).
+export const TEMPLATES = {
+  creature, creatureMax, creatureFullArt, party, kawaii, assetPack,
+  strip: (ctx, args) => (args.frame.style ? styledStrip(ctx, args) : strip(ctx, args)),
+  jumbo: styledStrip,
+};
