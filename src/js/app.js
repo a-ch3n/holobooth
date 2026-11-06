@@ -17,7 +17,6 @@ import { COMPANIONS, companionById, companionCanvas } from './frames/companions.
 import { loadPack, packFrames } from './frames/assetpack.mjs';
 import { stickerCatalog, stickerCanvas, newPlacement, stickerAt, DECOS } from './frames/stickers.mjs';
 import { renderCard, renderStrip, mintCard, printSize, printKindFor, setStripEvent } from './frames/render.mjs';
-import { boothSession } from './frames/strips/placeholder.mjs';
 import { Camera, StillsCamera, ObsSplitSource, SplitCamera, applyPhotoFilter, cameraLog, clog } from './camera.js';
 import { createPaymentProvider, kioskHeaders } from './payments.js';
 import { encodeGif } from './gif.js';
@@ -474,7 +473,7 @@ function shotsFor(frame) {
 /** Strips need every shot; cards need the chosen one. */
 function photoArgs(frame) {
   return isStrip(frame)
-    ? { photos: S.filteredShots.length ? S.filteredShots : [placeholderPhoto()], photo: null }
+    ? { photos: S.filteredShots.length ? S.filteredShots : [blankPhoto()], photo: null }
     : { photo: S.filteredShots[S.heroIndex] || placeholderPhoto(), photos: [] };
 }
 
@@ -538,7 +537,7 @@ function renderGrid(packId) {
     renderCard(cv.getContext('2d'), {
       frame: f, frameId: f.id, W: box.W, H: box.H,
       photo: placeholderPhoto(),
-      photos: isDesign(f) ? samplePhotos(f) : isStrip(f) ? [placeholderPhoto(), placeholderPhoto(), placeholderPhoto(), placeholderPhoto()] : [],
+      photos: isStrip(f) ? [blankPhoto()] : [],
       character: pokemonCharacter(f),
       companion: (f.template === 'party' || f.template === 'kawaii') ? companionThumb(f.energyType) : null,
       card: mintCard({ frame: f, frameId: f.id, seasonId: S.cfg.collection.seasonId, mint: 1, forcedRarity: f.rarityFloor || 'rare' }),
@@ -586,7 +585,7 @@ function renderGrid(packId) {
 
     const drawPreview = hex => renderCard(cv.getContext('2d'), {
       frame: stripFrameWithColor(hex, base), frameId: base.id, W: box.W, H: box.H,
-      photo: null, photos: [placeholderPhoto(), placeholderPhoto(), placeholderPhoto(), placeholderPhoto()],
+      photo: null, photos: [blankPhoto()],
       card: mintCard({ frame: base, frameId: base.id, seasonId: S.cfg.collection.seasonId, mint: 1, forcedRarity: base.rarityFloor || 'rare' }),
       stock: S.cfg.cards?.stock || null,
       personalization: { name: base.name, age: 7 },
@@ -630,16 +629,17 @@ function paletteCount(f) {
   return allFrames().filter(x => x.paletteOf && x.paletteOf === f.paletteOf).length;
 }
 
-/**
- * Stand-in booth shots for strip-design previews: one drawn session (same
- * people, changing poses) so a picker tile reads like a real strip. Seeded per
- * style so neighbouring tiles don't all show the same group.
- */
-const _sessions = new Map();
-function samplePhotos(f) {
-  const seed = (f.designNumber || 1) * 3 + 1;
-  if (!_sessions.has(seed)) _sessions.set(seed, boothSession(makeCanvasStatic, { seed, count: 5, width: 540, height: 360 }));
-  return _sessions.get(seed);
+/** An empty photo square for strip previews: no people, no silhouette. */
+let _blank = null;
+function blankPhoto() {
+  if (_blank) return _blank;
+  const c = document.createElement('canvas');
+  c.width = 300; c.height = 200;
+  const x = c.getContext('2d');
+  x.fillStyle = '#d3d6dc';
+  x.fillRect(0, 0, 300, 200);
+  _blank = c;
+  return c;
 }
 
 let _ph = null;
