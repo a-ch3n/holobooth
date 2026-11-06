@@ -178,9 +178,11 @@ function createWindow() {
 /* ------------------------------------------------------------ printing */
 
 /**
- * DNP DS40, 300 dpi, 6x4 media. Pages arrive at its native size, built by
- * the kiosk (src/js/layout.mjs): 1844 x 1240 (cards, landscape) or
- * 1240 x 1844 (two 2x6 strips side by side, portrait).
+ * DNP DS40, 300 dpi, 6x4 media. Pages arrive at its native size, always
+ * portrait: 1240 x 1844. The kiosk builds a card sheet landscape and turns
+ * its pixels by printer.rotation before sending it (src/js/layout.mjs
+ * toPortrait, the only rotation anywhere); strip pages are portrait already.
+ * Nothing in this file rotates a page or asks for landscape.
  *
  *   kind "4x6"   → printer.queue4x6   (DS40 set to 4x6, no cut)
  *   kind "strip" → printer.queueStrip (Windows: a second DS40 queue set to
@@ -197,7 +199,7 @@ function createWindow() {
 const NATIVE = { long: 1844, short: 1240 };
 
 function printerCfg() {
-  return { os: 'auto', queue4x6: null, queueStrip: null, finish: 'glossy', copies: 1, turn: 'right', lpOptions: [], ...(config.printer || {}) };
+  return { os: 'auto', queue4x6: null, queueStrip: null, finish: 'glossy', copies: 1, lpOptions: [], ...(config.printer || {}) };
 }
 
 function printOs(pc = printerCfg()) {
@@ -228,11 +230,11 @@ async function printImage({ dataUrl, kind = '4x6', copies = 1, label = '' } = {}
 
   const img = nativeImage.createFromDataURL(dataUrl);
   const { width, height } = img.getSize();
-  const orientation = width > height ? 'landscape' : 'portrait';
-  if (!((width === NATIVE.long && height === NATIVE.short) || (width === NATIVE.short && height === NATIVE.long))) {
-    return { ok: false, reason: `The page is ${width}x${height} px; the DS40 needs exactly ${NATIVE.long}x${NATIVE.short} or ${NATIVE.short}x${NATIVE.long}` };
+  // Always portrait. The kiosk turns a landscape page before it gets here
+  // (printer.rotation, src/js/layout.mjs toPortrait); nothing here turns it.
+  if (width !== NATIVE.short || height !== NATIVE.long) {
+    return { ok: false, reason: `The page is ${width}x${height} px; the printer is only sent portrait ${NATIVE.short}x${NATIVE.long} pages` };
   }
-  if (kind === 'strip' && orientation !== 'portrait') return { ok: false, reason: 'A strip page must be portrait (1240x1844)' };
 
   // Saved before anything is sent, so a failed print still leaves the file.
   const file = savePrintFile(dataUrl, kind, label);
@@ -243,7 +245,7 @@ async function printImage({ dataUrl, kind = '4x6', copies = 1, label = '' } = {}
   if (kind === 'strip' && !pc.queueStrip && os === 'windows') {
     notes.push('printer.queueStrip is not set: strips go to the 4x6 queue and will NOT be cut (README → Two DS40 queues)');
   }
-  console.log(`[print] ${kind} ${width}x${height} ${orientation} x${n} → ${os} queue "${queue || '(auto)'}" — saved ${file}`);
+  console.log(`[print] ${kind} ${width}x${height} portrait x${n} → ${os} queue "${queue || '(auto)'}" — saved ${file}`);
 
   if (config.printing?.dryRun) return { ok: true, dryRun: true, file, paper: `dry run: ${kind} ${width}x${height} → "${queue || '(auto)'}"`, notes };
 
@@ -254,7 +256,7 @@ async function printImage({ dataUrl, kind = '4x6', copies = 1, label = '' } = {}
     if (auto.error) return { ok: false, reason: auto.error.replace(/ in Windows|Install the DNP.*$/g, ''), file };
     const r = await printViaCups({
       jpeg: img.toJPEG(100), kind, printerName: auto.name, copies: n,
-      finish: pc.finish, turn: pc.turn === 'right' ? 'right' : 'left', lpOptions: pc.lpOptions,
+      finish: pc.finish, lpOptions: pc.lpOptions,
     });
     console.log('[print] lp:', JSON.stringify(r));
     return { ...r, file, notes: [...notes, ...(r.problems || [])], paper: `${r.command || ''}${r.options?.length ? ` (${r.options.join(', ')})` : ''}` };
@@ -271,8 +273,8 @@ async function printImage({ dataUrl, kind = '4x6', copies = 1, label = '' } = {}
   const wp = require('./winprint');
   const method = config.printing?.windowsMethod === 'xps' ? 'xps' : 'chromium';
   const r = method === 'xps'
-    ? await wp.printXps({ file, widthIn: orientation === 'landscape' ? 6 : 4, heightIn: orientation === 'landscape' ? 4 : 6, printer: choice.name, copies: n, turn: pc.turn })
-    : await printChromium({ file, width, height, orientation, deviceName: choice.name, copies: n });
+    ? await wp.printXps({ file, widthIn: 4, heightIn: 6, printer: choice.name, copies: n })
+    : await printChromium({ file, width, height, deviceName: choice.name, copies: n });
   console.log(`[print] ${method} result: ${JSON.stringify(r)}`);
   // What happened to the job after it was handed to Windows.
   await new Promise(res => setTimeout(res, 3000));
@@ -285,15 +287,14 @@ async function printImage({ dataUrl, kind = '4x6', copies = 1, label = '' } = {}
  * The print page: a window holding only the image, sized to the 4x6 page,
  * printed silently once the image has loaded.
  */
-async function printChromium({ file, width, height, orientation, deviceName, copies }) {
-  const landscape = orientation === 'landscape';
-  // printing.chromiumPage: "4x6" (default) = the 4 x 6 in page, the image
-  // cover-fitted onto it (97.6%: 1844 px across 6 in). "native" = a page of
-  // exactly the image's pixels at 300 dpi (4.13 x 6.15 in), nothing scaled.
+async function printChromium({ file, width, height, deviceName, copies }) {
+  // Always a portrait page. printing.chromiumPage: "4x6" (default) = 4 x 6 in,
+  // the image cover-fitted onto it (97.6%). "native" = exactly the image's
+  // pixels at 300 dpi (4.13 x 6.15 in), nothing scaled.
   const native = config.printing?.chromiumPage === 'native';
-  const [pw, ph] = native ? [Math.min(width, height) / 300, Math.max(width, height) / 300] : [4, 6];
+  const [pw, ph] = native ? [width / 300, height / 300] : [4, 6];
   const html = `<!doctype html><html><head><meta charset="utf-8"><style>
-  @page { size: ${landscape ? `${ph}in ${pw}in` : `${pw}in ${ph}in`}; margin: 0 }
+  @page { size: ${pw}in ${ph}in; margin: 0 }
   html, body { margin: 0; padding: 0 }
   html, body { width: 100%; height: 100%; overflow: hidden; background: #fff;
                -webkit-print-color-adjust: exact; print-color-adjust: exact }
@@ -317,7 +318,7 @@ async function printChromium({ file, width, height, orientation, deviceName, cop
       printBackground: true,
       deviceName,
       margins: { marginType: 'none' },
-      landscape,
+      landscape: false,
       scaleFactor: 100,
       copies,
       // Electron wants microns: 4 x 6 in = 101600 x 152400.
@@ -325,7 +326,7 @@ async function printChromium({ file, width, height, orientation, deviceName, cop
     };
     console.log('[print] webContents.print', JSON.stringify(opts));
     return await new Promise(resolve => printWin.webContents.print(opts, (success, failureReason) =>
-      resolve({ ok: success, reason: success ? null : (failureReason || 'print failed'), paper: `landscape=${landscape} copies=${copies}` })));
+      resolve({ ok: success, reason: success ? null : (failureReason || 'print failed'), paper: `portrait ${pw}x${ph}in copies=${copies}` })));
   } finally {
     setTimeout(() => { try { printWin.destroy(); } catch {} fs.rm(htmlPath, { force: true }, () => {}); }, 1000);
   }

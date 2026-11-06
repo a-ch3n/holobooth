@@ -2,11 +2,11 @@
  * print.mjs — native-size printing through CUPS (Linux / Raspberry Pi, and
  * macOS), shared by electron/main.js and pi/kiosk-server.mjs.
  *
- * The page arrives at the DS40's native 6x4 size: 1240 x 1844 (portrait) or
- * 1844 x 1240 (landscape) px at 300 dpi. It's wrapped in a one-page PDF whose
- * MediaBox is exactly those pixels at 300 dpi (297.6 x 442.56 pt) — always
- * portrait, a landscape page drawn turned inside it — so nothing has to
- * scale or rotate it. CUPS gets scaling switched off on top of that.
+ * The page arrives already portrait, 1240 x 1844 px (the kiosk turns
+ * landscape pages: printer.rotation). It's wrapped in a one-page PDF whose
+ * MediaBox is exactly those pixels at 300 dpi (297.6 x 442.56 pt), and sent
+ * with orientation-requested=3 (portrait) and no scaling, so CUPS neither
+ * fits nor rotates it.
  *
  * Option names come from the printer itself (`lpoptions -p <printer> -l`),
  * never hardcoded. Gutenprint's DS40 driver reports (checked against
@@ -46,21 +46,16 @@ export function jpegSize(buf) {
 }
 
 /**
- * One-page PDF, portrait, exactly the image's pixels at dpi. A landscape
- * image is drawn turned 90 degrees (turn: 'left' = its top to the page's
- * left edge, 'right' = to the right edge), still pixel for pixel.
+ * One-page PDF, exactly the image's pixels at dpi. Portrait only: the kiosk
+ * turns a landscape page before it gets here (printer.rotation), so a
+ * landscape image is refused rather than turned a second time.
  */
-export function jpegToPdf(jpeg, { dpi = 300, turn = 'left' } = {}) {
+export function jpegToPdf(jpeg, { dpi = 300 } = {}) {
   const { width: pw, height: ph } = jpegSize(jpeg);
-  const landscape = pw > ph;
-  const imgW = +(pw / dpi * PT_PER_IN).toFixed(3);
-  const imgH = +(ph / dpi * PT_PER_IN).toFixed(3);
-  const W = landscape ? imgH : imgW; // page: always portrait
-  const H = landscape ? imgW : imgH;
-  // Image space is the unit square; cm maps it onto the page.
-  const cm = !landscape ? `${imgW} 0 0 ${imgH} 0 0`
-    : turn === 'right' ? `0 ${-imgW} ${imgH} 0 0 ${H}`
-    : `0 ${imgW} ${-imgH} 0 ${W} 0`;
+  if (pw > ph) throw new Error(`Only portrait pages are printed (got ${pw}x${ph}); turn it first (printer.rotation)`);
+  const W = +(pw / dpi * PT_PER_IN).toFixed(3);
+  const H = +(ph / dpi * PT_PER_IN).toFixed(3);
+  const cm = `${W} 0 0 ${H} 0 0`;
 
   const content = Buffer.from(`q\n${cm} cm\n/Im0 Do\nQ\n`, 'latin1');
   const objs = [
@@ -186,19 +181,20 @@ export async function listPrinters() {
 
 /**
  * @param {object} o
- * @param {Buffer} o.jpeg        the page as a JPEG at native size (1240x1844 or 1844x1240)
+ * @param {Buffer} o.jpeg        the page as a JPEG at native size, portrait (1240x1844)
  * @param {'4x6'|'strip'} o.kind
  * @param {string} [o.printerName]
  * @param {number} [o.copies]
  * @param {string} [o.finish]    'glossy' | 'matte'
- * @param {string} [o.turn]      which way a landscape page is turned onto the portrait media
  * @param {string[]} [o.lpOptions]  extra -o values from the config (win over detected ones)
  */
 export async function printImage(o) {
-  const { jpeg, kind = '4x6', printerName, copies = 1, finish = 'glossy', turn = 'left', lpOptions = [], dryRun = false, options = null } = o;
+  const { jpeg, kind = '4x6', printerName, copies = 1, finish = 'glossy', lpOptions = [], dryRun = false, options = null } = o;
   if (!Buffer.isBuffer(jpeg)) throw new Error('printImage: jpeg Buffer required');
 
-  const { pdf, pageWpt, pageHpt, pixels } = jpegToPdf(jpeg, { turn });
+  let made;
+  try { made = jpegToPdf(jpeg); } catch (e) { return { ok: false, reason: e.message }; }
+  const { pdf, pageWpt, pageHpt, pixels } = made;
   let detected;
   try {
     detected = chooseOptions(options || await readPrinterOptions(printerName), { kind, finish });
@@ -212,8 +208,10 @@ export async function printImage(o) {
   const args = [];
   if (printerName) args.push('-d', printerName);
   args.push('-n', String(Math.max(1, copies)));
-  // The page is already the printable area at 300 dpi: no scaling, no fitting.
-  for (const opt of ['print-scaling=none', 'fit-to-page=false', ...detected.set, ...(lpOptions || [])]) args.push('-o', opt);
+  // Already portrait and exactly the printable area at 300 dpi: tell CUPS
+  // it's portrait (3) so it doesn't rotate it, and don't scale it. No
+  // fit-to-page or auto-rotate options.
+  for (const opt of ['orientation-requested=3', 'print-scaling=none', ...detected.set, ...(lpOptions || [])]) args.push('-o', opt);
   args.push(file);
 
   const info = {

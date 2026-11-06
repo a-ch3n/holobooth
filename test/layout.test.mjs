@@ -194,3 +194,55 @@ test('Jumbo strip print size is a whole DS40 4x6 page, 1240 x 1844', () => {
   const s = printSize('jumbo', 300);
   assert.equal(s.W, 1240); assert.equal(s.H, 1844);
 });
+
+/* ---------------------------------------------- printer rotation (bug 2) */
+
+test('toPortrait: a landscape 1844x1240 composite comes out 1240x1844, pixels turned clockwise by 90', async () => {
+  const { toPortrait } = await import('../src/js/layout.mjs');
+  const src = createCanvas(1844, 1240);
+  const g = src.getContext('2d');
+  g.fillStyle = '#ffffff'; g.fillRect(0, 0, 1844, 1240);
+  g.fillStyle = '#ff0000'; g.fillRect(0, 0, 10, 10);           // the design's top-left corner
+  g.fillStyle = '#0000ff'; g.fillRect(1834, 0, 10, 10);        // its top-right corner
+  const out = toPortrait(src, 90, (w, h) => createCanvas(w, h));
+  assert.equal(out.width, 1240); assert.equal(out.height, 1844);
+  const px = (x, y) => [...out.getContext('2d').getImageData(x, y, 1, 1).data.slice(0, 3)];
+  // Clockwise: the design's top edge becomes the page's right edge.
+  assert.deepEqual(px(1235, 5), [255, 0, 0], 'top-left → top-right');
+  assert.deepEqual(px(1235, 1838), [0, 0, 255], 'top-right → bottom-right');
+  const ccw = toPortrait(src, 270, (w, h) => createCanvas(w, h));
+  assert.equal(ccw.width, 1240); assert.equal(ccw.height, 1844);
+  const qx = (x, y) => [...ccw.getContext('2d').getImageData(x, y, 1, 1).data.slice(0, 3)];
+  // 270: the design's top edge becomes the page's left edge.
+  assert.deepEqual(qx(5, 1838), [255, 0, 0], 'top-left → bottom-left');
+  assert.deepEqual(qx(5, 5), [0, 0, 255], 'top-right → top-left');
+});
+
+test('toPortrait: a strip page (already 1240x1844 portrait) is not rotated', async () => {
+  const { toPortrait } = await import('../src/js/layout.mjs');
+  const page = createCanvas(1240, 1844);
+  for (const r of [0, 90, 180, 270]) assert.equal(toPortrait(page, r, () => { throw new Error('must not make a new canvas'); }), page, `rotation ${r}`);
+});
+
+test('toPortrait: only 0/90/180/270, and 0/180 refuse a landscape page', async () => {
+  const { toPortrait } = await import('../src/js/layout.mjs');
+  const make = (w, h) => createCanvas(w, h);
+  assert.throws(() => toPortrait(createCanvas(1844, 1240), 45, make), /0, 90, 180 or 270/);
+  assert.throws(() => toPortrait(createCanvas(1844, 1240), 0, make), /use 90 or 270/);
+  assert.throws(() => toPortrait(createCanvas(1844, 1240), 180, make), /use 90 or 270/);
+  assert.equal(toPortrait(createCanvas(1844, 1240), '90', make).height, 1844, 'a number given as text from the config works');
+});
+
+test('CUPS: only portrait pages, sent with orientation-requested=3 and no fit/auto-rotate', async () => {
+  const { jpegToPdf, printImage } = await import('../pi/print.mjs');
+  const portrait = createCanvas(1240, 1844).toBuffer('image/jpeg');
+  const landscape = createCanvas(1844, 1240).toBuffer('image/jpeg');
+  assert.ok(jpegToPdf(portrait).pdf.length > 0);
+  assert.throws(() => jpegToPdf(landscape), /Only portrait/);
+  const r = await printImage({ jpeg: portrait, kind: '4x6', printerName: 'X', dryRun: true, options: { PageSize: { choices: ['w288h432'] } } });
+  assert.match(r.command, /-o orientation-requested=3/);
+  assert.doesNotMatch(r.command, /fit-to-page|auto-rotate|landscape|orientation-requested=[^3]/);
+  assert.equal(r.pdfPage, '297.6x442.56pt');
+  const bad = await printImage({ jpeg: landscape, kind: '4x6', dryRun: true, options: {} });
+  assert.equal(bad.ok, false);
+});

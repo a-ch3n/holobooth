@@ -101,11 +101,11 @@ function ensureXpsScript() {
   return xpsScript;
 }
 
-/** file: the page image on disk (the saved PNG). widthIn/heightIn: the 4x6 sheet, either way round. */
-async function printXps({ file, widthIn, heightIn, printer, copies = 1, turn = 'right' }) {
+/** file: the page image on disk (the saved PNG), always portrait. */
+async function printXps({ file, widthIn = 4, heightIn = 6, printer, copies = 1 }) {
   const out = await new Promise(resolve => {
     execFile('powershell.exe', ['-STA', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ensureXpsScript(),
-      '-Printer', printer, '-Image', file, '-W', String(widthIn), '-H', String(heightIn), '-Copies', String(copies), '-Turn', turn === 'left' ? 'left' : 'right'],
+      '-Printer', printer, '-Image', file, '-W', String(widthIn), '-H', String(heightIn), '-Copies', String(copies)],
     { timeout: 120000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) =>
       resolve({ err, out: String(stdout || '').trim(), stderr: String(stderr || '').trim() }));
   });

@@ -20,7 +20,7 @@ import { renderCard, renderStrip, mintCard, printSize } from './frames/render.mj
 import { Camera, StillsCamera, applyPhotoFilter, cameraLog, clog, cameraRoles, matchRoles, stopActiveCamera } from './camera.js';
 import { loadFonts } from './frames/fonts.mjs';
 import { setStripEvent } from './frames/strips.mjs';
-import { coverCrop, coverPlacement, stripPageLayout, composeStripPage, composeCardSheet, cardSheetLayout, drawCalibration, pageSize } from './layout.mjs';
+import { toPortrait, coverCrop, coverPlacement, stripPageLayout, composeStripPage, composeCardSheet, cardSheetLayout, drawCalibration, pageSize } from './layout.mjs';
 import { createPaymentProvider, kioskHeaders } from './payments.js';
 import { encodeGif } from './gif.js';
 
@@ -208,7 +208,7 @@ function resetIdle() {
 }
 
 function abandon() {
-  S.camera?.stop();
+  S.camera?.stop('session ended');
   stopActiveCamera();
   S.pay?.cancel();
   go('attract');
@@ -323,7 +323,7 @@ ON_ENTER.attract = async () => {
   S.stripCustomColor = null;
   S.cameraAngle = null;
   S.filterId = S.cfg.filters?.default || null;
-  S.camera?.stop();
+  S.camera?.stop('new session');
 
   const live = pickerGroups();
   const count = live.reduce((n, g) => n + g.frames.length, 0);
@@ -1042,11 +1042,14 @@ function finalizeFilterSelection() {
 
 ON_ENTER.angle = async () => {
   const host = $('#angle-options');
-  // One camera stream at a time (camera.js), so the tiles don't stream: each
-  // only checks that its camera is plugged in, by label. The shoot opens just
-  // the one picked.
-  S.camera?.stop();
-  stopActiveCamera();
+  const video = $('#angle-preview');
+  // A live preview of the chosen camera. One stream at a time (camera.js):
+  // pressing the other button stops this camera before opening that one.
+  S.camera?.stop('camera page opened');
+  stopActiveCamera('camera page opened');
+  video.srcObject = null;
+  $('#angle-start').disabled = true;
+  setAnglePreview('Checking cameras…');
   const roles = cameraAngles();
   host.innerHTML = roles.map(a => `
     <div class="angle-option${a.id === S.cameraAngle ? ' on' : ''}" data-angle="${a.id}">
@@ -1076,11 +1079,52 @@ ON_ENTER.angle = async () => {
       toast(`${a.name} not found — check it's plugged in and switched on.`, true);
       return;
     }
-    S.cameraAngle = id;
-    host.querySelectorAll('.angle-option').forEach(t => t.classList.toggle('on', t.dataset.angle === id));
-    go('capture');
+    previewAngle(id);
   };
+  $('#angle-start').onclick = () => {
+    if (S.cameraAngle && matches[S.cameraAngle]) go('capture');
+  };
+  // Start on the last camera used (a retake), else the first one plugged in.
+  const first = S.cameraAngle && matches[S.cameraAngle] ? S.cameraAngle : roles.find(r => matches[r.id])?.id;
+  if (first) previewAngle(first);
+  else setAnglePreview(roles.length ? `${roles.map(r => r.name).join(' and ')} not found` : 'No cameras set up in booth.config.json', true);
 };
+
+/** The camera page's preview message: a status, or a visible error (bad). */
+function setAnglePreview(text, bad = false) {
+  const el = $('#angle-live-status');
+  el.textContent = text || '';
+  el.hidden = !text;
+  el.classList.toggle('bad', bad);
+}
+
+/** Shows the chosen camera live on the camera page. */
+async function previewAngle(id) {
+  S.cameraAngle = id;
+  $$('#angle-options .angle-option').forEach(t => t.classList.toggle('on', t.dataset.angle === id));
+  const token = S.previewToken = {};
+  const current = () => S.previewToken === token && S.screen === 'angle';
+  const video = $('#angle-preview');
+  const start = $('#angle-start');
+  start.disabled = true;
+  if (S.camera && (S.camera.role !== id || !!S.camera.stills !== usesStills(id))) { S.camera.stop('other camera chosen'); S.camera = null; }
+  const cam = (S.camera ||= makeCamera(id));
+  cam.onStatus = st => { if (current() && st.level !== 'ok') setAnglePreview(st.message, true); };
+  setAnglePreview(`Starting ${cam.rc?.name || 'camera'}…`);
+  try {
+    if (cam.isLive) await cam.attach(video);
+    else await cam.start(video);
+    if (!current()) return;
+    await cam.verifyLive(1000);
+    if (!current()) return;
+    setAnglePreview('');
+    start.disabled = false;
+  } catch (e) {
+    if (e.code === 'CAMERA_STOPPED' || !current()) return; // another button was pressed meanwhile
+    clog(`camera page: ${e.message}`);
+    setAnglePreview(e.message, true);
+  }
+}
 
 /* -------------------------------------------------------- camera filter */
 
@@ -1146,7 +1190,7 @@ ON_ENTER.filter = () => {
 ON_ENTER.capture = async () => {
   const role = S.cameraAngle || defaultRole();
   // The other camera's stream (if any) closes before this one opens: one at a time.
-  if (S.camera && (S.camera.role !== role || !!S.camera.stills !== usesStills(role))) { S.camera.stop(); S.camera = null; }
+  if (S.camera && (S.camera.role !== role || !!S.camera.stills !== usesStills(role))) { S.camera.stop('other camera chosen'); S.camera = null; }
   const status = $('#cam-status');
   status.classList.remove('bad');
   const onStatus = s => {
@@ -1159,17 +1203,27 @@ ON_ENTER.capture = async () => {
 
   try {
     try {
-      await cam.start($('#preview'));
+      // The camera page already has this camera open: show that stream here
+      // rather than closing and reopening it.
+      if (cam.isLive) {
+        await cam.attach($('#preview'));
+        const st = cam.settings;
+        onStatus({ level: 'ok', message: `${cam.label} — ${st?.width}x${st?.height} @ ${Math.round(st?.frameRate || 0)}fps` });
+      } else await cam.start($('#preview'));
+      $('#angle-preview').srcObject = null;
+      showCropGuide(cam);
+      await cam.verifyLive(1000);
     } catch (error) {
       if (!cam.stills) throw error;
       stillsFallback(error);
-      cam.stop();
+      cam.stop('tethered camera failed');
       cam = S.camera = new Camera(S.cfg, role);
       cam.onStatus = onStatus;
       await cam.start($('#preview'));
+      await cam.verifyLive(1000);
     }
   } catch (e) {
-    S.camera?.stop();
+    S.camera?.stop('preview failed');
     S.camera = null;
     // Say exactly which camera, on screen, and never swap in another one.
     status.textContent = e.message;
@@ -1270,7 +1324,7 @@ async function runShootSequence() {
   }
 
   $('#countdown').textContent = '';
-  S.camera.stop();
+  S.camera.stop('shoot finished');
   // The filter picker works on the actual shot just taken, so it only makes
   // sense after this point; skip straight to finalizing (with S.filterId
   // untouched, i.e. "Original") when it's off/unconfigured.
@@ -1943,10 +1997,20 @@ function stripJobs(strip, count) {
   return [{ canvas: c, copies: Math.max(1, Math.ceil(count / 2)) }];
 }
 
+/**
+ * Every print goes through here. The printer always gets a portrait
+ * 1240 x 1844 page: a landscape composite (a card sheet) is turned here, by
+ * printer.rotation (layout.mjs toPortrait), and nowhere else. Strip pages
+ * are already portrait and are sent as they are.
+ */
 async function sendPage(job, kind, label) {
-  const r = await window.booth.printers.print({ dataUrl: job.canvas.toDataURL('image/png'), kind, copies: job.copies, label })
+  const rotation = S.cfg.printer?.rotation ?? 90;
+  const page = toPortrait(job.canvas, rotation, (w, h) => newCanvas({ W: w, H: h }));
+  if (page.width !== 1240 || page.height !== 1844) throw new Error(`The print page is ${page.width}x${page.height}; it must be 1240x1844`);
+  const turned = page !== job.canvas;
+  const r = await window.booth.printers.print({ dataUrl: page.toDataURL('image/png'), kind, copies: job.copies, label })
     .catch(err => ({ ok: false, reason: err.message }));
-  clog(`print ${label} (${kind}, ${job.canvas.width}x${job.canvas.height}, x${job.copies}): ${r.ok ? 'ok' : `FAILED ${r.reason || ''}`}${r.file ? ` — saved ${r.file}` : ''}${r.paper ? `\n  ${r.paper}` : ''}`);
+  clog(`print ${label} (${kind}, ${job.canvas.width}x${job.canvas.height}${turned ? ` turned ${rotation}° → ${page.width}x${page.height}` : ''}, x${job.copies}): ${r.ok ? 'ok' : `FAILED ${r.reason || ''}`}${r.file ? ` — saved ${r.file}` : ''}${r.paper ? `\n  ${r.paper}` : ''}`);
   (r.notes || []).forEach(n => clog(`print warn: ${n}`));
   if (!r.ok) throw new Error(r.reason || `${label} print was rejected`);
   return r;
@@ -2171,7 +2235,7 @@ ON_ENTER.admin = async () => {
     try {
       const r = await sendPage({ canvas: c, copies: 1 }, kind, `test-${kind}`);
       out.style.whiteSpace = 'pre-wrap';
-      out.textContent = `Sent ✓ ${c.width}x${c.height} — saved ${r.file || ''}${(r.notes || []).map(n => `\n⚠ ${n}`).join('')}\n${r.paper || ''}`;
+      out.textContent = `Sent ✓ as a 1240x1844 portrait page${c.width > c.height ? ` (turned ${S.cfg.printer?.rotation ?? 90}°)` : ''} — saved ${r.file || ''}${(r.notes || []).map(n => `\n⚠ ${n}`).join('')}\n${r.paper || ''}`;
     } catch (err) {
       out.textContent = `Failed: ${err.message}`;
       out.style.color = 'var(--bad)';
@@ -2236,7 +2300,7 @@ ON_ENTER.admin = async () => {
  * after the other, never together.
  */
 ON_ENTER.diagnostics = async () => {
-  S.camera?.stop();
+  S.camera?.stop('diagnostics');
   S.camera = null;
   stopActiveCamera();
   const body = $('#diag-body');
@@ -2284,7 +2348,7 @@ ON_ENTER.diagnostics = async () => {
     } catch (e) {
       results[r.id] = `failed: ${e.message}`;
     } finally {
-      cam.stop();
+      cam.stop('diagnostics: next camera');
     }
     clog(`diagnostics: ${r.id}: ${results[r.id]}`);
     if (alive()) render();

@@ -736,16 +736,25 @@ Printer: **DNP DS40**, 300 dpi, 6×4 media. Settings are under `printer` in
 | `queueStrip` | Printer name for strip pages (the 2-inch-cut queue on Windows) |
 | `finish` | `glossy` or `matte` |
 | `copies` | Copies of every page on top of what the order needs (1 = just the order) |
-| `turn` | `right` / `left`: which way a card page is turned onto the DS40's portrait paper (CUPS, XPS) |
+| `rotation` | `90` (default) or `270`: how far a landscape card page is turned, clockwise, to make it portrait. If cards come out upside down, change 90 to 270 |
 
 ### Pages at the DS40's native size
 
 Every page is built at exactly the DS40's 6×4 size with bleed, so nothing
 has to scale it (`src/js/layout.mjs`):
 
-- **4×6 (cards):** 1844 × 1240 px, landscape. Two 2.5×3.5″ cards
+- **4×6 (cards):** built 1844 × 1240 px, landscape. Two 2.5×3.5″ cards
   (750 × 1050 px) side by side, centred, with cut marks; cut by hand.
   Printed to `printer.queue4x6`.
+
+**The printer only ever gets portrait 1240 × 1844 pages.** A landscape card
+page has its pixels turned once, clockwise by `printer.rotation` (90 by
+default), just before it's sent (`toPortrait()` in `src/js/layout.mjs`).
+Strip pages are portrait already and aren't turned. Nothing after that
+rotates a page: Chromium prints with `landscape: false` and a 4 in × 6 in
+page, the XPS script refuses landscape images, and CUPS gets
+`orientation-requested=3`. If cards print upside down, set
+`printer.rotation` to `270`.
 - **2×6 strips:** one 1240 × 1844 px portrait page with **two identical
   620 × 1844 px strips side by side**. The DS40's 2-inch cut splits it at
   x = 620 into two strips. Photos and text stay at least 20 px from every
@@ -807,10 +816,10 @@ the operator panel shows that in red.
 
 **Print method** (operator panel, or `printing.windowsMethod`):
 - `chromium` (default): a hidden print window holding only the page image,
-  printed silently: `@page { size: 4in 6in; margin: 0 }` (6in 4in for
-  landscape), the image `object-fit: cover`, and `webContents.print` with
-  `silent`, `printBackground`, the queue as `deviceName`, `marginType:
-  'none'`, `landscape` matching the page, `scaleFactor: 100`, the copies,
+  printed silently: `@page { size: 4in 6in; margin: 0 }`, the image
+  `object-fit: cover`, and `webContents.print` with `silent`,
+  `printBackground`, the queue as `deviceName`, `marginType: 'none'`,
+  `landscape: false`, `scaleFactor: 100`, the copies,
   and `pageSize` in microns (101600 × 152400). It waits for the image's load
   event, and a failure's reason is shown on screen. Covering 6 in with
   1844 px is a 97.6% scale, which trims about 5 px off the two long edges
@@ -820,6 +829,7 @@ the operator panel shows that in red.
 - `xps`: Windows' XPS print path (what Ctrl+P photo printing uses),
   starting from the queue's Printing Preferences. Test by hand:
   `powershell -STA -ExecutionPolicy Bypass -File .\electron\winprint-xps.ps1 -Printer "DS40"`.
+  It prints portrait pages only and never rotates.
 
 Glossy/matte on Windows is set in each queue's Printing Preferences.
 Chromium can't pass it per job.
@@ -839,13 +849,14 @@ driver (checked against `gutenprint.5.3://dnp-ds40/expert`) that gives:
 
 | Page | Options sent |
 |---|---|
-| 4×6 | `PageSize=w288h432` `StpLaminate=Glossy` (or `Matte`) `StpiShrinkOutput=Crop` `print-scaling=none` `fit-to-page=false` |
+| 4×6 | `PageSize=w288h432` `StpLaminate=Glossy` (or `Matte`) `StpiShrinkOutput=Crop` `orientation-requested=3` `print-scaling=none` |
 | strips | `PageSize=w288h432-div2` (the driver's "2x6*2": 4×6 cut in two), the same finish and no-scaling options |
 
 The page goes to CUPS as a one-page PDF exactly 1240 × 1844 px at 300 dpi
 (297.6 × 442.56 pt, which is Gutenprint's 4×6 printable area), so it's
-printed at native size. A landscape card page is turned inside the PDF
-(`printer.turn`). Run through the DS40's CUPS filters, the page came out
+printed at native size. It's always portrait (already turned by the
+kiosk), and `orientation-requested=3` tells CUPS so, with no fit-to-page or
+auto-rotate options. Run through the DS40's CUPS filters, the page came out
 1240 × 1844 px with the edge, safe and cut lines on the same pixel
 columns as the file. Vertically it lands 1 px lower: Ghostscript's
 rounding, 0.08 mm. DNP's own macOS driver names things differently (e.g.

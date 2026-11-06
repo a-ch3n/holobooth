@@ -138,6 +138,35 @@ function drawCutMarks(ctx, L) {
   ctx.restore();
 }
 
+/* ---------------------------------------------------- printer rotation */
+
+export const ROTATIONS = [0, 90, 180, 270];
+
+/**
+ * The page the printer gets is always portrait, 1240 x 1844. This is the ONE
+ * place a page is turned: a landscape composite (1844 x 1240, the card
+ * sheet) has its pixels rotated clockwise by printer.rotation (90 by
+ * default; 270 if prints come out upside down). A portrait page (a strip
+ * page) is returned as it is, never rotated. Nothing after this turns the
+ * page again: the print path is portrait only.
+ *
+ * @param {{width:number,height:number}} src  canvas or image
+ * @param {number} rotation  0, 90, 180 or 270 (only 90 and 270 make a landscape page portrait)
+ * @param {(w:number,h:number)=>any} makeCanvas
+ */
+export function toPortrait(src, rotation = 90, makeCanvas) {
+  const r = Number(rotation);
+  if (!ROTATIONS.includes(r)) throw new Error(`printer.rotation must be 0, 90, 180 or 270 (it is ${rotation})`);
+  if (src.height >= src.width) return src;
+  if (r === 0 || r === 180) throw new Error(`printer.rotation ${r} leaves a landscape page landscape; use 90 or 270`);
+  const out = makeCanvas(src.height, src.width);
+  const ctx = out.getContext('2d');
+  if (r === 90) { ctx.translate(out.width, 0); ctx.rotate(Math.PI / 2); }
+  else { ctx.translate(0, out.height); ctx.rotate(-Math.PI / 2); }
+  ctx.drawImage(src, 0, 0);
+  return out;
+}
+
 /* --------------------------------------------------------- calibration */
 
 /**
@@ -207,14 +236,23 @@ export function drawCalibration(ctx, { kind = '4x6', orientation = 'landscape', 
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   for (const col of columns) {
-    const big = Math.round(Math.min(col.w, col.h) * 0.11);
-    const small = Math.round(big * 0.42);
+    const big = Math.round(Math.min(col.w, col.h) * 0.14);
+    const small = Math.round(big * 0.33);
     const cx = col.x + col.w / 2;
+    // A big "TOP ↑" at the top of the design, so a print shows at a glance
+    // which way the page went through the printer.
     ctx.font = `bold ${big}px sans-serif`;
-    ctx.fillText('▲ TOP', cx, col.y + col.h * 0.14);
+    ctx.fillText('TOP ↑', cx, col.y + SAFE_PX + 30 + big * 0.55);
     ctx.font = `${small}px sans-serif`;
     const y0 = col.y + col.h / 2 - (lines.length - 1) * small * 0.75;
     lines.forEach((t, i) => ctx.fillText(t, cx, y0 + i * small * 1.5));
+    // An arrow pointing at the design's right edge.
+    const ay = col.y + col.h * 0.8, ax1 = col.x + col.w - SAFE_PX - 34, ax0 = Math.max(col.x + SAFE_PX + 30, ax1 - col.w * 0.45);
+    const head = Math.min(46, col.w * 0.08);
+    ctx.fillRect(ax0, ay - 5, ax1 - ax0 - head, 10);
+    ctx.beginPath(); ctx.moveTo(ax1, ay); ctx.lineTo(ax1 - head, ay - head * 0.7); ctx.lineTo(ax1 - head, ay + head * 0.7); ctx.closePath(); ctx.fill();
+    ctx.font = `bold ${small}px sans-serif`;
+    ctx.fillText('RIGHT EDGE', (ax0 + ax1) / 2, ay - head * 0.7 - small * 0.5);
   }
   ctx.restore();
   return { W, H };

@@ -128,7 +128,13 @@
     <div class="center">
       <div class="angle-card">
         <h2>Pick your angle</h2>
+        <!-- Live preview of the chosen camera (one camera streams at a time). -->
+        <div class="angle-live">
+          <video id="angle-preview" autoplay muted playsinline></video>
+          <div class="angle-live-status" id="angle-live-status" hidden></div>
+        </div>
         <div class="angle-options" id="angle-options"></div>
+        <button class="btn btn-lg angle-start" id="angle-start" disabled>Start →</button>
       </div>
     </div>
   </section>

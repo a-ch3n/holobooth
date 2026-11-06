@@ -124,8 +124,9 @@ let permission = null;
 async function requestPermission() {
   if (activeCamera?.stream) return;
   try {
+    clog('permission: getUserMedia(any camera) to read device names');
     const s = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-    s.getTracks().forEach(t => t.stop());
+    s.getTracks().forEach(t => { clog(`permission: track.stop() "${t.label}"`); t.stop(); });
   } catch (e) {
     clog(`camera permission request: ${e.name}: ${e.message}`);
   }
@@ -218,9 +219,10 @@ export class Camera {
   }
 
   async _open(device) {
+    if (!this._wanted) throw stopped(this.role);
     // One stream at a time: every track of the other camera stops first.
-    if (activeCamera && activeCamera !== this) activeCamera.stop();
-    this._release();
+    if (activeCamera && activeCamera !== this) activeCamera.stop(`"${this.role}" is opening`);
+    this._release('reopening');
     activeCamera = this;
     const rc = this.rc;
     const constraints = {
@@ -236,7 +238,7 @@ export class Camera {
     };
     clog(`${this.role}: open "${device.label}" asking ${rc.width}x${rc.height}@${rc.frameRate}`);
     try {
-      this.stream = await openWithRetry(constraints);
+      this.stream = await openWithRetry(constraints, 4, this.role);
     } catch (error) {
       if (activeCamera === this) activeCamera = null;
       if (BUSY.includes(error.name)) {
@@ -251,6 +253,13 @@ export class Camera {
         throw e;
       }
       throw error;
+    }
+    // stop() was called while the camera was opening (e.g. the other
+    // button was pressed): close this stream now, or it would keep running
+    // unseen and hold the camera.
+    if (!this._wanted || (activeCamera && activeCamera !== this)) {
+      this._release('stopped while opening');
+      throw stopped(this.role);
     }
     this.deviceId = device.deviceId;
     this.label = device.label;
@@ -290,7 +299,7 @@ export class Camera {
       if (!videoEl.paused && videoEl.readyState >= 3) return res(true);
       videoEl.addEventListener('playing', () => res(true), { once: true });
     });
-    videoEl.play().catch(() => {});
+    videoEl.play().catch(e => clog(`${this.role}: video.play() failed: ${e.name}: ${e.message}`));
     const ok = await Promise.race([playing, sleep(10000).then(() => false)]);
     if (!ok) clog(`warn: ${this.role}: video never fired 'playing' in 10 s`);
     await sleep(this.rc?.settleMs ?? 300);
@@ -319,7 +328,7 @@ export class Camera {
         this._lost = true;
         this.ready = false;
         this._status({ level: 'warn', message: 'Camera disconnected - reconnecting' });
-        this._release();
+        this._release('picture froze');
         this._reconnect();
       }
     }, 1000);
@@ -353,18 +362,32 @@ export class Camera {
     return this.isLive && this.ready;
   }
 
-  _release() {
+  _release(reason = '') {
     clearInterval(this._watchdog);
-    this.stream?.getTracks().forEach(t => t.stop());
+    this.stream?.getTracks().forEach(t => { clog(`${this.role}: track.stop() "${t.label}"${reason ? ` (${reason})` : ''}`); t.stop(); });
     this.stream = null;
     this.ready = false;
   }
 
-  stop() {
-    if (this.stream) clog(`${this.role}: stop "${this.label}"`);
+  stop(reason = 'stop') {
     this._wanted = false;
-    this._release();
+    this._release(reason);
     if (activeCamera === this) activeCamera = null;
+  }
+
+  /**
+   * One second after the preview starts: is it actually delivering frames?
+   * Logs the track state and the video size, and throws a readable error
+   * if there's no picture, so the screen never just stays blank.
+   */
+  async verifyLive(ms = 1000) {
+    await sleep(ms);
+    if (!this._wanted) throw stopped(this.role);
+    const t = this.stream?.getVideoTracks()[0];
+    const v = this.video;
+    clog(`${this.role}: ${ms} ms after start: track ${t?.readyState || 'none'}${t?.muted ? ' (muted)' : ''}, video ${v?.videoWidth || 0}x${v?.videoHeight || 0}${v?.paused ? ', paused' : ''}`);
+    if (!t || t.readyState !== 'live') throw new Error(`${this.rc.name}: the camera stopped right after starting`);
+    if (!v?.videoWidth) throw new Error(`${this.rc.name}: no picture. The camera opened but sends no frames (check its cable and that no other app is using it)`);
   }
 
   get isLive() {
@@ -407,8 +430,15 @@ export class Camera {
 }
 
 /** Stops whichever camera is streaming (leaving a screen, diagnostics). */
-export function stopActiveCamera() {
-  activeCamera?.stop();
+export function stopActiveCamera(reason = 'leaving the screen') {
+  activeCamera?.stop(reason);
+}
+
+/** The error a camera's start() throws when stop() was called while it was still opening. */
+function stopped(role) {
+  const e = new Error(`${role}: stopped while opening`);
+  e.code = 'CAMERA_STOPPED';
+  return e;
 }
 
 /**
@@ -477,12 +507,13 @@ function applyFilterExtras(canvas, filter) {
  * Windows releases a camera a beat after the track stops, so opening it right
  * after something else closed it can fail as "busy". Give it a few tries.
  */
-async function openWithRetry(constraints, tries = 4) {
+async function openWithRetry(constraints, tries = 4, who = '') {
   for (let i = 1; ; i++) {
     try {
+      clog(`${who}: getUserMedia(deviceId ${String(constraints.video?.deviceId?.exact || 'any').slice(0, 10)}…) try ${i}`);
       return await navigator.mediaDevices.getUserMedia(constraints);
     } catch (error) {
-      clog(`getUserMedia failed (try ${i}/${tries}): ${error.name}: ${error.message}`);
+      clog(`${who}: getUserMedia failed (try ${i}/${tries}): ${error.name}: ${error.message}`);
       if (!BUSY.includes(error.name) || i >= tries) throw error;
       await new Promise(r => setTimeout(r, 600 * i));
     }

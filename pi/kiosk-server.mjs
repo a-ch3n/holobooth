@@ -92,13 +92,14 @@ const METHODS = {
   // DS40's native 1844x1240 / 1240x1844, saved to disk before it's sent.
   'printers.print': async ({ dataUrl, kind = '4x6', copies = 1, label = '' } = {}) => {
     if (config.printing?.enabled === false) return { ok: false, reason: 'Printing is disabled in booth.config.json' };
-    const pc = { queue4x6: null, queueStrip: null, finish: 'glossy', copies: 1, turn: 'right', lpOptions: [], ...(config.printer || {}) };
+    const pc = { queue4x6: null, queueStrip: null, finish: 'glossy', copies: 1, lpOptions: [], ...(config.printer || {}) };
     kind = kind === 'strip' ? 'strip' : '4x6';
     const png = Buffer.from(String(dataUrl).split(',')[1] || '', 'base64');
     const sharp = (await import('sharp')).default;
     const { width, height } = await sharp(png).metadata();
-    if (!((width === 1844 && height === 1240) || (width === 1240 && height === 1844))) {
-      return { ok: false, reason: `The page is ${width}x${height} px; the DS40 needs exactly 1844x1240 or 1240x1844` };
+    // Always portrait: the kiosk turns landscape pages first (printer.rotation).
+    if (width !== 1240 || height !== 1844) {
+      return { ok: false, reason: `The page is ${width}x${height} px; the printer is only sent portrait 1240x1844 pages` };
     }
     const now = new Date();
     const dir = join(DATA_DIR, 'media', now.toISOString().slice(0, 10), 'prints');
@@ -112,7 +113,7 @@ const METHODS = {
     const r = await printImage({
       jpeg, kind, printerName: auto.name,
       copies: Math.max(1, Math.min(Math.round(copies * (pc.copies || 1)), config.printing?.copiesMax || 10)),
-      finish: pc.finish, turn: pc.turn === 'right' ? 'right' : 'left', lpOptions: pc.lpOptions,
+      finish: pc.finish, lpOptions: pc.lpOptions,
       dryRun: !!config.printing?.dryRun,
     });
     console.log('[print]', JSON.stringify(r));

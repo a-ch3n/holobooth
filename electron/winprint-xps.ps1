@@ -3,21 +3,20 @@
   print path: the same one Windows' own Ctrl+P photo printing uses. It
   starts from the printer's Printing Preferences (so a DNP entry's paper
   size and 2inch cut setting apply), picks the matching paper if needed,
-  and prints the image edge to edge, turned to suit the sheet.
+  and prints the image edge to edge on a portrait page.
 
   HoloBooth calls it with -Image. Run it by hand to test a printer:
     powershell -STA -ExecutionPolicy Bypass -File .\electron\winprint-xps.ps1 -Printer "DS40 (Copy 1)"
   With no -Image it prints a colour test sheet with TOP on it.
-  A wide sheet is turned and printed as a portrait 4x6 page; add -Turn left
-  if it comes out upside down.
+  The image must already be portrait (HoloBooth turns landscape pages
+  before printing: printer.rotation). This script never rotates anything.
 #>
 param(
   [Parameter(Mandatory = $true)][string]$Printer,
   [string]$Image = '',
-  [double]$W = 6,
-  [double]$H = 4,
-  [int]$Copies = 1,
-  [ValidateSet('right', 'left')][string]$Turn = 'right'
+  [double]$W = 4,
+  [double]$H = 6,
+  [int]$Copies = 1
 )
 $ErrorActionPreference = 'Stop'
 try {
@@ -45,20 +44,11 @@ try {
     $bmp.Dispose()
   }
 
-  # Never send a landscape page: on the DS40 every landscape job (Chromium,
-  # GDI, XPS) came out blank or not at all, while portrait pages (Windows'
-  # test page, Ctrl+P) print. So a wide sheet is turned 90 degrees here and
-  # sent as the driver's own portrait 4x6. -Turn picks the direction.
-  if ($W -gt $H) {
-    $bmp = New-Object System.Drawing.Bitmap($Image)
-    $rot = if ($Turn -eq 'left') { [System.Drawing.RotateFlipType]::Rotate270FlipNone } else { [System.Drawing.RotateFlipType]::Rotate90FlipNone }
-    $bmp.RotateFlip($rot)
-    $turned = Join-Path $env:TEMP ('holobooth-portrait-' + [guid]::NewGuid().ToString('N') + '.jpg')
-    $bmp.Save($turned, [System.Drawing.Imaging.ImageFormat]::Jpeg)
-    $bmp.Dispose()
-    $Image = $turned
-    $t = $W; $W = $H; $H = $t
-  }
+  # Portrait only: a landscape image is refused here, never turned.
+  $probe = [System.Drawing.Image]::FromFile($Image)
+  $isLandscape = $probe.Width -gt $probe.Height
+  $probe.Dispose()
+  if ($isLandscape -or $W -gt $H) { Write-Output 'ERR Only portrait pages are printed; turn the page first (printer.rotation)'; exit 4 }
 
   $server = New-Object System.Printing.LocalPrintServer
   $queue = $server.GetPrintQueue($Printer)
