@@ -215,6 +215,20 @@ test('build stamp: 8 pt, bottom right, inside the 20 px safe margin, clear of th
   assert.match(buildStampText({ build: { time: '2026-11-06T15:52:00Z' }, job: jobs[0][0], rotation: ROT90 }), /built 2026-11-06 15:52/);
 });
 
+test('build stamp lands bottom right on the page toPrinterNative returns, for every job type', () => {
+  const greyIn = (c, b) => { const g = c.getContext('2d').getImageData(b.x, b.y, b.w, b.h).data; let n = 0; for (let i = 0; i < g.length; i += 4) if (Math.abs(g[i] - 128) < 30 && g[i] === g[i + 1]) n++; return n; };
+  for (const rot of [ROT90, ROT270]) for (const job of [
+    { type: '4x6', canvas: createCanvas(1240, 1844) },
+    { type: '4x6', canvas: createCanvas(1844, 1240) },
+    { type: 'strip', canvas: createCanvas(620, 1844) },
+    { type: 'cards', canvas: createCanvas(750, 1050), count: 2 },
+  ]) {
+    const page = toPrinterNative(job, rot, make);
+    const box = drawBuildStamp(page.getContext('2d'), 'abc1234 · test');
+    assert.ok(greyIn(page, box) > 50, `${job.type} ${job.canvas.width}x${job.canvas.height} @${rot.strip}: stamp drawn at ${JSON.stringify(box)}`);
+  }
+});
+
 /* ------------------------------------------------------------ calibration */
 
 test('calibration designs: TOP/LEFT/RIGHT, edge + 20 px borders, then 1844 x 1240 through toPrinterNative', () => {

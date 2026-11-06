@@ -117,9 +117,13 @@ function rotateCanvas(src, deg, makeCanvas) {
   if (!PRINT_ROTATIONS.includes(deg)) throw new Error(`rotation must be 90 or 270, not ${deg}`);
   const out = makeCanvas(src.height, src.width);
   const ctx = out.getContext('2d');
+  ctx.save();
   if (deg === 90) { ctx.translate(out.width, 0); ctx.rotate(Math.PI / 2); }
   else { ctx.translate(0, out.height); ctx.rotate(-Math.PI / 2); }
   ctx.drawImage(src, 0, 0);
+  // Hand back a canvas with no transform left on it, so whatever is drawn
+  // on the page next (the build stamp) lands where it's asked to.
+  ctx.restore();
   return out;
 }
 
@@ -309,6 +313,7 @@ export function buildStampText({ build = {}, job, rotation }) {
  */
 export function drawBuildStamp(ctx, text, { W = NATIVE.W, H = NATIVE.H } = {}) {
   ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.font = `${STAMP_PX}px sans-serif`;
   ctx.textAlign = 'right';
   ctx.textBaseline = 'alphabetic';
