@@ -467,7 +467,7 @@ function isDesign(frame) {
 }
 /** How many shots a frame wants: the collection designs say so; else config. */
 function shotsFor(frame) {
-  return isDesign(frame) ? (frame.content?.cells || frame.design?.shots || 4) : null;
+  return isDesign(frame) ? Math.min(4, frame.content?.cells || frame.design?.shots || 4) : null;
 }
 
 /** Strips need every shot; cards need the chosen one. */

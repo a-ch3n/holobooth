@@ -18,9 +18,12 @@
 
 import { units, TONES, setMinType } from './kit.mjs';
 
+/** The most photos any strip design takes (and so the most shots a session needs). */
+export const MAX_SHOTS = 4;
+
 export const FORMATS = {
   strip: { id: 'strip', name: 'Classic Strip', widthIn: 2, heightIn: 6, shots: [3, 4] },
-  jumbo: { id: 'jumbo', name: 'Jumbo Strip', widthIn: 4, heightIn: 6, shots: [3, 4, 5] },
+  jumbo: { id: 'jumbo', name: 'Jumbo Strip', widthIn: 4, heightIn: 6, shots: [3, 4] },
 };
 
 /* ----------------------------------------------------------- arrangement */
@@ -149,7 +152,7 @@ export function stripDesign(ctx, o) {
   if (!style) throw new Error(`Unknown strip style: ${d.style}`);
   const format = FORMATS[d.format] ? d.format : 'strip';
   const pal = { ...(style.palettes[d.palette] || Object.values(style.palettes)[0]), ...(d.paletteOverride || {}) };
-  const n = d.shots || style.shots?.[format] || 4;
+  const n = Math.min(MAX_SHOTS, d.shots || style.shots?.[format] || 4);
   const shots = photos.length ? photos : (photo ? [photo] : []);
   const { u, pt, ppi } = units(W, FORMATS[format].widthIn);
   const T = resolveText(meta, style);

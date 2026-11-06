@@ -151,7 +151,9 @@ console.log('\nstrip collection (Signature 2x6 + Jumbo 4x6)');
   ok('every concept is offered as a Signature and a Jumbo strip',
      STYLE_ORDER.every(s => COLLECTION.strip[s.id] && COLLECTION.jumbo[s.id]));
   const jumboShots = new Set(Object.values(COLLECTION.jumbo).map(c => c.shots));
-  ok('Jumbo strips come in 3, 4 and 5 photo layouts', [3, 4, 5].every(n => jumboShots.has(n)), [...jumboShots].join('/'));
+  ok('Jumbo strips come in 3 and 4 photo layouts', [3, 4].every(n => jumboShots.has(n)), [...jumboShots].join('/'));
+  const allShots = [...Object.values(COLLECTION.strip), ...Object.values(COLLECTION.jumbo)].map(c => c.shots);
+  ok('no design takes more than 4 photos', Math.max(...allShots) <= 4, `max ${Math.max(...allShots)}`);
 
   const designs = allFrames().filter(f => f.design);
   ok('every style × colourway × format is a frame', designs.length === STYLE_ORDER.reduce((a, s) => a + Object.keys(s.palettes).length * 2, 0), `${designs.length} frames`);
@@ -206,7 +208,7 @@ console.log('\nstrip collection (Signature 2x6 + Jumbo 4x6)');
     }
   }
   bad.slice(0, 12).forEach(b => console.log(`      ${b}`));
-  ok('every design renders with 3/4/5 photos, blank, named and overlong text', bad.length === 0, `${renders} renders, ${bad.length} problems`);
+  ok('every design renders with 3/4 photos, blank, named and overlong text', bad.length === 0, `${renders} renders, ${bad.length} problems`);
 }
 
 /* --------------------------------------------------- 5. gif encoding */

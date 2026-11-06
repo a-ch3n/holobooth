@@ -2,7 +2,7 @@
  * catalog.mjs — the HoloBooth Strip Collection as kiosk frames.
  *
  *   Signature Strips  12 concepts (A–L) on the classic 2x6 strip
- *   Jumbo Strips      the same 12 concepts on a full 4x6 sheet, 3–5 photos
+ *   Jumbo Strips      the same 12 concepts on a full 4x6 sheet, 3 or 4 photos
  *
  * Every style × palette becomes a frame id (`sd-<style>-<palette>` and
  * `jb-<style>-<palette>`), so every colourway is addressable by the rest of
@@ -24,7 +24,8 @@ registerStyles(Object.fromEntries(STYLE_ORDER.map(s => [s.id, s])));
 /**
  * Shot counts and lead palettes. Standard strips are four frames where four
  * read well at 2x6, three where the concept needs room (instant borders,
- * editorial asymmetry, scrapbook paper). Jumbo mixes 3, 4 and 5.
+ * editorial asymmetry, scrapbook paper). Jumbo mixes 3 and 4. No design
+ * takes more than MAX_SHOTS photos.
  */
 export const COLLECTION = {
   strip: {
@@ -44,14 +45,14 @@ export const COLLECTION = {
   jumbo: {
     luxe: { shots: 3, palette: 'noir' },
     reel: { shots: 3, palette: 'gold' },
-    editorial: { shots: 5, palette: 'mono' },
+    editorial: { shots: 4, palette: 'mono' },
     seoul: { shots: 4, palette: 'milk' },
     instant: { shots: 4, palette: 'linen' },
     y2k: { shots: 4, palette: 'cyber' },
     chrome: { shots: 4, palette: 'holo' },
     scrapbook: { shots: 4, palette: 'gingham' },
     datenight: { shots: 3, palette: 'midnight' },
-    birthday: { shots: 5, palette: 'confetti' },
+    birthday: { shots: 4, palette: 'confetti' },
     keepsake: { shots: 3, palette: 'botanical' },
     street: { shots: 3, palette: 'concrete' },
   },

@@ -6,7 +6,7 @@ Twelve photo-strip designs, each sold in two formats:
 |---|---|---|
 | Size | 2 × 6 in | 4 × 6 in |
 | Master | 600 × 1800 px @ 300 dpi | 1200 × 1800 px @ 300 dpi |
-| Photos | 3 or 4 | 3, 4 or 5 |
+| Photos | 3 or 4 | 3 or 4 (4 is the maximum for every design) |
 | On the DS40 | two-up on 6×4 media, auto-cut (`printing.stripSheet`) | one per 6×4 sheet, turned, no cut (`printing.jumboSheet`) |
 | Picker tab | Signature Strips | Jumbo Strips |
 | Products | the existing strip products | `jumbo_strip`, `two_jumbo_strips` |
@@ -28,12 +28,12 @@ colourway, `--only <style>` to iterate on one design.
 | B | **Reel** | Retro film: sprockets, edge print, glowing date stamp, film-canister label | Gold Stock, Cine Amber, Slide Blue, Pan B&W | 4 | 3 · Gold Stock |
 | C | **Starlight 2K** | Y2K: chrome type, candy gradients, sparkles, sticker slaps | Bubblegum, Ice, Lime Soda, Cyber Night | 4 | 4 · Cyber Night |
 | D | **Seoul Cut** | Korean four-cut booth: clean white, pastel doodles, 오늘의 우리 | Milk, Peach, Sky, Lilac, Matcha | 4 | 4 · Milk |
-| E | **Cover Story** | Editorial magazine: the name is the masthead, cover lines, asymmetry | Mono, Press Red, Ink, Nude | 3 | 5 · Mono |
+| E | **Cover Story** | Editorial magazine: the name is the masthead, cover lines, asymmetry | Mono, Press Red, Ink, Nude | 3 | 4 · Mono |
 | F | **Instant** | Instant-film frames, handwritten captions, tape | Kraft, Linen, Blush, Sage, Night | 3 | 4 · Linen |
 | G | **Chrome Drive** | Futuristic: brushed metal, bevelled chrome, holographic band, HUD brackets | Liquid Silver, Holo Black, Ice, Gold Leaf | 4 | 4 · Holo Black |
 | H | **Scrapbook** | Torn paper, tape, stickers, handwritten notes | Kraft, Gingham, Notebook | 3 | 4 · Gingham |
 | I | **Date Night** | Couples: arched windows, script names, quiet hearts | Rouge, Rosé, Midnight, Blanc | 3 | 3 · Midnight |
-| J | **Party Pop** | Birthday: confetti, candy letters, the age in a balloon | Confetti, Sprinkle, Party Night, Sunshine | 3 | 5 · Confetti |
+| J | **Party Pop** | Birthday: confetti, candy letters, the age in a balloon | Confetti, Sprinkle, Party Night, Sunshine | 3 | 4 · Confetti |
 | K | **Keepsake** | Wedding / event: monogram crest or logo, botanicals, names in script | Botanical, Classic, Blush, Champagne, Navy | 3 | 3 · Botanical |
 | L | **Street Issue** | Streetwear: heavy type, spray mist + drips, name-tag slap | Concrete, Blackout, Hazard, Acid | 4 | 3 · Concrete |
 
@@ -53,8 +53,8 @@ Every design draws the same pieces of text, from the same places:
 | **Name** | what the customer types (Name tab) | Never falls back to the design's own name |
 | **Event title** | operator panel → Event text (`strips.event.title`) | e.g. "Olivia & James" — Keepsake builds its monogram from the two initials |
 | **Date** | `strips.event.date`, else the day it prints | each design formats it its own way (`11.05.2026`, `'26 11 05`, `November 5, 2026`…) |
-| **Message** | `strips.event.message` | shown by Scrapbook and Keepsake, and on the Jumbo Atelier, Cover Story and Date Night |
-| **Logo** | `strips.event.logo` — a PNG under `src/` | shown by Atelier (Jumbo), Cover Story (Jumbo) and Keepsake, where it replaces the crest |
+| **Message** | `strips.event.message` | shown by Scrapbook and Keepsake, and on the Jumbo Atelier and Date Night |
+| **Logo** | `strips.event.logo` — a PNG under `src/` | shown by Atelier (Jumbo) and Keepsake, where it replaces the crest |
 | **Age** | the Age field | Party Pop puts it in the balloon |
 
 The headline is *name → event title → the design's own default* ("Besties",
@@ -76,10 +76,10 @@ tape, a sticker slap on a frame's outer corner. Never across a face.
 |---|---|---|
 | stack | 2×6 strips; Jumbo with 3 photos | 1.2 – 1.75 (2×6), 1.3 – 1.95 (Jumbo) |
 | grid 2×2 | Jumbo with 4 photos | 0.95 – 1.5 (Seoul Cut allows 0.8 for its portrait four-cut look) |
-| hero + 4 | Jumbo with 5 photos | hero ≤ 1.9, small frames 1.0 – 1.7 |
 
-A style can carve its own layout (Cover Story's asymmetric columns, Instant's
-tossed frames) and still has to report every window through `env.track()`,
+No design takes more than 4 photos (`MAX_SHOTS` in `engine.mjs`), so a session
+never needs more than 4 shots. A style can carve its own layout (Cover Story's
+cover photo with three below, Instant's tossed frames) and still has to report every window through `env.track()`,
 which is how stickers and the smoke test know where the photos are.
 
 **Type that survives paper.** Designs are written in inches and points
@@ -132,7 +132,7 @@ and draws with the kit (`kit.mjs`): `text`, `wrap`, `vtext`, `photo`, `paper`,
 **Add a format:** an entry in `FORMATS` (`engine.mjs`), a size in `SIZES`
 (`render.mjs`), a sheet in `printing` and a product with `prints.<format>`.
 
-Then run `npm test`: it renders every concept in both formats with 3/4/5
+Then run `npm test`: it renders every concept in both formats with 3 and 4
 photos and blank, normal and overlong text, and fails on missing, overlapping,
 off-sheet or badly proportioned photo windows.
 
