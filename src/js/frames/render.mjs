@@ -26,8 +26,22 @@ export const STRIP_ASPECT = 2 / 6;
 export const SIZES = {
   card:  { widthIn: 2.5,  heightIn: 3.5,  dpi: 300 },
   strip: { widthIn: 2.0,  heightIn: 6.0,  dpi: 300 },
+  jumbo: { widthIn: 4.0,  heightIn: 6.0,  dpi: 300 },
   board: { widthIn: 24,   heightIn: 33.6, dpi: 150 },
 };
+
+/* The operator's event text + logo for strip designs, set once at boot (and
+   again when the operator edits it). Per-call opts.event still wins. */
+let STRIP_EVENT = { event: null, logo: null };
+export function setStripEvent(event, logo = null) { STRIP_EVENT = { event: event || null, logo: logo || null }; }
+
+/** Which physical product a frame prints as: 'card', 'strip' (2x6) or 'jumbo' (4x6). */
+export function printKindFor(frame) {
+  if (!frame) return 'card';
+  if (frame.jumbo) return 'jumbo';
+  if (frame.strip || frame.template === 'strip' || frame.template === 'stripDesign') return 'strip';
+  return 'card';
+}
 
 export function printSize(kind, dpi) {
   const s = SIZES[kind] || SIZES.card;
@@ -232,6 +246,9 @@ export function renderCard(ctx, opts) {
     seasonId: card?.seasonId || 'S1',
     boothName: card?.boothName || 'HOLOBOOTH',
     personal,
+    // Strip designs: the operator's event title/date/message and logo.
+    event: opts.event !== undefined ? opts.event : STRIP_EVENT.event,
+    eventLogo: opts.eventLogo !== undefined ? opts.eventLogo : STRIP_EVENT.logo,
     approvalMode: !!opts.approvalMode,
     packValues: opts.packValues || null,
   };
@@ -253,7 +270,7 @@ export function renderCard(ctx, opts) {
   // only the frame/background ever carries a rarity effect.
   // Standard cards and strips stay free of foil treatments. They use the
   // energy palette and classic card stock instead of rarity effects.
-  if (foil && card?.rarity && base.packId !== 'basics' && base.packId !== 'strips') {
+  if (foil && card?.rarity && base.packId !== 'basics' && base.packId !== 'strips' && !base.strip) {
     applyFoil(ctx, W, H, card.rarity, card.seed, meta.artWindow);
   }
 

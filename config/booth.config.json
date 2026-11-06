@@ -190,6 +190,27 @@
         "rarityBoost": 1.0
       },
       {
+        "id": "jumbo_strip",
+        "name": "Jumbo Photo Strip",
+        "blurb": "One big 4×6 print with every photo, plus a digital copy",
+        "//amount": "Placeholder price: set your own before the event (cents). Run `npm run stripe:sync` after changing prices.",
+        "amount": 1000,
+        "prints": { "card": 0, "strip": 0, "jumbo": 1 },
+        "digital": true,
+        "gif": false,
+        "rarityBoost": 1.0
+      },
+      {
+        "id": "two_jumbo_strips",
+        "name": "2 Jumbo Photo Strips",
+        "blurb": "Two big 4×6 prints — one to keep, one to give",
+        "amount": 1600,
+        "prints": { "card": 0, "strip": 0, "jumbo": 2 },
+        "digital": true,
+        "gif": false,
+        "rarityBoost": 1.0
+      },
+      {
         "id": "two_cards_two_strips",
         "name": "2 Pokémon Cards + 2 Photo Strips",
         "blurb": "Two printed Pokémon cards and two themed photo strips",
@@ -202,6 +223,10 @@
     ],
     "tipEnabled": false,
     "taxRateBps": 0
+  },
+  "strips": {
+    "//": "Event text printed by the Signature and Jumbo strip designs. Leave blank for none. title: names or event name (\"Olivia & James\"); date: YYYY-MM-DD (blank = the day it prints); message: a short line; logo: a PNG path under src/ (e.g. images/event-logo.png), shown by the designs that have a logo spot. Editable in the operator panel → Event text.",
+    "event": { "title": "", "date": "", "message": "", "logo": "" }
   },
   "ai": {
     "//": "Real AI names for the 'Surprise me' button, via server/index.js (GEMINI_API_KEY — free tier, no credit card, see ai.google.dev/gemini-api/docs/pricing). Set enabled:false to always use the offline generator. If the server has no key configured, or doesn't answer within timeoutMs, the kiosk silently falls back to it anyway.",
@@ -281,6 +306,21 @@
       "lpOptions": ["Cutter=2Inch", "orientation-requested=6"],
       "//windowsPaper": "Windows only: which of the driver's own 6x4 paper sizes to use, as a pattern. This one prefers the DNP's 2-inch-cut version so the two strips come out separated. See the paper list in the operator panel (Printers) to pick the exact name.",
       "windowsPaper": "2\\s*inch|2in|x\\s*2|cut"
+    },
+    "//jumbo": "Jumbo strips are a full 4x6 print. jumboSheet sends it as a portrait 4x6 turned onto the same dnp6x4 media the card and strip sheets use (rotateForCutter turns it, one per sheet, no cut). Not yet confirmed on a real DS40 — run one test print before an event; if it comes out upside down, flip orientation-requested between 6 and 5.",
+    "jumbo": {
+      "widthIn": 4.0,
+      "heightIn": 6.0,
+      "bleedIn": 0.06
+    },
+    "jumboSheet": {
+      "enabled": true,
+      "widthIn": 6.0,
+      "heightIn": 4.0,
+      "cutMarks": false,
+      "pageSize": "dnp6x4",
+      "rotateForCutter": true,
+      "lpOptions": ["orientation-requested=6"]
     },
     "silent": true,
     "//windowsMethod": "Windows only. xps (default): print through Windows' XPS print path, the same as Ctrl+P photo printing, starting from the printer's Printing Preferences (its paper and 2inch cut setting) — DNP's driver discards Chromium's custom-size pages. Test by hand: powershell -STA -ExecutionPolicy Bypass -File .\\electron\\winprint-xps.ps1 -Printer \"DS40 (Copy 1)\". classic: a 6x4 sheet sent landscape through Chromium. driver: draw onto the driver's own paper size via PowerShell. browser: no page size, the printer's default paper. Switchable in the operator panel (Print method).",
@@ -373,9 +413,11 @@
     "defaultScale": 0.26
   },
   "picker": {
-    "//": "Which style groups appear in the picker, and in what order. Remove or reorder freely; anything not listed still exists but is hidden. Group ids: strips, party, cutie, promo, basics, max, fullart, secret, and assetpack:<pack-id>.",
+    "//": "Which style groups appear in the picker, and in what order. Remove or reorder freely; anything not listed still exists but is hidden. Group ids: strips, signature (designer 2x6 strips), jumbo (4x6 strips), party, cutie, promo, basics, max, fullart, secret, and assetpack:<pack-id>.",
     "show": [
       "strips",
+      "signature",
+      "jumbo",
       "promo",
       "basics",
       "max",

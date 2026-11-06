@@ -16,7 +16,7 @@ import { rarityOdds } from './frames/rarity.mjs';
 import { COMPANIONS, companionById, companionCanvas } from './frames/companions.mjs';
 import { loadPack, packFrames } from './frames/assetpack.mjs';
 import { stickerCatalog, stickerCanvas, newPlacement, stickerAt, DECOS } from './frames/stickers.mjs';
-import { renderCard, renderStrip, mintCard, printSize } from './frames/render.mjs';
+import { renderCard, renderStrip, mintCard, printSize, printKindFor, setStripEvent } from './frames/render.mjs';
 import { Camera, StillsCamera, ObsSplitSource, SplitCamera, applyPhotoFilter, cameraLog, clog } from './camera.js';
 import { createPaymentProvider, kioskHeaders } from './payments.js';
 import { encodeGif } from './gif.js';
@@ -284,8 +284,29 @@ async function boot() {
 
   await loadAssetPacks();
   await loadPokemonCharacters();
+  await applyStripEvent();
   buildPicker();
   go('attract');
+}
+
+/**
+ * The operator's event text (title, date, message) and optional logo, printed
+ * by the Signature and Jumbo strip designs. config: strips.event — editable
+ * in the operator panel → Event text. The logo is a file path under src/.
+ */
+async function applyStripEvent() {
+  const ev = S.cfg.strips?.event || {};
+  let logo = null;
+  if (ev.logo) {
+    logo = await new Promise(resolve => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => { clog(`event logo not found: ${ev.logo}`); resolve(null); };
+      img.src = `../${String(ev.logo).replace(/^\/+/, '')}`;
+    });
+  }
+  S.eventLogo = logo;
+  setStripEvent(ev.title || ev.message || ev.date ? { title: ev.title || '', date: ev.date || '', message: ev.message || '' } : null, logo);
 }
 
 async function loadPokemonCharacters() {
@@ -322,7 +343,8 @@ ON_ENTER.attract = async () => {
   S.camera?.stop();
 
   const live = pickerGroups();
-  const count = live.reduce((n, g) => n + g.frames.length, 0);
+  // "Catch all N cards": strip designs are products, not collectible cards
+  const count = live.reduce((n, g) => n + g.frames.filter(f => !f.design).length, 0);
   $('#attract-headline').textContent = S.cfg.attract?.headline || 'PICK YOUR CARD.';
   $('#attract-sub').textContent = (S.cfg.attract?.sub || '').replace('{{count}}', count);
 
@@ -432,14 +454,26 @@ function boxFor(frame, width) {
   return frameBox(frame, width);
 }
 
+/** Classic strips, Signature strips and Jumbo strips all take every shot. */
 function isStrip(frame) {
-  return frame?.template === 'strip';
+  return printKindFor(frame) !== 'card';
+}
+function isJumbo(frame) {
+  return printKindFor(frame) === 'jumbo';
+}
+/** Strip-collection frames (src/js/frames/strips/) rather than classic strips. */
+function isDesign(frame) {
+  return frame?.template === 'stripDesign';
+}
+/** How many shots a frame wants: the collection designs say so; else config. */
+function shotsFor(frame) {
+  return isDesign(frame) ? Math.min(4, frame.content?.cells || frame.design?.shots || 4) : null;
 }
 
 /** Strips need every shot; cards need the chosen one. */
 function photoArgs(frame) {
   return isStrip(frame)
-    ? { photos: S.filteredShots.length ? S.filteredShots : [placeholderPhoto()], photo: null }
+    ? { photos: S.filteredShots.length ? S.filteredShots : [blankPhoto()], photo: null }
     : { photo: S.filteredShots[S.heroIndex] || placeholderPhoto(), photos: [] };
 }
 
@@ -479,7 +513,7 @@ function renderGrid(packId) {
 
   for (const f of group.frames) {
     const tile = document.createElement('div');
-    tile.className = 'frame-tile' + (isStrip(f) ? ' tall' : '');
+    tile.className = 'frame-tile' + (isJumbo(f) ? ' jumbo' : isStrip(f) ? ' tall' : '');
     tile.dataset.frame = f.id;
     const cv = document.createElement('canvas');
     const box = boxFor(f, 360);
@@ -487,11 +521,13 @@ function renderGrid(packId) {
     tile.append(cv);
     const e = energy(f.energyType);
     tile.insertAdjacentHTML('beforeend', `
-      <div class="nm"><i class="type-dot" style="background:${e.base}"></i>${f.name}</div>
+      <div class="nm"><i class="type-dot" style="background:${f.swatch ? f.swatch[2] : e.base}"></i>${f.name}</div>
       <div class="mt">
         <span class="num">${f.collectorNumber}</span>
         ${f.availability?.mintLimit
           ? `<span class="badge-limited">${f.availability.mintLimit} only</span>`
+          : isDesign(f)
+          ? `<span>${f.design.shots} photos · ${paletteCount(f)} colors</span>`
           : `<span>${e.name} · ${f.hp} HP</span>`}
       </div>`);
     grid.append(tile);
@@ -501,14 +537,15 @@ function renderGrid(packId) {
     renderCard(cv.getContext('2d'), {
       frame: f, frameId: f.id, W: box.W, H: box.H,
       photo: placeholderPhoto(),
-      photos: isStrip(f) ? [placeholderPhoto(), placeholderPhoto(), placeholderPhoto(), placeholderPhoto()] : [],
+      photos: isStrip(f) ? [blankPhoto()] : [],
       character: pokemonCharacter(f),
       companion: (f.template === 'party' || f.template === 'kawaii') ? companionThumb(f.energyType) : null,
       card: mintCard({ frame: f, frameId: f.id, seasonId: S.cfg.collection.seasonId, mint: 1, forcedRarity: f.rarityFloor || 'rare' }),
       stock: S.cfg.cards?.stock || null,
       // The picker preview uses the actual Pokémon name; customers can change
       // it later in the decorate screen before printing.
-      personalization: { name: f.name, age: 7 },
+      // Strip designs preview with their own headline (or the event's).
+      personalization: isDesign(f) ? null : { name: f.name, age: 7 },
       foil: true,
     });
 
@@ -517,7 +554,11 @@ function renderGrid(packId) {
       S.frameId = f.id;
       S.stripCustomColor = null;
       if (isStrip(f)) S.stripFrameId = f.id;
-      $('#picked-label').textContent = isStrip(f)
+      $('#picked-label').textContent = isJumbo(f)
+        ? `${f.name} — Jumbo 4×6 strip, ${f.design.shots} photos`
+        : isDesign(f)
+        ? `${f.name} — Signature 2×6 strip, ${f.design.shots} photos`
+        : isStrip(f)
         ? `${f.name} — photo strip`
         : `${f.name} — ${f.collectorNumber} · ${energy(f.energyType).name}`;
       $('#to-product').disabled = false;
@@ -544,7 +585,7 @@ function renderGrid(packId) {
 
     const drawPreview = hex => renderCard(cv.getContext('2d'), {
       frame: stripFrameWithColor(hex, base), frameId: base.id, W: box.W, H: box.H,
-      photo: null, photos: [placeholderPhoto(), placeholderPhoto(), placeholderPhoto(), placeholderPhoto()],
+      photo: null, photos: [blankPhoto()],
       card: mintCard({ frame: base, frameId: base.id, seasonId: S.cfg.collection.seasonId, mint: 1, forcedRarity: base.rarityFloor || 'rare' }),
       stock: S.cfg.cards?.stock || null,
       personalization: { name: base.name, age: 7 },
@@ -580,6 +621,24 @@ function companionThumb(type) {
 function makeCanvasStatic(w, h) {
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
+  return c;
+}
+
+/** Colourways available for a collection design (its lead + variants). */
+function paletteCount(f) {
+  return allFrames().filter(x => x.paletteOf && x.paletteOf === f.paletteOf).length;
+}
+
+/** An empty photo square for strip previews: no people, no silhouette. */
+let _blank = null;
+function blankPhoto() {
+  if (_blank) return _blank;
+  const c = document.createElement('canvas');
+  c.width = 300; c.height = 200;
+  const x = c.getContext('2d');
+  x.fillStyle = '#d3d6dc';
+  x.fillRect(0, 0, 300, 200);
+  _blank = c;
   return c;
 }
 
@@ -741,8 +800,11 @@ async function drawPersonalizePreview() {
 /** What the renderer needs, from what the customer typed. */
 function personalizationPayload() {
   const typedName = S.personal.name.trim();
+  const f = currentFrame();
   return {
-    name: typedName || currentFrame()?.name || '',
+    // A strip design falls back to its own headline / the event title, never
+    // to the design's name ("Atelier" is not something to print on a strip).
+    name: typedName || (isDesign(f) ? '' : f?.name || ''),
     age: S.personal.age === '' ? null : Number(S.personal.age),
     companionId: S.personal.companionId,
   };
@@ -775,7 +837,7 @@ function currentStripFrame() {
  *  consistently. */
 function currentFrame() {
   const f = lookupFrame(S.frameId);
-  return (f && isStrip(f) && S.stripCustomColor) ? stripFrameWithColor(S.stripCustomColor, f) : f;
+  return (f && f.template === 'strip' && S.stripCustomColor) ? stripFrameWithColor(S.stripCustomColor, f) : f;
 }
 
 const DEFAULT_STRIP_CUSTOM_COLOR = '#e889b5';
@@ -829,13 +891,15 @@ function showCardThemePicker() {
 
 ON_ENTER.product = () => {
   const frame = currentFrame();
-  const selectedStrip = isStrip(frame);
+  const kind = printKindFor(frame);
   const visibleProducts = S.cfg.pricing.products.filter(p => {
     const cardCount = p.prints?.card || 0;
     const stripCount = p.prints?.strip || 0;
+    const jumboCount = p.prints?.jumbo || 0;
     // Keep checkout offers focused on the format the customer selected.
-    if (selectedStrip) return stripCount > 0 || p.id === 'digital_strip';
-    return cardCount > 0 || p.id === 'digital_card';
+    if (kind === 'jumbo') return jumboCount > 0 || p.id === 'digital_strip';
+    if (kind === 'strip') return (stripCount > 0 && !jumboCount) || p.id === 'digital_strip';
+    return (cardCount > 0 && !jumboCount) || p.id === 'digital_card';
   });
 
   $('#products').innerHTML = visibleProducts.map(p => {
@@ -1238,7 +1302,8 @@ ON_ENTER.capture = async () => {
 
 async function runShootSequence() {
   const c = S.cfg.capture;
-  const n = c.shotsPerSession;
+  // A strip design takes at least as many shots as it has photo windows.
+  const n = Math.max(c.shotsPerSession, shotsFor(currentFrame()) || 0);
   S.shots = [];
   $('#shot-pips').innerHTML = Array.from({ length: n }, () => '<i></i>').join('');
 
@@ -1468,13 +1533,25 @@ function buildShotGrid() {
 /* ---- frame swatches, plus the mystery pull */
 
 function buildSwatches() {
-  const group = visibleGroups().find(g => g.frames.some(f => f.id === S.frameId));
+  const cur = lookupFrame(S.frameId);
+  // A palette variant isn't listed in its group, so match designs by family.
+  const sameFamily = f => f.id === S.frameId || (cur?.paletteOf && f.paletteOf === cur.paletteOf);
+  const group = visibleGroups().find(g => g.frames.some(sameFamily));
   const frames = group ? group.frames : [];
   const host = $('#frame-swatches');
 
-  host.innerHTML = frames.map(f => {
+  // Colourways of the current strip design, as chips above the styles.
+  const colours = cur?.paletteOf ? allFrames().filter(f => f.paletteOf === cur.paletteOf) : [];
+  const chips = colours.length > 1
+    ? `<div class="palette-chips">${colours.map(f => `
+        <button class="palette-chip ${f.id === S.frameId ? 'on' : ''}" data-palette="${f.id}" type="button" title="${f.paletteName}">
+          <i style="background:${f.swatch[0]}"></i><i style="background:${f.swatch[2]}"></i><span>${f.paletteName}</span>
+        </button>`).join('')}</div>`
+    : '';
+
+  host.innerHTML = chips + frames.map(f => {
     const b = boxFor(f, 120);
-    return `<div class="swatch ${f.id === S.frameId ? 'on' : ''}${isStrip(f) ? ' tall' : ''}" data-swatch="${f.id}"><canvas width="${b.W}" height="${b.H}"></canvas></div>`;
+    return `<div class="swatch ${sameFamily(f) ? 'on' : ''}${isJumbo(f) ? ' jumbo' : isStrip(f) ? ' tall' : ''}" data-swatch="${f.id}"><canvas width="${b.W}" height="${b.H}"></canvas></div>`;
   }).join('') + '<div class="swatch mystery" data-swatch="__mystery">?</div>';
 
   frames.forEach(f => {
@@ -1490,15 +1567,18 @@ function buildSwatches() {
   });
 
   host.onclick = e => {
-    const pick = e.target.closest('.swatch')?.dataset.swatch;
+    const chip = e.target.closest('.palette-chip')?.dataset.palette;
+    const pick = chip || e.target.closest('.swatch')?.dataset.swatch;
     if (!pick) return;
     if (pick === '__mystery') { startFrameReveal(frames); return; }
     S.frameId = pick;
-    $$('#frame-swatches .swatch').forEach(el => el.classList.toggle('on', el.dataset.swatch === pick));
+    if (isStrip(lookupFrame(pick))) S.stripFrameId = pick;
     S.previewCard = mintCard({
       frame: currentFrame(), frameId: S.frameId,
       seasonId: S.cfg.collection.seasonId, mint: 1, product: S.product,
     });
+    // rebuild: the chips follow whichever design is now selected
+    buildSwatches();
     drawDecorate();
   };
 }
@@ -1735,7 +1815,7 @@ async function buildOutputs() {
 
   const dpi = S.cfg.printing.dpi || 300;
   const stripStyle = isStrip(frameDef);
-  const { W, H } = printSize(stripStyle ? 'strip' : 'card', dpi);
+  const { W, H } = printSize(printKindFor(frameDef), dpi);
 
   // Do NOT pre-crop here. Cropping the camera frame to the CARD's portrait
   // aspect and then fitting that into a LANDSCAPE art window crops twice — it
@@ -1847,12 +1927,20 @@ ON_ENTER.reveal = () => {
   const pfr = currentFrame();
   const named = S.personal.name.trim();
   $('#pull-name').textContent = named ? S.personal.name.trim() : pfr.name;
+  // A photo strip has no rarity: say what it is, and skip the odds.
+  const stripPull = isStrip(pfr);
+  if (stripPull) {
+    el.textContent = isJumbo(pfr) ? 'JUMBO STRIP' : 'PHOTO STRIP';
+    el.style.color = '';
+  }
+  $('#odds-recap').hidden = stripPull;
+  $('#odds-recap').previousElementSibling.hidden = stripPull;
   $('#pull-serial').textContent = `${pfr.collectorNumber}  ·  ${S.card.serial}`;
   $('#mint-note').textContent = S.card.mintLimit
     ? `Limited edition — only ${S.card.mintLimit} of these will ever be printed.`
     : '';
   $('#btn-retake').hidden = !(S.cfg.capture.allowRetake && S.retakes < S.cfg.capture.maxRetakes);
-  $('#btn-print').disabled = !(S.product.prints.card || S.product.prints.strip);
+  $('#btn-print').disabled = !(S.product.prints.card || S.product.prints.strip || S.product.prints.jumbo);
   $('#print-status').textContent = '';
   $('#dl-block').hidden = !S.downloadUrl;
 
@@ -1863,7 +1951,7 @@ ON_ENTER.reveal = () => {
     floor: pfr.rarityFloor || null,
     guarantee: S.product.guaranteeAtLeast || null,
   });
-  $('#odds-recap').innerHTML = oddsBreakdownHtml(odds);
+  $('#odds-recap').innerHTML = stripPull ? '' : oddsBreakdownHtml(odds);
 
   $('#reveal-result').hidden = true;
   const cover = $('#pack-cover');
@@ -2017,14 +2105,18 @@ async function doPrint() {
     // Strips" product), renderCard() draws the strip straight into
     // S.cardCanvas and prints.card is 0 — the print count to use is
     // prints.strip instead, since that's what was actually paid for.
-    const cardIsStrip = isStrip(currentFrame());
-    const cardCount = cardIsStrip ? S.product.prints.strip : S.product.prints.card;
+    const kind = printKindFor(currentFrame());
+    const cardIsStrip = kind !== 'card';
+    // A Jumbo is a full 4x6 sheet: printing.jumbo/jumboSheet, counted by prints.jumbo.
+    const cardCount = kind === 'jumbo' ? (S.product.prints.jumbo || 0)
+      : cardIsStrip ? S.product.prints.strip : S.product.prints.card;
     if (cardCount) {
-      st.textContent = `Printing ${cardCount} ${cardIsStrip ? 'strip' : 'card'}${cardCount > 1 ? 's' : ''}…`;
-      const geo = cardIsStrip ? p.strip : p.card;
-      const sheet = cardIsStrip ? p.stripSheet : p.sheet;
+      const noun = kind === 'jumbo' ? 'jumbo strip' : cardIsStrip ? 'strip' : 'card';
+      st.textContent = `Printing ${cardCount} ${noun}${cardCount > 1 ? 's' : ''}…`;
+      const geo = kind === 'jumbo' ? (p.jumbo || { widthIn: 4, heightIn: 6 }) : cardIsStrip ? p.strip : p.card;
+      const sheet = kind === 'jumbo' ? p.jumboSheet : cardIsStrip ? p.stripSheet : p.sheet;
       const printerName = cardIsStrip ? (p.stripPrinterName || p.cardPrinterName) : p.cardPrinterName;
-      await printGanged(S.cardCanvas, cardCount, sheet, geo, printerName, cardIsStrip ? 'Strip' : 'Card');
+      await printGanged(S.cardCanvas, cardCount, sheet, geo, printerName, kind === 'jumbo' ? 'Jumbo' : cardIsStrip ? 'Strip' : 'Card');
     }
 
     if (S.product.prints.strip && S.stripCanvas) {
@@ -2129,6 +2221,19 @@ ON_ENTER.admin = async () => {
       </div>
       ${printers.length && !printers.some(p => p.willUse) && info.platform === 'win32'
         ? '<p style="color:var(--bad);font-size:13px;margin-top:10px">No photo printer installed — install the DNP driver (see README → Printing on Windows).</p>' : ''}
+    </div>
+
+    <div class="card-panel">
+      <h3>Event text</h3>
+      <p style="font-size:12px;color:var(--ink-dim);margin:0 0 8px">Printed on Signature and Jumbo strips. Leave blank for none.</p>
+      <label class="kv"><span>Title / names</span><input id="ev-title" class="admin-input" maxlength="40" placeholder="Olivia &amp; James" value="${escAttr(S.cfg.strips?.event?.title)}"></label>
+      <label class="kv"><span>Date</span><input id="ev-date" class="admin-input" type="date" value="${escAttr(S.cfg.strips?.event?.date)}"></label>
+      <label class="kv"><span>Message</span><input id="ev-message" class="admin-input" maxlength="60" placeholder="Thank you for celebrating with us" value="${escAttr(S.cfg.strips?.event?.message)}"></label>
+      <div class="kv"><span>Logo</span><b>${S.cfg.strips?.event?.logo ? (S.eventLogo ? escAttr(S.cfg.strips.event.logo) : '<span style="color:var(--bad)">not found: ' + escAttr(S.cfg.strips.event.logo) + '</span>') : 'none (set strips.event.logo in the config)'}</b></div>
+      <div style="display:flex;gap:10px;align-items:center;margin-top:10px">
+        <button class="btn btn-ghost" id="ev-save">Save event text</button>
+        <span id="ev-result" style="font-size:12px;color:var(--ink-dim)"></span>
+      </div>
     </div>
 
     <div class="card-panel">
@@ -2260,11 +2365,34 @@ ON_ENTER.admin = async () => {
     if (!r.ok) toast(r.error || 'Could not open the folder', true);
   });
 
+  $('#ev-save')?.addEventListener('click', async () => {
+    const out = $('#ev-result');
+    const event = {
+      ...(S.cfg.strips?.event || {}),
+      title: $('#ev-title').value.trim(),
+      date: $('#ev-date').value,
+      message: $('#ev-message').value.trim(),
+    };
+    const next = { ...S.cfg, strips: { ...(S.cfg.strips || {}), event } };
+    const ok = await window.booth.config.save(next).catch(e => { out.textContent = e.message; return false; });
+    if (!ok) { out.style.color = 'var(--bad)'; out.textContent = out.textContent || 'Could not save'; return; }
+    S.cfg = next;
+    await applyStripEvent();
+    pickerBuilt = false;
+    buildPicker(); // thumbnails pick up the new event text
+    out.style.color = '';
+    out.textContent = 'Saved ✓';
+  });
+
   $('#admin-reload')?.addEventListener('click', () => window.booth.app.reload());
   $('#admin-quit')?.addEventListener('click', () => window.booth.app.quit());
 };
 
 /* --------------------------------------------------------------- utils */
+
+function escAttr(v) {
+  return String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
 
 /**
  * A sheet that can't be mistaken for blank or for the wrong way round:

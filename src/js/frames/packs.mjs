@@ -15,6 +15,7 @@
  * knock-offs is a booth with a shelf life.
  */
 
+import { stripDesignFrames } from './strips/catalog.mjs';
 import { ENERGY, ENERGY_IDS, energy } from './energy.mjs';
 import { shade, alpha } from './draw.mjs';
 
@@ -564,8 +565,12 @@ STRIP_THEMES.forEach((st, i) => {
   });
 });
 
+/* The Signature and Jumbo strip collections (src/js/frames/strips/). */
+stripDesignFrames().forEach(push);
+
 /* Collector numbers, assigned in set order. */
 FRAMES.forEach((f, i) => {
+  if (f.design) return; // strip designs carry their own collection number
   f.setNumber = i + 1;
   f.setSize = SET_SIZE;
   if (f.party) f.collectorNumber = `PARTY ${String(f.partyNumber).padStart(2, '0')}`;
@@ -579,7 +584,9 @@ FRAMES.forEach((f, i) => {
 
 const PACK_META = [
   { id: 'basics', name: 'Pokémon Cards', tagline: 'Standard energy colors and classic yellow card borders', order: 1 },
-  { id: 'strips', name: 'Photo Strips', tagline: 'The classic four-frame photo strip', order: 2 },
+  { id: 'signature', name: 'Signature Strips', tagline: 'Twelve designer 2x6 photo strips', order: 2 },
+  { id: 'jumbo', name: 'Jumbo Strips', tagline: 'Big 4x6 photo strips with room for your event', order: 3 },
+  { id: 'strips', name: 'Photo Strips', tagline: 'The classic four-frame photo strip', order: 4 },
   { id: 'party', name: 'Party Cards', tagline: 'Personalised party cards', order: 10 },
   { id: 'cutie', name: 'Cutie Club', tagline: 'Pastel personalised cards', order: 11 },
   { id: 'promo', name: 'Limited Promos', tagline: 'Limited promotional cards', order: 12, limited: true },
@@ -653,9 +660,10 @@ export function pickerGroups(now = new Date()) {
     .sort((a, b) => a.order - b.order)
     .map(p => ({
       id: p.id, name: p.name, tagline: p.tagline, limited: !!p.limited,
-      frames: live.filter(f => f.packId === p.id),
+      // palette variants are chosen on the Decorate screen, not the picker
+      frames: live.filter(f => f.packId === p.id && !f.paletteVariant),
     }))
-    .filter(g => g.id === 'basics' || g.id === 'strips')
+    .filter(g => ['basics', 'signature', 'jumbo', 'strips'].includes(g.id))
     .filter(g => g.frames.length);
 }
 

@@ -12,7 +12,10 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { drawFakePhoto } from './fixtures.mjs';
 import { setCanvasFactory } from '../src/js/frames/draw.mjs';
-import { mintCard, renderCard, renderStrip, printSize } from '../src/js/frames/render.mjs';
+import { mintCard, renderCard, renderStrip, printSize, printKindFor } from '../src/js/frames/render.mjs';
+import { STYLE_ORDER, COLLECTION, FORMATS } from '../src/js/frames/strips/catalog.mjs';
+import { boothSession } from '../src/js/frames/strips/placeholder.mjs';
+import { readFileSync } from 'node:fs';
 import { rollPack, rollRarity, seededRng } from '../src/js/frames/rarity.mjs';
 import { allFrames, RARITY_ORDER, PACKS, SET, ENERGY_IDS, frameById } from '../src/js/frames/packs.mjs';
 
@@ -75,7 +78,8 @@ console.log('\nrarity distribution (100k rolls, base odds)');
 /* ------------------------------------------------ 3b. set integrity */
 {
   const fs = allFrames();
-  const nums = fs.filter(f => !f.promo).map(f => f.setNumber);
+  // strip-collection designs carry their own numbering (SIG A, JUMBO A…)
+  const nums = fs.filter(f => !f.promo && !f.design).map(f => f.setNumber);
   ok('collector numbers are unique', new Set(nums).size === nums.length);
   const secrets = fs.filter(f => f.secret);
   ok('secret rares are numbered above the set size',
@@ -135,6 +139,76 @@ console.log('\nrarity distribution (100k rolls, base odds)');
   renderStrip(sv.getContext('2d'), { W: s.W, H: s.H, photos: shots, card });
   writeFileSync(join(out, 'strip-print-master.png'), sv.toBuffer('image/png'));
   ok('print masters written', true, `${W}x${H} card, ${s.W}x${s.H} strip`);
+}
+
+
+/* -------------------------------------- 4b. the strip collection */
+console.log('\nstrip collection (Signature 2x6 + Jumbo 4x6)');
+{
+  ok('twelve concepts, A–L', STYLE_ORDER.length === 12 && STYLE_ORDER.map(s => s.letter).join('') === 'ABCDEFGHIJKL');
+  ok('every concept has at least three colourways', STYLE_ORDER.every(s => Object.keys(s.palettes).length >= 3),
+     STYLE_ORDER.map(s => `${s.letter}${Object.keys(s.palettes).length}`).join(' '));
+  ok('every concept is offered as a Signature and a Jumbo strip',
+     STYLE_ORDER.every(s => COLLECTION.strip[s.id] && COLLECTION.jumbo[s.id]));
+  const jumboShots = new Set(Object.values(COLLECTION.jumbo).map(c => c.shots));
+  ok('Jumbo strips come in 3 and 4 photo layouts', [3, 4].every(n => jumboShots.has(n)), [...jumboShots].join('/'));
+  const allShots = [...Object.values(COLLECTION.strip), ...Object.values(COLLECTION.jumbo)].map(c => c.shots);
+  ok('no design takes more than 4 photos', Math.max(...allShots) <= 4, `max ${Math.max(...allShots)}`);
+
+  const designs = allFrames().filter(f => f.design);
+  ok('every style × colourway × format is a frame', designs.length === STYLE_ORDER.reduce((a, s) => a + Object.keys(s.palettes).length * 2, 0), `${designs.length} frames`);
+  ok('Jumbo frames print as a 4x6', designs.filter(f => f.jumbo).every(f => printKindFor(f) === 'jumbo') && printSize('jumbo', 300).W === 1200 && printSize('jumbo', 300).H === 1800);
+  ok('Signature frames print as a 2x6', designs.filter(f => !f.jumbo).every(f => printKindFor(f) === 'strip'));
+
+  const cfg = JSON.parse(readFileSync(join(root, 'config', 'booth.config.json'), 'utf8'));
+  ok('a product sells Jumbo prints', cfg.pricing.products.some(p => p.prints?.jumbo > 0));
+  ok('Jumbo prints have a sheet to go on', cfg.printing.jumboSheet?.widthIn === 6 && cfg.printing.jumboSheet?.heightIn === 4);
+
+  const shots = await Promise.all(boothSession((w, h) => createCanvas(w, h), { seed: 3, count: 5, width: 900, height: 600 })
+    .map(c => loadImage(c.toBuffer('image/png'))));
+  const logo = await (async () => { const c = createCanvas(400, 160); const x = c.getContext('2d'); x.fillStyle = '#123'; x.fillRect(0, 0, 400, 160); return loadImage(c.toBuffer('image/png')); })();
+  const TEXTS = [
+    { label: 'blank', personal: null, event: null, logo: null },
+    { label: 'named', personal: { name: 'Maya', age: 7 }, event: { title: 'Olivia & James', date: '2026-06-20', message: 'Thank you for celebrating with us' }, logo },
+    { label: 'long', personal: { name: 'Bartholomew-Alexandria Q.' }, event: { title: 'The Very Long Annual Winter Charity Gala', message: 'A message that is much too long to fit on one line of any strip at all, really' }, logo },
+  ];
+  let renders = 0, bad = [];
+  for (const style of STYLE_ORDER) {
+    for (const format of ['strip', 'jumbo']) {
+      const palettes = Object.keys(style.palettes);
+      for (const shotsN of FORMATS[format].shots) {
+        for (const [ti, t] of TEXTS.entries()) {
+          const pid = palettes[(shotsN + ti) % palettes.length];
+          const frame = { ...designs.find(f => f.design.style === style.id && f.design.palette === pid && !!f.jumbo === (format === 'jumbo')) };
+          frame.design = { ...frame.design, shots: shotsN };
+          const { W, H } = printSize(format, 150);
+          const cv = createCanvas(W, H);
+          try {
+            const meta = renderCard(cv.getContext('2d'), {
+              frame, frameId: frame.id, W, H, photos: shots, card: mintCard({ frame, frameId: frame.id, mint: 3 }),
+              personalization: t.personal, event: t.event, eventLogo: t.logo,
+            });
+            renders++;
+            const slots = meta.photoSlots || [];
+            const where = `${style.id}/${format}/${shotsN}/${t.label}`;
+            if (slots.length !== shotsN) bad.push(`${where}: ${slots.length} photo slots`);
+            for (const s of slots) {
+              if (s.x < -1 || s.y < -1 || s.x + s.w > W + 1 || s.y + s.h > H + 1) bad.push(`${where}: slot off the sheet`);
+              const a = s.w / s.h;
+              if (a < 0.7 || a > 2.6) bad.push(`${where}: slot aspect ${a.toFixed(2)}`);
+            }
+            for (let i = 0; i < slots.length; i++) for (let j = i + 1; j < slots.length; j++) {
+              const A = slots[i], B = slots[j];
+              const ox = Math.min(A.x + A.w, B.x + B.w) - Math.max(A.x, B.x), oy = Math.min(A.y + A.h, B.y + B.h) - Math.max(A.y, B.y);
+              if (ox > 2 && oy > 2) bad.push(`${where}: photos ${i} and ${j} overlap`);
+            }
+          } catch (e) { bad.push(`${style.id}/${format}/${shotsN}/${t.label}: ${e.message}`); }
+        }
+      }
+    }
+  }
+  bad.slice(0, 12).forEach(b => console.log(`      ${b}`));
+  ok('every design renders with 3/4 photos, blank, named and overlong text', bad.length === 0, `${renders} renders, ${bad.length} problems`);
 }
 
 /* --------------------------------------------------- 5. gif encoding */
