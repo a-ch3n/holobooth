@@ -782,19 +782,6 @@ an old commit, the booth is running old code (see below). The operator
 panel → Printers shows the same commit under **Running code**, with where
 the app runs from.
 
-**Preview mode** (`printer.dryRun`, **on by default**): nothing is sent to
-the printer. Each page is saved as `previews/<timestamp>_<jobtype>.png` and
-`.pdf` under the app's data folder, the PDF opens in the system viewer, and
-the screen shows the page with the 2-inch cut (y = 620) dashed for strips
-and cards. **Looks right — print for real** sends that one page once,
-after a second tap. The PDF is made from the same print page, by the same
-code, that real prints use (`openPrintPage()` in `electron/main.js`,
-`printToPDF`: 6 × 4 in, margins 0, background on, CSS page size); on
-Linux/CUPS it's the exact PDF `lp` would get. Switch preview mode on the
-**Camera diagnostics** screen (operator panel), which saves it to this
-PC's `booth.config.local.json`. **Turn it off before the event**, or
-nothing prints.
-
 **Is the booth running the new code?** `npm start` runs straight from this
 folder's `src/` and `electron/`; there's no build step and no cache, so a
 `git pull` and a restart (close the app, `npm start` again) is enough. An
@@ -846,9 +833,9 @@ of the same shape, at exactly that size, as a **portrait job**:
 | tall (e.g. 4.13 × 6.15 in) | the sheet turned once into that frame, by `printer.windowsTurn` (90 or 270, default 270): `toDriverFrame()` in `src/js/layout.mjs`. The cut line y = 620 lands on x = 620 either way |
 
 The driver is never asked to turn anything. If the paper can't be read, it
-falls back to the tall frame on a 4 × 6 in page and says so. The preview
-shows the page Windows gets next to the sheet and saves it as
-`…-driver.pdf`. If tall-paper prints come out turned half round, flip
+falls back to the tall frame on a 4 × 6 in page and says so. Each print's
+page Windows gets is saved next to its PNG as `…-driver.png`. If
+tall-paper prints come out turned half round, flip
 `windowsTurn`: Camera diagnostics → **Flip**.
 
 1. **4×6 / card queue (no cut).** On the DS40 entry the installer made (e.g.

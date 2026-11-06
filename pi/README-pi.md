@@ -127,9 +127,6 @@ Put anything driver-specific into `printer.lpOptions` in `booth.config.json`,
 e.g. `["StpColorCorrection=Accurate"]`. Paper size, cut, finish
 (`printer.finish`) and no-scaling are picked from `lpoptions` automatically.
 
-Leave `printer.dryRun: true` (the default) to have the service build the PDF, save it to `previews/` and log the exact
-`lp` command without printing. Use it to burn in the flow without burning ribbon.
-
 **Media:** the DS40 loads 6×4. Every job is sent as its native page,
 1844×1240 landscape: cards two upright with cut marks, strips turned and
 stacked above and below the 2-inch cut at y = 620 (see the main README →
@@ -225,4 +222,4 @@ node pi/kiosk-server.mjs
 chromium-browser --kiosk --app=http://127.0.0.1:4180/src/index.html
 ```
 
-`printer.dryRun` is on by default: nothing prints until you switch it off (Camera diagnostics screen, or `"printer": { "dryRun": false }`).
+Use the operator panel's test prints to check the printer.

@@ -143,10 +143,6 @@ Do these in this order:
      **Test print strips** if you sell strips). The black edge line and red
      line 20 px in should show, TOP ↑ should be the right way up, and
      strips should come out as two pieces.
-   - **Preview mode** is on until you turn it off: test prints and sales
-     only show a preview and save a PDF. When the previews look right,
-     operator panel → **Camera diagnostics** → **Turn preview mode OFF**.
-     The operator panel's Printers box says which mode is on.
 6. **Paid events:** one real sale with your own card, then refund it.
 7. During the event, the **Camera log** in the operator screen records
    what went wrong if something does. **Copy camera log** and send it to

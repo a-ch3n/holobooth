@@ -67,7 +67,6 @@ function makeRpcBridge(apiBase) {
     printers: {
       list: () => call('printers.list'),
       print: args => call('printers.print', args),
-      dryRun: on => call('printers.dryRun', on),
     },
     cameras: {
       remember: (role, device) => call('cameras.remember', { role, ...device }),
@@ -121,19 +120,13 @@ function makeMemoryBridge() {
     config: { get: () => cfg, save: async () => true, reload: async () => cfg },
     printers: {
       list: async () => [],
-      // Browser preview: printer.dryRun (default on) shows the preview panel
-      // only; the system print dialog only for "print for real" or dryRun off.
       print: async args => {
         const c = await cfg;
         if (c.printing?.enabled === false) {
           return { ok: false, reason: 'Printing is disabled in booth.config.json' };
         }
-        if (c.printer?.dryRun !== false && !args?.force) {
-          return { ok: true, dryRun: true, jobType: args?.jobType, paper: 'PREVIEW ONLY, nothing sent to the printer (printer.dryRun). Browser preview: no files saved.', notes: [] };
-        }
         return printInBrowser(args);
       },
-      dryRun: async on => { const c = await cfg; c.printer = { ...(c.printer || {}), dryRun: !!on }; return { ok: true, dryRun: !!on, config: c }; },
     },
     cards: {
       nextMint: async ({ frameId }) => mem.cards.filter(c => c.frameId === frameId).length + 1,

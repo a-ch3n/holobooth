@@ -18,7 +18,6 @@ contextBridge.exposeInMainWorld('booth', {
     papers: () => ipcRenderer.invoke('printers:papers'),
     method: m => ipcRenderer.invoke('printers:method', m),
     diagnose: () => ipcRenderer.invoke('printers:diagnose'),
-    dryRun: on => ipcRenderer.invoke('printers:dryRun', on),
     windowsTurn: turn => ipcRenderer.invoke('printers:windowsTurn', turn),
   },
   // Which device is the Brio / the M50: saved on this PC after the first match.
