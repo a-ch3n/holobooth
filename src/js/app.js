@@ -20,7 +20,7 @@ import { renderCard, renderStrip, mintCard, printSize } from './frames/render.mj
 import { Camera, StillsCamera, applyPhotoFilter, cameraLog, clog, cameraRoles, matchRoles, stopActiveCamera } from './camera.js';
 import { loadFonts } from './frames/fonts.mjs';
 import { setStripEvent } from './frames/strips.mjs';
-import { toPrinterNative, printRotations, NATIVE, CALIBRATION_DESIGN, coverCrop, coverPlacement, cardSheetLayout, drawCalibration, buildStampText, drawBuildStamp } from './layout.mjs';
+import { toPrinterNative, printRotations, NATIVE, CALIBRATION_DESIGN, coverCrop, coverPlacement, cardSheetLayout, drawCalibration, buildStampText, drawBuildStamp, toDriverFrame, windowsTurn } from './layout.mjs';
 import { createPaymentProvider, kioskHeaders } from './payments.js';
 import { encodeGif } from './gif.js';
 
@@ -1961,7 +1961,8 @@ async function retake() {
 /**
  * Print jobs. Each one is turned into the DNP DS40's native page, 1844 x 1240
  * landscape with the 2-inch cut at y = 620, by toPrinterNative()
- * (src/js/layout.mjs), the only place in the print path that rotates:
+ * (src/js/layout.mjs), the only layout rotation in the print path (Windows
+ * then gets that page turned once into its driver's frame, toDriverFrame):
  *   cards   two upright 750 x 1050 cards per page, cut by hand → printer.queue4x6 (no cut)
  *   strips  the 620 x 1844 strip turned by rotation.strip, twice → printer.queueStrip (2-inch cut)
  *   jumbo   the 1240 x 1844 page turned by rotation.portrait4x6 → printer.queue4x6
@@ -1995,9 +1996,12 @@ function stripJobs(strip, count) {
 /**
  * THE print function. Every print (customer cards, strips, Jumbos and the
  * operator's test prints) goes through here and nowhere else:
- *   1. toPrinterNative(job): the native 1844 x 1240 page (the only rotation)
+ *   1. toPrinterNative(job): the native 1844 x 1240 page (the sheet)
  *   2. the build stamp, bottom right (printer.buildStamp)
- *   3. window.booth.printers.print: the main process (electron/main.js
+ *   3. Windows only: toDriverFrame(), that page turned once by
+ *      printer.windowsTurn into the driver's portrait 4x6 frame, which is
+ *      what Windows prints, as a portrait job
+ *   4. window.booth.printers.print: the main process (electron/main.js
  *      printImage), the Pi kiosk server or the browser preview, which either
  *      print it or, with printer.dryRun on, save the PNG + PDF preview.
  * With dryRun on, the preview panel shows the page and nothing has printed.
@@ -2008,15 +2012,19 @@ async function sendToPrinter(job, label) {
   rot.problems.forEach(p => clog(`print warn: ${p}`));
   const page = toPrinterNative(job, rot, (w, h) => newCanvas({ W: w, H: h }));
   if (page.width !== NATIVE.W || page.height !== NATIVE.H) throw new Error(`The print page is ${page.width}x${page.height}; it must be ${NATIVE.W}x${NATIVE.H}`);
-  const stamp = buildStampText({ build: await buildInfo(), job, rotation: rot });
+  // Windows: the driver is sent its portrait frame, turned by printer.windowsTurn.
+  const target = (await window.booth.app.info().catch(() => ({})))?.printTarget;
+  const wt = target === 'windows' ? windowsTurn(S.cfg.printer) : null;
+  wt?.problems.forEach(p => clog(`print warn: ${p}`));
+  const stamp = buildStampText({ build: await buildInfo(), job, rotation: rot, driverTurn: wt?.turn });
+  let out = page;
   if (S.cfg.printer?.buildStamp !== false) {
     // On a copy: toPrinterNative may hand back the job's own canvas (4x6 landscape).
-    const out = page === job.canvas ? newCanvas({ W: page.width, H: page.height }) : page;
-    if (out !== page) out.getContext('2d').drawImage(page, 0, 0);
+    if (page === job.canvas) { out = newCanvas({ W: page.width, H: page.height }); out.getContext('2d').drawImage(page, 0, 0); }
     drawBuildStamp(out.getContext('2d'), stamp);
-    return deliver(out, job, label, rot, stamp);
   }
-  return deliver(page, job, label, rot, stamp);
+  const frame = wt ? toDriverFrame(out, wt.turn, (w, h) => newCanvas({ W: w, H: h })) : null;
+  return deliver(out, job, label, rot, stamp, frame && { canvas: frame, turn: wt.turn });
 }
 
 let buildInfoCache = null;
@@ -2025,10 +2033,11 @@ async function buildInfo() {
   return buildInfoCache;
 }
 
-async function deliver(page, job, label, rot, stamp) {
+async function deliver(page, job, label, rot, stamp, frame) {
   const kind = job.type === 'strip' ? 'strip' : '4x6';
   const dataUrl = page.toDataURL('image/png');
-  const send = (extra = {}) => window.booth.printers.print({ dataUrl, kind, copies: job.copies, label, jobType: job.type, ...extra })
+  const frameUrl = frame ? frame.canvas.toDataURL('image/png') : null;
+  const send = (extra = {}) => window.booth.printers.print({ dataUrl, frameUrl, frameTurn: frame?.turn ?? null, kind, copies: job.copies, label, jobType: job.type, ...extra })
     .catch(err => ({ ok: false, reason: err.message }));
   const r = await send();
   const how = job.type === 'strip' ? `strip turned ${rot.strip}°, two copies`
@@ -2038,7 +2047,7 @@ async function deliver(page, job, label, rot, stamp) {
   (r.notes || []).forEach(n => clog(`print warn: ${n}`));
   if (!r.ok) throw new Error(r.reason || `${label} print was rejected`);
   const result = { ...r, how, stamp, notes: [...rot.problems, ...(r.notes || [])] };
-  if (r.dryRun) result.real = await showPrintPreview({ dataUrl, job, label, r, how, stamp, printOnce: () => send({ copies: 1, force: true }) });
+  if (r.dryRun) result.real = await showPrintPreview({ dataUrl, frameUrl, frameTurn: frame?.turn, job, label, r, how, stamp, printOnce: () => send({ copies: 1, force: true }) });
   return result;
 }
 
@@ -2048,7 +2057,7 @@ async function deliver(page, job, label, rot, stamp) {
  * print for real", which sends ONE print of this exact page after a second
  * tap to confirm. Resolves when closed: the real print's result, or null.
  */
-function showPrintPreview({ dataUrl, job, label, r, how, stamp, printOnce }) {
+function showPrintPreview({ dataUrl, frameUrl = null, frameTurn = null, job, label, r, how, stamp, printOnce }) {
   return new Promise(resolve => {
     const cut = job.type === 'strip' || job.type === 'cards';
     const el = document.createElement('div');
@@ -2057,11 +2066,17 @@ function showPrintPreview({ dataUrl, job, label, r, how, stamp, printOnce }) {
     el.innerHTML = `
       <div style="font-size:20px;font-weight:800;color:#ffcc00">PRINT PREVIEW: nothing was sent to the printer</div>
       <div style="color:#ddd">${escapeHtml(label)} · ${escapeHtml(job.type)} · ${escapeHtml(how)} · 1844 × 1240, 6 × 4 in landscape${cut ? ' · <span style="color:#ff5577">dashed line = 2-inch cut (y = 620)</span>' : ''}</div>
-      <div style="position:relative;width:min(94vw,1300px,calc((100vh - 250px) * 1844 / 1240));aspect-ratio:1844/1240;background:#fff;outline:1px solid #777">
-        <img src="${dataUrl}" alt="print preview" style="display:block;width:100%;height:100%">
-        ${cut ? '<svg viewBox="0 0 1844 1240" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none"><line x1="0" y1="620" x2="1844" y2="620" stroke="#ff2d55" stroke-width="4" stroke-dasharray="26 16"/></svg>' : ''}
+      <div style="display:flex;gap:18px;align-items:center;justify-content:center;max-width:96vw">
+        <div style="position:relative;width:min(${frameUrl ? '76vw' : '94vw'},1300px,calc((100vh - 270px) * 1844 / 1240));aspect-ratio:1844/1240;background:#fff;outline:1px solid #777">
+          <img src="${dataUrl}" alt="print preview" style="display:block;width:100%;height:100%">
+          ${cut ? '<svg viewBox="0 0 1844 1240" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none"><line x1="0" y1="620" x2="1844" y2="620" stroke="#ff2d55" stroke-width="4" stroke-dasharray="26 16"/></svg>' : ''}
+        </div>
+        ${frameUrl ? `<div style="width:min(15vw,220px);color:#bbb;font-size:12px">
+          <img src="${frameUrl}" alt="driver frame" style="display:block;width:100%;aspect-ratio:1240/1844;background:#fff;outline:1px solid #777">
+          <div style="margin-top:6px">What Windows is sent: the driver's 4 × 6 portrait frame, the sheet turned ${escapeHtml(frameTurn)}° (printer.windowsTurn). The DS40 prints it as the sheet on the left.</div>
+        </div>` : ''}
       </div>
-      <div style="color:#aaa;font-size:12px;white-space:pre-wrap;max-width:94vw;word-break:break-all">${escapeHtml(`stamp: ${stamp}\n${r.png ? `PNG ${r.png}\n` : ''}${r.pdf ? `PDF ${r.pdf}` : ''}`)}</div>
+      <div style="color:#aaa;font-size:12px;white-space:pre-wrap;max-width:94vw;word-break:break-all">${escapeHtml(`stamp: ${stamp}\n${r.png ? `PNG ${r.png}\n` : ''}${r.pdf ? `PDF ${r.pdf}` : ''}${r.driverPdf ? `\nWindows gets ${r.driverPdf}` : ''}`)}</div>
       <div style="display:flex;gap:12px;flex-wrap:wrap;justify-content:center">
         <button class="btn" data-pp="print">Looks right — print for real</button>
         <button class="btn btn-ghost" data-pp="cancel">Cancel</button>
@@ -2401,9 +2416,19 @@ function renderPreviewToggle() {
     $('#diag-body').before(box);
   }
   const on = S.cfg.printer?.dryRun !== false;
+  const turn = windowsTurn(S.cfg.printer).turn;
   box.innerHTML = `<b>Print preview mode (printer.dryRun):</b>
     <span style="color:${on ? '#ffcc00' : 'var(--ink-dim)'}">${on ? 'ON: nothing is sent to the printer; pages are saved as PNG + PDF and shown on screen' : 'OFF: prints go to the printer'}</span>
-    <button class="btn btn-ghost" id="diag-dryrun" style="padding:6px 14px">${on ? 'Turn preview mode OFF (print for real)' : 'Turn preview mode ON'}</button>`;
+    <button class="btn btn-ghost" id="diag-dryrun" style="padding:6px 14px">${on ? 'Turn preview mode OFF (print for real)' : 'Turn preview mode ON'}</button>
+    ${window.booth.printers.windowsTurn ? `<span style="flex-basis:100%;height:0"></span>
+    <b>Windows print direction (printer.windowsTurn):</b> <span>${turn}°</span>
+    <button class="btn btn-ghost" id="diag-wturn" style="padding:6px 14px">Flip to ${turn === 270 ? 90 : 270}° (if prints come out upside down)</button>` : ''}`;
+  const flip = $('#diag-wturn');
+  if (flip) flip.onclick = async () => {
+    const r = await window.booth.printers.windowsTurn(turn === 270 ? 90 : 270).catch(e => ({ ok: false, error: e.message }));
+    if (r?.config) S.cfg = r.config;
+    renderPreviewToggle();
+  };
   $('#diag-dryrun').onclick = async () => {
     const r = await window.booth.printers.dryRun?.(!on).catch(e => ({ ok: false, error: e.message }));
     if (r?.config) S.cfg = r.config;

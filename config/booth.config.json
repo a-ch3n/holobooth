@@ -357,6 +357,8 @@
       "portrait4x6": 90,
       "strip": 90
     },
+    "//windowsTurn": "Windows only. The DS40 Windows driver prints on its own 4x6 paper, a portrait frame (4 in wide, 6 in long); sent a landscape job it turned the page into the wrong shape (sideways, a black third). So Windows is sent a portrait job: the native 6x4 page turned once into that frame by this many degrees, clockwise. 90 or 270; both keep the cut between the strips and differ only by a half turn of the whole sheet. If prints come out upside down, flip it (Camera diagnostics screen).",
+    "windowsTurn": 270,
     "//lpOptions": "CUPS only: extra -o options added after the detected ones, e.g. [\"StpColorCorrection=Accurate\"]. `lpoptions -p <printer> -l` lists them.",
     "lpOptions": []
   },

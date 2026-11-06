@@ -744,8 +744,10 @@ Printer: **DNP DS40**, 300 dpi, 6×4 media. Settings are under `printer` in
 The DS40 prints on 6-inch-wide media. Its native page is **6×4 LANDSCAPE:
 1844 × 1240 px** at 300 dpi, and its 2-inch cut is a **horizontal line at
 y = 620** (top half / bottom half). Every job becomes exactly that page in
-one function, `toPrinterNative()` in `src/js/layout.mjs`, the only place in
-the print path that rotates anything:
+one function, `toPrinterNative()` in `src/js/layout.mjs`. It and, on
+Windows only, `toDriverFrame()` (one fixed turn into the Windows driver's
+portrait frame, see *What Windows is sent* below) are the only places in
+the print path that rotate anything:
 
 | Job | Designed as | On the native page |
 |---|---|---|
@@ -826,12 +828,24 @@ Bluetooth & devices → Printers & scanners** lists it.
 
 Electron can't set the DS40's cut per job on Windows, so the same printer
 is added **twice**: one queue that never cuts (4×6 and cards), one that
-always cuts (strips). Both get the same orientation and paper, because the
-app always sends the same 6×4 landscape page and never relies on the driver
-to turn anything.
+always cuts (strips). Both get the same orientation and paper.
+
+**What Windows is sent.** The DS40 Windows driver's "(6x4)" paper is, as
+Windows defines paper, 4 in wide and 6 in long: a portrait 1240 × 1844
+frame with the 2-inch cut running down it at x = 620. Sent a landscape job
+(the 6×4 page with "landscape" on), the driver turned it a quarter turn
+into the wrong shape: the picture sideways and a black third. So on
+Windows the app hands the driver its own frame as a **portrait job**: the
+native 6×4 page turned once, by `printer.windowsTurn` (90 or 270, default
+270), with `toDriverFrame()` in `src/js/layout.mjs`. The driver is never
+asked to turn anything. The cut line y = 620 lands on x = 620 either way;
+90 and 270 differ only by a half turn of the whole sheet, so if prints come
+out upside down, flip it: operator panel → **Camera diagnostics** →
+**Flip** (Windows print direction). The preview shows this frame next to
+the sheet, and saves it as `…-driver.pdf`: exactly the page Windows gets.
 
 1. **4×6 / card queue (no cut).** On the DS40 entry the installer made (e.g.
-   "DS40"): **Printing preferences → Orientation: Landscape, Paper Size:
+   "DS40"): **Printing preferences → Orientation: Portrait, Paper Size:
    (6x4), 2inch cut: Disable**. Set Glossy or Matte here too.
 2. **Add the second queue** on the same port. In PowerShell as
    administrator (use your entry's exact name):
@@ -843,8 +857,9 @@ to turn anything.
    want isn't listed" → Add a local printer → *use the DS40's existing USB
    port* → the DNP DS40 driver → name it "DS40 Strips".)
 3. **Strip queue (cut).** On "DS40 Strips": **Printing preferences →
-   Orientation: Landscape, Paper Size: (6x4), 2inch cut: Enable**, and the
-   same finish.
+   Orientation: Portrait, Paper Size: (6x4), 2inch cut: Enable**, and the
+   same finish. (Every job says Portrait itself; this just keeps the queue
+   from disagreeing.)
 4. **Tell HoloBooth.** Operator panel → Printers: tap **4x6** on "DS40"
    and **Strips** on "DS40 Strips". Or put them in the config:
    ```json
@@ -858,27 +873,24 @@ With `queueStrip` unset, strips go to the 4×6 queue and come out uncut;
 the operator panel shows that in red.
 
 **Print method** (operator panel, or `printing.windowsMethod`):
-- `chromium` (default): a hidden print window holding only the page image,
-  printed silently: `@page { size: 6in 4in; margin: 0 }`, the image exactly
-  6 in × 4 in (it already matches the page, so no cropping), and
+- `chromium` (default): a hidden print window holding only the driver
+  frame, printed silently: `@page { size: 4in 6in; margin: 0 }`, the image
+  exactly 4 in × 6 in (it already matches the page, so no cropping), and
   `webContents.print` with `silent`, `printBackground`, the queue as
   `deviceName`, `marginType: 'none'`, `scaleFactor: 100`, the copies,
-  `pageSize` 101600 × 152400 microns (the DS40's 4×6 paper as Windows
-  defines it) and `landscape: true`, which together make a 6 in wide ×
-  4 in tall page, the same as the queue's Landscape + (6x4) setting.
-  Chromium hands Windows the orientation from `landscape` (left out means
-  portrait) and `pageSize` as the paper; a 6×4 custom paper in portrait
-  printed nothing on the DS40. It waits for
-  the image's load event, and a failure's reason is shown on screen.
-  Checked with `printToPDF` on that exact print page: one page, 6 × 4 in
-  landscape (432 × 288 pt), no `/Rotate`, the image upright and filling it
-  edge to edge with no crop. The queue's own paper size still applies,
-  which is why it must be **(6x4)**: a PDF printer with no 6×4 size fitted
-  the page onto its nearest size instead.
+  `pageSize` 101600 × 152400 microns (the 4×6 paper) and
+  `landscape: false`. Chromium hands Windows the orientation from
+  `landscape` and `pageSize` as the paper. What the DS40 driver did with
+  each: 4×6 paper + portrait job → printed as sent; a 6×4 custom paper →
+  printed nothing; 4×6 paper + landscape job → sideways with a black third.
+  It waits for the image's load event, and a failure's reason is shown on
+  screen. The preview's `…-driver.pdf` is `printToPDF` of this exact print
+  page (4 × 6 in portrait).
 - `xps`: Windows' XPS print path (what Ctrl+P photo printing uses),
-  starting from the queue's Printing Preferences. Test by hand:
+  starting from the queue's Printing Preferences, with the orientation set
+  to Portrait on every job. Test by hand:
   `powershell -STA -ExecutionPolicy Bypass -File .\electron\winprint-xps.ps1 -Printer "DS40"`.
-  It prints the native 6×4 landscape page only and never rotates.
+  It prints the same 1240 × 1844 driver frame only and never rotates.
 
 Glossy/matte on Windows is set in each queue's Printing Preferences.
 Chromium can't pass it per job.

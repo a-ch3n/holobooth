@@ -216,8 +216,11 @@ function createWindow() {
 /**
  * DNP DS40, 300 dpi, 6x4 media. Every page arrives as the printer's native
  * page: 1844 x 1240, 6x4 landscape, the 2-inch cut at y = 620. The kiosk
- * builds it with toPrinterNative() (src/js/layout.mjs), the only place that
- * rotates anything. Nothing in this file rotates a page.
+ * builds it with toPrinterNative() (src/js/layout.mjs). On Windows it also
+ * sends the driver's portrait 4x6 frame, the native page turned once by
+ * toDriverFrame() (printer.windowsTurn), and that frame is what is printed,
+ * as a portrait job. Nothing in this file rotates a page, and the driver is
+ * never asked to.
  *
  *   kind "4x6"   → printer.queue4x6   (DS40 set to 4x6, no cut)
  *   kind "strip" → printer.queueStrip (Windows: a second DS40 queue set to
@@ -226,12 +229,13 @@ function createWindow() {
  * Every page is saved as a PNG first (media/<date>/prints/), so the file
  * can be compared with what came out of the printer.
  *
- * Windows: printing.windowsMethod "chromium" (default) prints that PNG from
- * a dedicated window holding only the image; "xps" goes through Windows'
+ * Windows: printing.windowsMethod "chromium" (default) prints the driver
+ * frame from a dedicated window holding only the image; "xps" goes through Windows'
  * XPS path instead (winprint-xps.ps1). Linux / Raspberry Pi / macOS: `lp`,
  * with options read from `lpoptions -p <printer> -l` (pi/print.mjs).
  */
 const NATIVE = { W: 1844, H: 1240 };
+const DRIVER = { W: 1240, H: 1844 };   // the Windows driver's portrait 4x6 frame (src/js/layout.mjs DRIVER_FRAME)
 
 function printerCfg() {
   return { os: 'auto', queue4x6: null, queueStrip: null, finish: 'glossy', copies: 1, lpOptions: [], ...(config.printer || {}) };
@@ -272,7 +276,7 @@ function isDryRun(pc = printerCfg()) {
  *   force: print for real although printer.dryRun is on (the preview
  *   panel's "print for real" button, one copy).
  */
-async function printImage({ dataUrl, kind = '4x6', copies = 1, label = '', jobType = null, force = false } = {}) {
+async function printImage({ dataUrl, frameUrl = null, frameTurn = null, kind = '4x6', copies = 1, label = '', jobType = null, force = false } = {}) {
   const pc = printerCfg();
   kind = kind === 'strip' ? 'strip' : '4x6';
   jobType = ['4x6', 'strip', 'cards'].includes(jobType) ? jobType : kind;
@@ -288,10 +292,22 @@ async function printImage({ dataUrl, kind = '4x6', copies = 1, label = '', jobTy
   const os = printOs(pc);
   const queue = kind === 'strip' ? (pc.queueStrip || pc.queue4x6) : pc.queue4x6;
 
-  if (isDryRun(pc) && !force) return previewPage({ dataUrl, img, kind, jobType, label, width, height, os, queue });
+  // Windows: the driver gets its own portrait 4x6 frame (toDriverFrame in
+  // src/js/layout.mjs), as a portrait job; it is never asked to turn a page.
+  let frame = null;
+  if (os === 'windows') {
+    if (!/^data:image\/png;base64,/.test(String(frameUrl))) return { ok: false, reason: 'print: Windows needs the driver frame (frameUrl) next to the native page' };
+    const fs2 = nativeImage.createFromDataURL(frameUrl).getSize();
+    if (fs2.width !== DRIVER.W || fs2.height !== DRIVER.H) return { ok: false, reason: `The driver frame is ${fs2.width}x${fs2.height} px; it must be ${DRIVER.W}x${DRIVER.H}` };
+    frame = { dataUrl: frameUrl, turn: frameTurn };
+  }
+
+  if (isDryRun(pc) && !force) return previewPage({ dataUrl, frame, img, kind, jobType, label, width, height, os, queue });
 
   // Saved before anything is sent, so a failed print still leaves the file.
   const file = savePrintFile(dataUrl, kind, label);
+  const frameFile = frame ? file.replace(/\.png$/, '-driver.png') : null;
+  if (frame) fs.writeFileSync(frameFile, Buffer.from(frame.dataUrl.split(',')[1], 'base64'));
   const n = force ? 1 : Math.max(1, Math.min(Math.round(copies * (pc.copies || 1)), config.printing?.copiesMax || 10));
   const notes = [];
   if (kind === 'strip' && !pc.queueStrip && os === 'windows') {
@@ -322,28 +338,30 @@ async function printImage({ dataUrl, kind = '4x6', copies = 1, label = '', jobTy
   console.log(`[print] printing to "${choice.name}" (${choice.why})`);
   const wp = require('./winprint');
   const method = config.printing?.windowsMethod === 'xps' ? 'xps' : 'chromium';
+  console.log(`[print] Windows gets the ${DRIVER.W}x${DRIVER.H} portrait driver frame (native page turned ${frame.turn}°) — ${frameFile}`);
   const r = method === 'xps'
-    ? await wp.printXps({ file, widthIn: 6, heightIn: 4, printer: choice.name, copies: n })
-    : await printChromium({ file, width, height, deviceName: choice.name, copies: n });
+    ? await wp.printXps({ file: frameFile, widthIn: 4, heightIn: 6, printer: choice.name, copies: n })
+    : await printChromium({ file: frameFile, width: DRIVER.W, height: DRIVER.H, deviceName: choice.name, copies: n });
   console.log(`[print] ${method} result: ${JSON.stringify(r)}`);
   // What happened to the job after it was handed to Windows.
   await new Promise(res => setTimeout(res, 3000));
   const queueState = wp.summarize(await wp.diagnose(), choice.name);
   console.log(`[print] after print:\n${queueState}`);
-  return { ...r, file, notes, paper: `method=${method} printer="${choice.name}" ${r.paper || ''}\n${queueState}` };
+  return { ...r, file, frameFile, notes, paper: `method=${method} printer="${choice.name}" ${r.paper || ''} (driver frame turned ${frame.turn}°)\n${queueState}` };
 }
 
 /**
- * printer.dryRun: nothing goes to the printer. The exact native PNG is
- * saved to previews/<timestamp>_<jobtype>.png, and the PDF of what the
- * printer would get to previews/<timestamp>_<jobtype>.pdf, which is opened
- * in the system viewer:
- *   Windows: printToPDF of the SAME print page printChromium() prints
- *            (openPrintPage), 6 x 4 in, margins 0, printBackground,
- *            preferCSSPageSize.
- *   CUPS:    the exact PDF that would be handed to lp (pi/print.mjs).
+ * printer.dryRun: nothing goes to the printer. Saved to previews/:
+ *   <timestamp>_<jobtype>.png        the native 1844 x 1240 page (the sheet)
+ *   <timestamp>_<jobtype>.pdf        that page at 6 x 4 in: how the sheet
+ *                                    should come out (opened in the viewer)
+ *   Windows also:
+ *   <timestamp>_<jobtype>-driver.png the 1240 x 1844 frame Windows is sent
+ *   <timestamp>_<jobtype>-driver.pdf printToPDF of the EXACT print page that
+ *                                    printChromium() prints, 4 x 6 in portrait
+ *   CUPS instead: the .pdf is the exact PDF lp would get.
  */
-async function previewPage({ dataUrl, img, kind, jobType, label, width, height, os, queue }) {
+async function previewPage({ dataUrl, frame, img, kind, jobType, label, width, height, os, queue }) {
   const dir = path.join(DATA_DIR, 'previews');
   fs.mkdirSync(dir, { recursive: true });
   const now = new Date();
@@ -353,54 +371,66 @@ async function previewPage({ dataUrl, img, kind, jobType, label, width, height, 
   const png = `${base}.png`, pdf = `${base}.pdf`;
   fs.writeFileSync(png, Buffer.from(String(dataUrl).split(',')[1] || '', 'base64'));
 
-  let how;
-  if (os === 'cups') {
-    const { printImage: printViaCups } = await import('../pi/print.mjs');
-    const pc = printerCfg();
-    const r = await printViaCups({ jpeg: img.toJPEG(100), kind, printerName: queue, copies: 1, finish: pc.finish, lpOptions: pc.lpOptions, dryRun: true });
-    if (!r.ok) return { ok: false, dryRun: true, reason: r.reason, png };
-    fs.copyFileSync(r.file, pdf);
-    how = `the PDF lp would get: ${r.command}`;
-  } else {
-    const page = await openPrintPage({ file: png, width, height });
-    if (!page.ok) return { ok: false, dryRun: true, reason: page.reason, png };
-    try {
-      fs.writeFileSync(pdf, await page.win.webContents.printToPDF(PREVIEW_PDF));
-    } finally {
-      page.close();
+  const toPdf = async (file, w, h, size, out) => {
+    const page = await openPrintPage({ file, width: w, height: h, size });
+    if (!page.ok) throw new Error(page.reason);
+    try { fs.writeFileSync(out, await page.win.webContents.printToPDF(previewPdfOptions(size))); } finally { page.close(); }
+  };
+  let how, driverPng = null, driverPdf = null;
+  try {
+    if (os === 'cups') {
+      const { printImage: printViaCups } = await import('../pi/print.mjs');
+      const pc = printerCfg();
+      const r = await printViaCups({ jpeg: img.toJPEG(100), kind, printerName: queue, copies: 1, finish: pc.finish, lpOptions: pc.lpOptions, dryRun: true });
+      if (!r.ok) return { ok: false, dryRun: true, reason: r.reason, png };
+      fs.copyFileSync(r.file, pdf);
+      how = `the PDF lp would get: ${r.command}`;
+    } else {
+      await toPdf(png, width, height, SHEET, pdf);
+      driverPng = `${base}-driver.png`; driverPdf = `${base}-driver.pdf`;
+      fs.writeFileSync(driverPng, Buffer.from(frame.dataUrl.split(',')[1], 'base64'));
+      await toPdf(driverPng, DRIVER.W, DRIVER.H, FRAME, driverPdf);
+      how = `sheet: printToPDF at 6x4 in; driver: printToPDF of the exact print page Windows is sent (4x6 in portrait, native page turned ${frame.turn}°)`;
     }
-    how = `printToPDF of the print page (${JSON.stringify(PREVIEW_PDF)})`;
+  } catch (e) {
+    return { ok: false, dryRun: true, reason: `Preview PDF failed: ${e.message}`, png };
   }
   const openError = process.env.HOLOBOOTH_NO_OPEN ? 'not opened (HOLOBOOTH_NO_OPEN)' : await shell.openPath(pdf);
-  console.log(`[print] PREVIEW ONLY (printer.dryRun) ${jobType} → ${png} + ${pdf}; ${how}${openError ? ` — ${openError}` : ''}`);
+  console.log(`[print] PREVIEW ONLY (printer.dryRun) ${jobType} → ${png} + ${pdf}${driverPdf ? ` + ${driverPdf}` : ''}; ${how}${openError ? ` — ${openError}` : ''}`);
   return {
-    ok: true, dryRun: true, png, pdf, jobType, kind, queue: queue || '(auto)', os, how,
+    ok: true, dryRun: true, png, pdf, driverPng, driverPdf, frameTurn: frame?.turn ?? null, jobType, kind, queue: queue || '(auto)', os, how,
     file: png,
-    paper: `PREVIEW ONLY, nothing sent to the printer (printer.dryRun)\nPNG ${png}\nPDF ${pdf}`,
+    paper: `PREVIEW ONLY, nothing sent to the printer (printer.dryRun)\nPNG ${png}\nPDF ${pdf}${driverPdf ? `\nWindows gets ${driverPdf}` : ''}`,
     notes: openError && !process.env.HOLOBOOTH_NO_OPEN ? [`couldn't open the PDF: ${openError}`] : [],
   };
 }
 
-/** The preview PDF: the print page at 6 x 4 in, nothing added or scaled. */
-const PREVIEW_PDF = {
-  pageSize: { width: 6, height: 4 },                     // inches
-  margins: { top: 0, bottom: 0, left: 0, right: 0 },
-  printBackground: true,
-  preferCSSPageSize: true,
-};
+/** Page sizes (inches) of the two print pages. */
+const SHEET = { w: 6, h: 4 };     // the native page, as the sheet comes out
+const FRAME = { w: 4, h: 6 };     // the Windows driver's portrait frame
+
+/** The preview PDF: the print page at its size, nothing added or scaled. */
+function previewPdfOptions(size) {
+  return {
+    pageSize: { width: size.w, height: size.h },          // inches
+    margins: { top: 0, bottom: 0, left: 0, right: 0 },
+    printBackground: true,
+    preferCSSPageSize: true,
+  };
+}
 
 /**
- * The print page: a hidden window holding only the image, a 6 in x 4 in
- * page. The image is the printer's native page and fills the page exactly;
- * no cropping, no rotation. Used by printChromium() for real prints and by
- * previewPage() for the preview PDF, so the PDF is what the printer gets.
+ * A print page: a hidden window holding only the image, at `size` inches.
+ * The image fills the page exactly; no cropping, no rotation. Used by
+ * printChromium() for real prints and by previewPage() for the preview
+ * PDFs, so the driver PDF is exactly what the printer gets.
  */
-async function openPrintPage({ file, width, height }) {
+async function openPrintPage({ file, width, height, size = SHEET }) {
   const html = `<!doctype html><html><head><meta charset="utf-8"><style>
-  @page { size: 6in 4in; margin: 0 }
+  @page { size: ${size.w}in ${size.h}in; margin: 0 }
   html, body { margin: 0; padding: 0; background: #fff;
                -webkit-print-color-adjust: exact; print-color-adjust: exact }
-  img { display: block; width: 6in; height: 4in }
+  img { display: block; width: ${size.w}in; height: ${size.h}in }
 </style></head><body><img id="page" src="${pathToFileURL(file).href}"></body></html>`;
   const htmlPath = file.replace(/\.png$/i, '.print.html');
   fs.writeFileSync(htmlPath, html);
@@ -409,13 +439,13 @@ async function openPrintPage({ file, width, height }) {
   try {
     await printWin.loadFile(htmlPath);
     // Wait for the image's load event before printing.
-    const size = await printWin.webContents.executeJavaScript(`new Promise(r => {
+    const got = await printWin.webContents.executeJavaScript(`new Promise(r => {
       const i = document.getElementById('page');
       const done = () => r(i.naturalWidth ? [i.naturalWidth, i.naturalHeight] : null);
       if (i.complete) done(); else { i.onload = done; i.onerror = () => r(null); }
     })`);
-    if (!size) { close(); return { ok: false, reason: `The print page couldn't load ${file}` }; }
-    if (size[0] !== width || size[1] !== height) { close(); return { ok: false, reason: `The print page loaded ${size[0]}x${size[1]}, expected ${width}x${height}` }; }
+    if (!got) { close(); return { ok: false, reason: `The print page couldn't load ${file}` }; }
+    if (got[0] !== width || got[1] !== height) { close(); return { ok: false, reason: `The print page loaded ${got[0]}x${got[1]}, expected ${width}x${height}` }; }
     return { ok: true, win: printWin, close };
   } catch (e) {
     close();
@@ -424,24 +454,22 @@ async function openPrintPage({ file, width, height }) {
 }
 
 /**
- * Prints the print page silently.
+ * Prints the driver frame silently (Windows).
  *
- * On Windows, Chromium writes two things into the driver's DEVMODE
- * (printing/printing_context_win.cc): dmOrientation from `landscape`
- * (left out = PORTRAIT), and pageSize as a custom paper width x length.
- * So the paper is the DS40's own 4 x 6 in paper (4 in wide, 6 in long,
- * the size that is known to print) and `landscape: true` makes it a 6 in
- * wide x 4 in tall page, the same as the queue's Printing Preferences
- * (Landscape, (6x4)). Sending a 6 x 4 in custom paper in portrait instead
- * printed nothing on the DS40.
- *
- * Checked with printToPDF on this exact page: @page { size: 6in 4in } gives
- * a one-page PDF of 432 x 288 pt (6 x 4 in, landscape), no /Rotate, the
- * image upright and filling it edge to edge (1844 px across 6 in), and
- * webContents.print with this paper + landscape lays out the same page.
+ * Chromium writes two things into the driver's DEVMODE
+ * (printing/printing_context_win.cc): dmOrientation from `landscape`, and
+ * pageSize as the paper width x length. What the DS40 driver did with each:
+ *   4x6 paper, PORTRAIT job, a portrait page   → printed the page as sent
+ *   6x4 custom paper (wider than long), portrait → printed nothing
+ *   4x6 paper, LANDSCAPE job, a 6x4 page        → turned it a quarter turn
+ *                                                into the wrong shape: the
+ *                                                picture sideways, a black third
+ * So it is always the first: the 4x6 paper (4 in wide, 6 in long, as Windows
+ * defines it), a portrait job, and the 1240 x 1844 frame filling it. The app
+ * made that frame (toDriverFrame); the driver turns nothing.
  */
 async function printChromium({ file, width, height, deviceName, copies }) {
-  const page = await openPrintPage({ file, width, height });
+  const page = await openPrintPage({ file, width, height, size: FRAME });
   if (!page.ok) return { ok: false, reason: page.reason };
   try {
     const opts = {
@@ -451,14 +479,12 @@ async function printChromium({ file, width, height, deviceName, copies }) {
       margins: { marginType: 'none' },
       scaleFactor: 100,
       copies,
-      // The DS40's 4x6 paper (microns, as Windows defines it: 4 in wide,
-      // 6 in long), turned landscape: a 6 in wide x 4 in tall page.
-      pageSize: { width: 101600, height: 152400 },
-      landscape: true,
+      pageSize: { width: 101600, height: 152400 },   // microns: 4 in wide, 6 in long
+      landscape: false,                               // a portrait job: the driver turns nothing
     };
     console.log('[print] webContents.print', JSON.stringify(opts));
     return await new Promise(resolve => page.win.webContents.print(opts, (success, failureReason) =>
-      resolve({ ok: success, reason: success ? null : (failureReason || 'print failed'), paper: `6x4in copies=${copies}` })));
+      resolve({ ok: success, reason: success ? null : (failureReason || 'print failed'), paper: `4x6in portrait frame copies=${copies}` })));
   } finally {
     page.close();
   }
@@ -541,6 +567,16 @@ ipcMain.handle('printers:method', (_e, method) => {
   writeLocalPatch(LOCAL_CONFIG_PATH, { printing: { windowsMethod: method } });
   config = loadConfig();
   console.log(`[print] operator chose print method "${method}"`);
+  return { ok: true, config };
+});
+
+// Windows print direction (printer.windowsTurn, 90 or 270), on the
+// diagnostics screen: flips the whole sheet half a turn.
+ipcMain.handle('printers:windowsTurn', (_e, turn) => {
+  if (![90, 270].includes(Number(turn))) return { ok: false, error: 'windowsTurn must be 90 or 270' };
+  writeLocalPatch(LOCAL_CONFIG_PATH, { printer: { windowsTurn: Number(turn) } });
+  config = loadConfig();
+  console.log(`[print] Windows print direction (printer.windowsTurn) set to ${turn}`);
   return { ok: true, config };
 });
 
@@ -641,6 +677,7 @@ ipcMain.handle('app:info', () => ({
   dataDir: DATA_DIR,
   dev: DEV,
   build: BUILD,
+  printTarget: printOs(),
 }));
 
 ipcMain.handle('app:quit', () => app.quit());

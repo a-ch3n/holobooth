@@ -109,9 +109,42 @@ export function printRotations(printer = {}) {
   return out;
 }
 
+/* ------------------------------------------------- Windows driver frame */
+
 /**
- * The only rotation in the print path: the canvas turned clockwise by 90 or
- * 270 degrees. Width and height swap; translate, rotate, draw.
+ * The DNP DS40 Windows driver prints on its own "(6x4)" paper, which Windows
+ * defines the usual way, narrow side first: 4 in wide x 6 in long, a
+ * portrait 1240 x 1844 frame, with the 2-inch cut running down it at
+ * x = 620. Sent a landscape job, the driver turned it a quarter turn into a
+ * frame of the wrong shape (a black third, the picture sideways). Sent a
+ * portrait job on that paper, it prints the frame as is. So on Windows the
+ * native page is handed over as a portrait job, turned once into that frame
+ * by toDriverFrame(); the driver itself is never asked to turn anything.
+ */
+export const DRIVER_FRAME = { W: 1240, H: 1844, cutX: 620 };
+
+/** printer.windowsTurn: 90 or 270 (default 270), clockwise, native page → driver frame. */
+export function windowsTurn(printer = {}) {
+  const v = printer?.windowsTurn;
+  if (v == null) return { turn: 270, problems: [] };
+  if (PRINT_ROTATIONS.includes(Number(v))) return { turn: Number(v), problems: [] };
+  return { turn: 270, problems: [`printer.windowsTurn must be 90 or 270 (it is ${JSON.stringify(v)}); using 270`] };
+}
+
+/**
+ * The native 1844 x 1240 page → the Windows driver's 1240 x 1844 portrait
+ * frame, turned clockwise by `turn`. Either way the cut line y = 620 lands
+ * on x = 620; 90 and 270 differ only by a half turn of the whole sheet.
+ */
+export function toDriverFrame(page, turn, makeCanvas) {
+  if (page.width !== NATIVE.W || page.height !== NATIVE.H) throw new Error(`toDriverFrame takes the native ${NATIVE.W}x${NATIVE.H} page, not ${page.width}x${page.height}`);
+  return rotateCanvas(page, Number(turn), makeCanvas);
+}
+
+/**
+ * Canvas rotation, used by toPrinterNative() and toDriverFrame(): the canvas
+ * turned clockwise by 90 or 270 degrees. Width and height swap; translate,
+ * rotate, draw.
  */
 function rotateCanvas(src, deg, makeCanvas) {
   if (!PRINT_ROTATIONS.includes(deg)) throw new Error(`rotation must be 90 or 270, not ${deg}`);
@@ -296,14 +329,14 @@ export const STAMP_PX = Math.round(8 / 72 * 300);
  *           job: { type: string, canvas: { width: number, height: number } },
  *           rotation: { portrait4x6: number, strip: number } }} o
  */
-export function buildStampText({ build = {}, job, rotation }) {
+export function buildStampText({ build = {}, job, rotation, driverTurn = null }) {
   const ver = build.commit ? build.commit.slice(0, 7)
     : build.time ? `built ${String(build.time).slice(0, 16).replace('T', ' ')}` : 'unknown build';
   const rot = job.type === 'strip' ? `rotation.strip ${rotation.strip}`
     : job.type === 'cards' ? 'cards upright (no rotation)'
     : job.canvas.width === NATIVE.W ? '4x6 landscape (no rotation)'
     : `rotation.portrait4x6 ${rotation.portrait4x6}`;
-  return `${ver}${build.packaged ? ' pkg' : ''} · ${job.type} · ${rot}`;
+  return `${ver}${build.packaged ? ' pkg' : ''} · ${job.type} · ${rot}${driverTurn ? ` · windowsTurn ${driverTurn}` : ''}`;
 }
 
 /**

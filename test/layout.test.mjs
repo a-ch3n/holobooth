@@ -8,7 +8,7 @@ import { createCanvas } from '@napi-rs/canvas';
 import {
   SAFE_PX, STRIP_PX, NATIVE, PRINT_ROTATIONS, CALIBRATION_DESIGN, coverCrop, coverPlacement,
   stripNativeLayout, cardSheetLayout, inside, toPrinterNative, printRotations, drawCalibration,
-  buildStampText, drawBuildStamp, STAMP_PX,
+  buildStampText, drawBuildStamp, STAMP_PX, DRIVER_FRAME, toDriverFrame, windowsTurn,
 } from '../src/js/layout.mjs';
 import { renderStrip, printSize, mintCard } from '../src/js/frames/render.mjs';
 import { allFrames } from '../src/js/frames/packs.mjs';
@@ -227,6 +227,30 @@ test('build stamp lands bottom right on the page toPrinterNative returns, for ev
     const box = drawBuildStamp(page.getContext('2d'), 'abc1234 · test');
     assert.ok(greyIn(page, box) > 50, `${job.type} ${job.canvas.width}x${job.canvas.height} @${rot.strip}: stamp drawn at ${JSON.stringify(box)}`);
   }
+});
+
+test('Windows driver frame: native 1844x1240 → portrait 1240x1844, cut y=620 → x=620, the stamp corner where expected', () => {
+  assert.deepEqual(DRIVER_FRAME, { W: 1240, H: 1844, cutX: 620 });
+  assert.deepEqual(windowsTurn({}), { turn: 270, problems: [] });
+  assert.equal(windowsTurn({ windowsTurn: '90' }).turn, 90);
+  assert.match(windowsTurn({ windowsTurn: 180 }).problems[0], /90 or 270/);
+  assert.throws(() => toDriverFrame(createCanvas(1240, 1844), 270, make), /native/);
+  for (const turn of [90, 270]) {
+    const page = createCanvas(1844, 1240);
+    const g = page.getContext('2d');
+    g.fillStyle = '#fff'; g.fillRect(0, 0, 1844, 1240);
+    g.fillStyle = '#f00'; g.fillRect(0, 617, 1844, 6);            // the cut line
+    g.fillStyle = '#00f'; g.fillRect(1834, 1230, 10, 10);         // the stamp corner (bottom right)
+    const f = toDriverFrame(page, turn, make);
+    assert.equal(`${f.width}x${f.height}`, '1240x1844');
+    for (const y of [5, 900, 1838]) assert.deepEqual(px(f, 620, y), RED, `turn ${turn}: the cut runs down x = 620`);
+    assert.deepEqual(px(f, 300, 900), [255, 255, 255]);
+    // 90 cw: (x, y) → (1240 - y, x); 270: (x, y) → (y, 1844 - x)
+    if (turn === 90) assert.deepEqual(px(f, 4, 1838), BLUE, 'turn 90: bottom-right → bottom-left');
+    else assert.deepEqual(px(f, 1235, 4), BLUE, 'turn 270: bottom-right → top-right');
+  }
+  const t = buildStampText({ build: { commit: 'abcdef0123' }, job: { type: 'strip', canvas: { width: 620, height: 1844 } }, rotation: ROT90, driverTurn: 270 });
+  assert.match(t, /windowsTurn 270$/);
 });
 
 /* ------------------------------------------------------------ calibration */

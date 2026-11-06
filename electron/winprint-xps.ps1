@@ -3,20 +3,21 @@
   print path: the same one Windows' own Ctrl+P photo printing uses. It
   starts from the printer's Printing Preferences (so a DNP entry's paper
   size and 2inch cut setting apply), picks the matching paper if needed,
-  and prints the image edge to edge on a 6x4 page.
+  and prints the image edge to edge on the 4x6 paper, as a portrait job.
 
   HoloBooth calls it with -Image. Run it by hand to test a printer:
     powershell -STA -ExecutionPolicy Bypass -File .\electron\winprint-xps.ps1 -Printer "DS40 (Copy 1)"
   With no -Image it prints a colour test sheet with TOP on it.
-  The image must already be the printer-native 6x4 landscape page
-  (HoloBooth's toPrinterNative). This script never rotates anything; the
-  orientation comes from the queue's Printing Preferences (Landscape).
+  The image must already be the DS40 driver's portrait 4x6 frame, 1240 x
+  1844 (HoloBooth's toDriverFrame: the native 6x4 page turned once). The
+  job is always Portrait, whatever the queue says: the DS40 driver turned
+  landscape jobs into the wrong shape. This script never rotates anything.
 #>
 param(
   [Parameter(Mandatory = $true)][string]$Printer,
   [string]$Image = '',
-  [double]$W = 6,
-  [double]$H = 4,
+  [double]$W = 4,
+  [double]$H = 6,
   [int]$Copies = 1
 )
 $ErrorActionPreference = 'Stop'
@@ -45,11 +46,11 @@ try {
     $bmp.Dispose()
   }
 
-  # The native 6x4 landscape page only: anything else is refused, never turned.
+  # The driver's portrait 4x6 frame only: anything else is refused, never turned.
   $probe = [System.Drawing.Image]::FromFile($Image)
-  $isNative = $probe.Width -gt $probe.Height
+  $isFrame = $probe.Height -gt $probe.Width
   $probe.Dispose()
-  if (-not $isNative -or $W -le $H) { Write-Output 'ERR Only the printer-native 6x4 landscape page is printed (toPrinterNative)'; exit 4 }
+  if (-not $isFrame -or $W -ge $H) { Write-Output 'ERR Only the driver frame (portrait 4x6, toDriverFrame) is printed'; exit 4 }
 
   $server = New-Object System.Printing.LocalPrintServer
   $queue = $server.GetPrintQueue($Printer)
@@ -77,10 +78,12 @@ try {
   if ($caps.PageBorderlessCapability -contains [System.Printing.PageBorderless]::Borderless) {
     $ticket.PageBorderless = [System.Printing.PageBorderless]::Borderless
   }
+  # A portrait job on the portrait paper: the driver turns nothing.
+  $ticket.PageOrientation = [System.Printing.PageOrientation]::Portrait
   $ticket.CopyCount = [math]::Max(1, $Copies)
   $ticket = $queue.MergeAndValidatePrintTicket($base, $ticket).ValidatedPrintTicket
 
-  # One fixed page the size of the sheet (wide for a 6x4 sheet), image filling it.
+  # One fixed page the size of the frame (4 wide x 6 tall), image filling it.
   $size = New-Object System.Windows.Size($ww, $hh)
   $src = New-Object System.Windows.Media.Imaging.BitmapImage
   $src.BeginInit()
@@ -108,7 +111,7 @@ try {
 
   $m = $ticket.PageMediaSize
   $paper = if ($m -and $m.Width) { '{0}x{1}in' -f [math]::Round($m.Width / 96, 2), [math]::Round($m.Height / 96, 2) } else { "from Printing Preferences ($($m.PageMediaSizeName))" }
-  Write-Output ('OK xps printer="{0}" paper={1} borderless={2}' -f $Printer, $paper, $ticket.PageBorderless)
+  Write-Output ('OK xps printer="{0}" paper={1} orientation={2} borderless={3}' -f $Printer, $paper, $ticket.PageOrientation, $ticket.PageBorderless)
 } catch {
   Write-Output "ERR $($_.Exception.Message)"
   exit 1
