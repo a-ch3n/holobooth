@@ -830,19 +830,26 @@ Electron can't set the DS40's cut per job on Windows, so the same printer
 is added **twice**: one queue that never cuts (4×6 and cards), one that
 always cuts (strips). Both get the same orientation and paper.
 
-**What Windows is sent.** The DS40 Windows driver's "(6x4)" paper is, as
-Windows defines paper, 4 in wide and 6 in long: a portrait 1240 × 1844
-frame with the 2-inch cut running down it at x = 620. Sent a landscape job
-(the 6×4 page with "landscape" on), the driver turned it a quarter turn
-into the wrong shape: the picture sideways and a black third. So on
-Windows the app hands the driver its own frame as a **portrait job**: the
-native 6×4 page turned once, by `printer.windowsTurn` (90 or 270, default
-270), with `toDriverFrame()` in `src/js/layout.mjs`. The driver is never
-asked to turn anything. The cut line y = 620 lands on x = 620 either way;
-90 and 270 differ only by a half turn of the whole sheet, so if prints come
-out upside down, flip it: operator panel → **Camera diagnostics** →
-**Flip** (Windows print direction). The preview shows this frame next to
-the sheet, and saves it as `…-driver.pdf`: exactly the page Windows gets.
+**What Windows is sent.** Two things went wrong on Windows before: asked
+for a landscape job, the DS40 driver turned the page itself into the wrong
+shape (sideways, a black third); and Electron's `webContents.print` always
+names a paper size (with none given it sends A4), so the driver was always
+handed a custom 4×6 or 6×4 in size instead of its own "(6x4)" paper. Now,
+before printing, the app reads the paper chosen in the queue's **Printing
+Preferences** (its name, exact size and which way the driver defines it;
+operator panel → Camera diagnostics shows it) and hands that paper the page
+of the same shape, at exactly that size, as a **portrait job**:
+
+| The queue's paper is defined | The app sends |
+|---|---|
+| wide (e.g. 6.15 × 4.13 in) | the 6×4 sheet as is |
+| tall (e.g. 4.13 × 6.15 in) | the sheet turned once into that frame, by `printer.windowsTurn` (90 or 270, default 270): `toDriverFrame()` in `src/js/layout.mjs`. The cut line y = 620 lands on x = 620 either way |
+
+The driver is never asked to turn anything. If the paper can't be read, it
+falls back to the tall frame on a 4 × 6 in page and says so. The preview
+shows the page Windows gets next to the sheet and saves it as
+`…-driver.pdf`. If tall-paper prints come out turned half round, flip
+`windowsTurn`: Camera diagnostics → **Flip**.
 
 1. **4×6 / card queue (no cut).** On the DS40 entry the installer made (e.g.
    "DS40"): **Printing preferences → Orientation: Portrait, Paper Size:
@@ -873,13 +880,12 @@ With `queueStrip` unset, strips go to the 4×6 queue and come out uncut;
 the operator panel shows that in red.
 
 **Print method** (operator panel, or `printing.windowsMethod`):
-- `chromium` (default): a hidden print window holding only the driver
-  frame, printed silently: `@page { size: 4in 6in; margin: 0 }`, the image
-  exactly 4 in × 6 in (it already matches the page, so no cropping), and
+- `chromium` (default): a hidden print window holding only the page
+  Windows gets (above), printed silently: `@page` at the queue paper's exact
+  size, margin 0, the image exactly filling it (no cropping), and
   `webContents.print` with `silent`, `printBackground`, the queue as
   `deviceName`, `marginType: 'none'`, `scaleFactor: 100`, the copies,
-  `pageSize` 101600 × 152400 microns (the 4×6 paper) and
-  `landscape: false`. Chromium hands Windows the orientation from
+  `pageSize` = the queue's paper in microns and `landscape: false`. Chromium hands Windows the orientation from
   `landscape` and `pageSize` as the paper. What the DS40 driver did with
   each: 4×6 paper + portrait job → printed as sent; a 6×4 custom paper →
   printed nothing; 4×6 paper + landscape job → sideways with a black third.
@@ -890,7 +896,8 @@ the operator panel shows that in red.
   starting from the queue's Printing Preferences, with the orientation set
   to Portrait on every job. Test by hand:
   `powershell -STA -ExecutionPolicy Bypass -File .\electron\winprint-xps.ps1 -Printer "DS40"`.
-  It prints the same 1240 × 1844 driver frame only and never rotates.
+  It prints the same page as the Chromium method, on the queue's own paper,
+  and never rotates.
 
 Glossy/matte on Windows is set in each queue's Printing Preferences.
 Chromium can't pass it per job.
