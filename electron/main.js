@@ -289,13 +289,19 @@ async function printImage({ dataUrl, kind = '4x6', copies = 1, label = '' } = {}
  * printed silently once the image has loaded. The image is the printer's
  * native page and fills the page exactly; no cropping, no rotation.
  *
+ * On Windows, Chromium writes two things into the driver's DEVMODE
+ * (printing/printing_context_win.cc): dmOrientation from `landscape`
+ * (left out = PORTRAIT), and pageSize as a custom paper width x length.
+ * So the paper is the DS40's own 4 x 6 in paper (4 in wide, 6 in long,
+ * the size that is known to print) and `landscape: true` makes it a 6 in
+ * wide x 4 in tall page, the same as the queue's Printing Preferences
+ * (Landscape, (6x4)). Sending a 6 x 4 in custom paper in portrait instead
+ * printed nothing on the DS40.
+ *
  * Checked with printToPDF on this exact page: @page { size: 6in 4in } gives
  * a one-page PDF of 432 x 288 pt (6 x 4 in, landscape), no /Rotate, the
- * image upright and filling it edge to edge (1844 px across 6 in). Without
- * pageSize webContents.print fell back to A4, so it's always set; the
- * landscape flag made no difference, so it isn't. A printer's own paper
- * list still applies: CUPS-PDF, which has no 6x4 size, fitted it to its
- * nearest one.
+ * image upright and filling it edge to edge (1844 px across 6 in), and
+ * webContents.print with this paper + landscape lays out the same page.
  */
 async function printChromium({ file, width, height, deviceName, copies }) {
   const html = `<!doctype html><html><head><meta charset="utf-8"><style>
@@ -324,8 +330,10 @@ async function printChromium({ file, width, height, deviceName, copies }) {
       margins: { marginType: 'none' },
       scaleFactor: 100,
       copies,
-      // Electron wants microns: 6 in wide x 4 in tall.
-      pageSize: { width: 152400, height: 101600 },
+      // The DS40's 4x6 paper (microns, as Windows defines it: 4 in wide,
+      // 6 in long), turned landscape: a 6 in wide x 4 in tall page.
+      pageSize: { width: 101600, height: 152400 },
+      landscape: true,
     };
     console.log('[print] webContents.print', JSON.stringify(opts));
     return await new Promise(resolve => printWin.webContents.print(opts, (success, failureReason) =>

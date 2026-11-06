@@ -825,15 +825,19 @@ the operator panel shows that in red.
   printed silently: `@page { size: 6in 4in; margin: 0 }`, the image exactly
   6 in × 4 in (it already matches the page, so no cropping), and
   `webContents.print` with `silent`, `printBackground`, the queue as
-  `deviceName`, `marginType: 'none'`, `scaleFactor: 100`, the copies, and
-  `pageSize` 152400 × 101600 microns (6 in wide × 4 in tall). It waits for
+  `deviceName`, `marginType: 'none'`, `scaleFactor: 100`, the copies,
+  `pageSize` 101600 × 152400 microns (the DS40's 4×6 paper as Windows
+  defines it) and `landscape: true`, which together make a 6 in wide ×
+  4 in tall page, the same as the queue's Landscape + (6x4) setting.
+  Chromium hands Windows the orientation from `landscape` (left out means
+  portrait) and `pageSize` as the paper; a 6×4 custom paper in portrait
+  printed nothing on the DS40. It waits for
   the image's load event, and a failure's reason is shown on screen.
   Checked with `printToPDF` on that exact print page: one page, 6 × 4 in
   landscape (432 × 288 pt), no `/Rotate`, the image upright and filling it
-  edge to edge with no crop. The CSS `@page` size decides the orientation;
-  the `landscape` flag made no difference, so it isn't set. The queue's own
-  paper size still applies, which is why it must be **(6x4)**: a PDF
-  printer with no 6×4 size fitted the page onto its nearest size instead.
+  edge to edge with no crop. The queue's own paper size still applies,
+  which is why it must be **(6x4)**: a PDF printer with no 6×4 size fitted
+  the page onto its nearest size instead.
 - `xps`: Windows' XPS print path (what Ctrl+P photo printing uses),
   starting from the queue's Printing Preferences. Test by hand:
   `powershell -STA -ExecutionPolicy Bypass -File .\electron\winprint-xps.ps1 -Printer "DS40"`.
