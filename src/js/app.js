@@ -17,7 +17,8 @@ import { COMPANIONS, companionById, companionCanvas } from './frames/companions.
 import { loadPack, packFrames } from './frames/assetpack.mjs';
 import { stickerCatalog, stickerCanvas, newPlacement, stickerAt, DECOS } from './frames/stickers.mjs';
 import { renderCard, renderStrip, mintCard, printSize } from './frames/render.mjs';
-import { Camera, StillsCamera, ObsSplitSource, SplitCamera, applyPhotoFilter, cameraLog, clog } from './camera.js';
+import { Camera, StillsCamera, applyPhotoFilter, cameraLog, clog, cameraRoles, matchRoles, stopActiveCamera } from './camera.js';
+import { coverCrop, coverPlacement, stripPageLayout, composeStripPage, composeCardSheet, cardSheetLayout, drawCalibration, pageSize } from './layout.mjs';
 import { createPaymentProvider, kioskHeaders } from './payments.js';
 import { encodeGif } from './gif.js';
 
@@ -44,7 +45,6 @@ const S = {
   retakes: 0,
   camera: null,
   cameraAngle: null,
-  angleCameras: [],
   filterId: null,
   pay: null,
   idleTimer: null,
@@ -207,8 +207,7 @@ function resetIdle() {
 
 function abandon() {
   S.camera?.stop();
-  S.angleCameras.forEach(({ camera }) => camera.stop());
-  S.angleCameras = [];
+  stopActiveCamera();
   S.pay?.cancel();
   go('attract');
 }
@@ -237,7 +236,7 @@ async function boot() {
   }
   clog(`boot: ${navigator.userAgent.match(/(Chrome|Electron)\/[\d.]+/g)?.join(' ') || navigator.userAgent}, ` +
     `windowsCaptureApi=${S.cfg.camera?.windowsCaptureApi || 'mediafoundation'}, hwMjpeg=${!!S.cfg.camera?.windowsHardwareMjpeg}, ` +
-    `constraints=${JSON.stringify(S.cfg.camera?.constraints)}`);
+    `cameras=${cameraRoles(S.cfg).map(r => `${r.id}${r.mode ? `/${r.mode}` : ''}:${JSON.stringify(r.match)}${r.deviceLabel ? ` saved "${r.deviceLabel}"` : ''}`).join(' ')}`);
 
   // Physical buttons (Pi only): an arcade shutter button drives the same flow
   // as a screen tap, so the booth works with the lid closed.
@@ -279,6 +278,7 @@ async function boot() {
       S.pay?.simulateTap?.(e.key === 'd').catch(err => toast(`Simulated tap failed: ${err.message}`, true));
     }
     if (e.key === 'Escape') abandon();
+    if (e.ctrlKey && e.shiftKey && (e.key === 'D' || e.key === 'd')) go('diagnostics');
     if (e.key === '`') document.body.classList.toggle('debug');
   });
 
@@ -317,7 +317,6 @@ ON_ENTER.attract = async () => {
   S.stripFrameId = null;
   S.stripCustomColor = null;
   S.cameraAngle = null;
-  S.angleCameras = [];
   S.filterId = S.cfg.filters?.default || null;
   S.camera?.stop();
 
@@ -939,9 +938,9 @@ ON_ENTER.pay = async () => {
   go(cameraAngles().length >= 2 ? 'angle' : 'capture');
 };
 
-/** Configured camera angles, or [] if only the single default camera is set up. */
+/** The cameras turned on in config.cameras (standard = Brio, wide = Canon M50). 2 = the angle picker is shown. */
 function cameraAngles() {
-  return S.cfg.camera?.angles?.list || [];
+  return cameraRoles(S.cfg);
 }
 
 /**
@@ -956,28 +955,14 @@ function usesStills(angleId) {
   if (angles.length < 2) return true;
   return (angleId || angles[0].id) === (st.angle || angles[0].id);
 }
-/**
- * camera.obsSplit: every angle is a region of the one OBS Virtual Camera
- * picture (angle.obsRegion, else its position in the list: 0 = left).
- */
-const obsSplitOn = () => !!S.cfg.camera?.obsSplit?.enabled;
-function obsRegionFor(angleId) {
-  const angles = cameraAngles();
-  const a = angles.find(x => x.id === angleId);
-  return a?.obsRegion ?? Math.max(0, angles.indexOf(a));
-}
-function obsSource() {
-  return (S.obsSource ||= new ObsSplitSource(S.cfg.camera));
-}
-const makeCamera = angleId => (usesStills(angleId) ? new StillsCamera(S.cfg.camera)
-  : obsSplitOn() ? new SplitCamera(obsSource(), obsRegionFor(angleId), S.cfg.camera)
-  : new Camera(S.cfg.camera));
+const defaultRole = () => cameraAngles()[0]?.id || 'standard';
+const makeCamera = role => (usesStills(role) ? new StillsCamera(S.cfg, role) : new Camera(S.cfg, role));
 
 /** A tethered camera that won't start shouldn't cost a paid customer their shoot: fall back to video. */
 function stillsFallback(error) {
   console.error(`[stills] ${error.message} — falling back to the video feed. Check that digiCamControl ` +
     '(Windows) is running with its web server on, or that gphoto2 sees the camera (Mac/Pi), and that ' +
-    'nothing else (Lumabooth, EOS Webcam Utility, OBS) has the camera.');
+    'nothing else (Lumabooth, EOS Webcam Utility, Canon EOS Utility) has the camera.');
   toast(`Photo camera unavailable (${error.message}) — using the video feed`, true);
 }
 
@@ -1005,106 +990,44 @@ function finalizeFilterSelection() {
 
 /* --------------------------------------------------------- camera angle */
 
-ON_ENTER.angle = () => {
+ON_ENTER.angle = async () => {
   const host = $('#angle-options');
-  // Off by default: live previews mean every angle's camera streaming at once,
-  // and on some Windows PCs opening a second camera kills the first (seen:
-  // opening "GoPro Webcam" ended the main camera's stream, and it couldn't
-  // reopen while the GoPro one was held). Without previews, the tiles only
-  // check each camera is present; the shoot opens just the one picked.
-  // OBS split: every tile is a region of one stream, so live previews are safe.
-  const livePreviews = obsSplitOn() || S.cfg.camera?.angles?.livePreviews === true;
-  host.innerHTML = cameraAngles().map(a => `
+  // One camera stream at a time (camera.js), so the tiles don't stream: each
+  // only checks that its camera is plugged in, by label. The shoot opens just
+  // the one picked.
+  S.camera?.stop();
+  stopActiveCamera();
+  const roles = cameraAngles();
+  host.innerHTML = roles.map(a => `
     <div class="angle-option${a.id === S.cameraAngle ? ' on' : ''}" data-angle="${a.id}">
-      ${livePreviews ? `<video class="angle-preview" data-angle-video="${a.id}" autoplay muted playsinline></video>` : ''}
       <div class="ic">${a.icon || '📷'}</div>
-      <div class="lbl">${a.label}</div>
-      ${a.sub ? `<div class="sub">${a.sub}</div>` : ''}
-      <div class="angle-status" data-angle-status="${a.id}">${livePreviews ? 'Connecting preview…' : 'Checking…'}</div>
+      <div class="lbl">${escapeHtml(a.label)}</div>
+      ${a.sub ? `<div class="sub">${escapeHtml(a.sub)}</div>` : ''}
+      <div class="angle-status" data-angle-status="${a.id}">Checking…</div>
     </div>`).join('');
-  const entries = S.angleCameras = cameraAngles().map(a => ({ id: a.id, camera: makeCamera(a.id), ready: null, missing: false }));
-  const setStatus = (id, text) => { const el = host.querySelector(`[data-angle-status="${id}"]`); if (el) el.textContent = text; };
-  // One at a time, and each physical camera for one angle only. Opening the
-  // same camera twice — e.g. the GoPro angle falling back to the main camera
-  // when the GoPro isn't plugged in — is what Windows reports as "Hardware
-  // MFT failed to start streaming due to lack of hardware resources".
-  const taken = new Set();
-  const videoFor = id => host.querySelector(`[data-angle-video="${id}"]`);
-  async function startVideoAngle(entry) {
-    const { id, camera } = entry;
-    const angle = cameraAngles().find(a => a.id === id);
-    camera.cfg.preferredLabels = angle?.preferredLabels || S.cfg.camera.preferredLabels;
-    camera.cfg.excludeLabels = angle?.excludeLabels || S.cfg.camera.excludeLabels;
-    camera.cfg.constraints = angle?.constraints || S.cfg.camera.constraints;
-    camera.onStatus = status => setStatus(id, status.message || '');
-    const deviceId = await camera.pickDevice(null, { strict: true });
-    if (!deviceId || taken.has(deviceId)) {
-      entry.missing = true;
-      host.querySelector(`[data-angle="${id}"]`)?.classList.add('missing');
-      setStatus(id, 'Camera not connected');
-      return;
+  const token = S.angleToken = {};
+  let matches = {};
+  try { ({ matches } = await matchRoles(S.cfg)); } catch (e) { clog(`angle picker: ${e.message}`); }
+  if (S.angleToken !== token || S.screen !== 'angle') return;
+  for (const a of roles) {
+    const m = matches[a.id];
+    host.querySelector(`[data-angle="${a.id}"]`)?.classList.toggle('missing', !m);
+    const el = host.querySelector(`[data-angle-status="${a.id}"]`);
+    if (el) {
+      el.textContent = m ? 'Ready' : `${a.name} not found`;
+      el.classList.toggle('bad', !m);
     }
-    taken.add(deviceId);
-    if (!livePreviews) { setStatus(id, 'Ready'); return; }
-    await camera.start(videoFor(id), deviceId);
   }
-  const opening = (async () => {
-    for (const entry of S.angleCameras) {
-      entry.ready = (async () => {
-        if (entry.camera.split) {
-          entry.camera.onStatus = status => setStatus(entry.id, status.message || '');
-          const stillHere = () => S.screen === 'angle' && S.angleCameras === entries;
-          for (;;) {
-            try {
-              return await entry.camera.start(videoFor(entry.id));
-            } catch (error) {
-              // OBS not ready yet: keep retrying while this screen is up, so
-              // clicking Start Virtual Camera now fixes it without going back.
-              if (/OBS Virtual Camera/.test(error.message) && stillHere()) {
-                setStatus(entry.id, `${error.message} — retrying…`);
-                await sleep(2500);
-                if (stillHere()) continue;
-              }
-              // e.g. OBS is only sending one camera: this angle can't be picked.
-              entry.missing = true;
-              host.querySelector(`[data-angle="${entry.id}"]`)?.classList.add('missing');
-              throw error;
-            }
-          }
-        }
-        if (!entry.camera.stills) return startVideoAngle(entry);
-        if (!livePreviews) { setStatus(entry.id, 'Ready — real photos with flash'); return; }
-        entry.camera.onStatus = status => setStatus(entry.id, status.message || '');
-        try {
-          await entry.camera.start(videoFor(entry.id));
-        } catch (error) {
-          stillsFallback(error);
-          entry.camera.stop();
-          entry.camera = new Camera(S.cfg.camera);
-          await startVideoAngle(entry);
-        }
-      })().catch(error => setStatus(entry.id, `Preview unavailable: ${error.message}`));
-      await entry.ready;
-    }
-  })();
-  host.onclick = async e => {
+  host.onclick = e => {
     const id = e.target.closest('.angle-option')?.dataset.angle;
     if (!id) return;
-    // Don't hold the customer here while OBS is being retried: after a
-    // moment, go on — the shoot falls back to the camera directly.
-    const patience = sleep(2000);
-    await Promise.race([opening, patience]);
-    // A tile whose camera isn't plugged in can't be chosen, unless none are
-    // (then the shoot falls back to whatever camera there is, as before).
-    if (S.angleCameras.find(a => a.id === id)?.missing && S.angleCameras.some(a => !a.missing)) {
-      toast('That camera isn\'t connected — pick another one.', true);
+    const a = roles.find(r => r.id === id);
+    if (!matches[id]) {
+      toast(`${a.name} not found — check it's plugged in and switched on.`, true);
       return;
     }
     S.cameraAngle = id;
-    S.angleCameras.forEach(({ id: cameraId }) => {
-      host.querySelector(`[data-angle="${cameraId}"]`)?.classList.toggle('on', cameraId === id);
-    });
-    await Promise.race([Promise.allSettled(S.angleCameras.map(({ ready }) => ready)), patience]);
+    host.querySelectorAll('.angle-option').forEach(t => t.classList.toggle('on', t.dataset.angle === id));
     go('capture');
   };
 };
@@ -1170,71 +1093,110 @@ ON_ENTER.filter = () => {
 
 /* ------------------------------------------------------------- capture */
 
-/** The chosen angle's own preferredLabels/excludeLabels/constraints (if any)
- *  point pickDevice() at that physical camera instead of the default one;
- *  anything the angle doesn't override just falls back to booth.config.json. */
-function applyCameraAngleCfg(cam) {
-  const angle = cameraAngles().find(a => a.id === S.cameraAngle);
-  const base = S.cfg.camera;
-  cam.cfg.preferredLabels = angle?.preferredLabels || base.preferredLabels;
-  cam.cfg.excludeLabels = angle?.excludeLabels || base.excludeLabels;
-  cam.cfg.constraints = angle?.constraints || base.constraints;
-  // A different physical camera has its own device list; re-enumerate rather
-  // than trust whatever was cached from the last angle picked this session.
-  cam.devices = [];
-}
-
 ON_ENTER.capture = async () => {
-  // Carry the chosen angle's live preview straight into the shoot rather
-  // than closing the camera and reopening it a moment later.
-  const handoff = S.angleCameras.find(a => a.id === S.cameraAngle && a.camera.isLive)?.camera;
-  S.angleCameras.forEach(({ camera }) => camera !== handoff && camera.stop());
-  S.angleCameras = [];
-  if (handoff) { S.camera?.stop(); S.camera = handoff; }
-  // Tethered for this angle or not — swap if last session used the other kind.
-  const wantStills = usesStills(S.cameraAngle);
-  if (!handoff && S.camera && !!S.camera.stills !== wantStills) { S.camera.stop(); S.camera = null; }
-  // A split camera is tied to one region — make a fresh one for this angle.
-  if (!handoff && S.camera?.split) { S.camera.stop(); S.camera = null; }
+  const role = S.cameraAngle || defaultRole();
+  // The other camera's stream (if any) closes before this one opens: one at a time.
+  if (S.camera && (S.camera.role !== role || !!S.camera.stills !== usesStills(role))) { S.camera.stop(); S.camera = null; }
+  const status = $('#cam-status');
+  status.classList.remove('bad');
   const onStatus = s => {
-    $('#cam-status').textContent = s.message;
-    if (s.level === 'error') toast(s.message, true);
+    status.textContent = s.message;
+    status.classList.toggle('bad', s.level !== 'ok');
   };
-  let cam = (S.camera ||= makeCamera(S.cameraAngle));
+  let cam = (S.camera ||= makeCamera(role));
   cam.onStatus = onStatus;
-  if (!cam.stills && !cam.split) applyCameraAngleCfg(cam);
+  showCropGuide(null);
 
   try {
-    if (handoff) await cam.attach($('#preview'));
-    else {
-      try {
-        await cam.start($('#preview'));
-      } catch (error) {
-        if (!cam.stills && !cam.split) throw error;
-        if (cam.split) {
-          // OBS not running / Virtual Camera not started: try the camera directly.
-          clog(`warn: OBS split unavailable (${error.message}) — opening the camera directly`);
-          toast(`${error.message} — using the camera directly`, true);
-        } else stillsFallback(error);
-        cam.stop();
-        cam = S.camera = new Camera(S.cfg.camera);
-        cam.onStatus = onStatus;
-        applyCameraAngleCfg(cam);
-        await cam.start($('#preview'));
-      }
+    try {
+      await cam.start($('#preview'));
+    } catch (error) {
+      if (!cam.stills) throw error;
+      stillsFallback(error);
+      cam.stop();
+      cam = S.camera = new Camera(S.cfg, role);
+      cam.onStatus = onStatus;
+      await cam.start($('#preview'));
     }
   } catch (e) {
-    toast(`Camera problem: ${e.message}`, true);
+    S.camera?.stop();
+    S.camera = null;
+    // Say exactly which camera, on screen, and never swap in another one.
+    status.textContent = e.message;
+    status.classList.add('bad');
+    $('#countdown').textContent = '';
+    toast(e.message, true);
+    clog(`capture: ${e.message}`);
+    await sleep(4000);
+    if (S.screen !== 'capture') return;
+    // Two cameras: back to the choice, where the missing one is greyed out.
+    if (cameraAngles().length >= 2 && e.code === 'CAMERA_NOT_FOUND') { go('angle'); return; }
     // Paid but can't shoot — do not strand them. Refund path is in the
     // operator panel; get them off the screen with an explanation.
-    await sleep(2500);
     go('thanks');
-    $('#thanks-sub').textContent = 'Sorry — the camera dropped out. Find the operator for a refund.';
+    $('#thanks-sub').textContent = `Sorry — ${e.message}. Find the operator for a refund.`;
     return;
   }
 
+  showCropGuide(cam);
   await runShootSequence();
 };
+
+/**
+ * Dims everything outside the part of the picture that will be printed:
+ * the chosen frame's photo window, centre-cropped with the same coverCrop()
+ * the renderer uses (frames/draw.mjs), mapped onto the on-screen preview
+ * (object-fit: cover). What the customer sees inside it is what prints.
+ */
+function showCropGuide(cam) {
+  const guide = $('#crop-guide');
+  if (!guide) return;
+  const v = $('#preview');
+  const aspect = photoWindowAspect();
+  if (!cam || !aspect || !v.videoWidth) { guide.hidden = true; return; }
+  const place = () => {
+    const box = v.getBoundingClientRect();
+    const vw = v.videoWidth, vh = v.videoHeight;
+    if (!vw || !box.width) return;
+    const shown = coverPlacement(vw, vh, box.width, box.height);
+    const crop = coverCrop(vw, vh, aspect, 1);
+    // The preview may be mirrored; the crop is centred, so it lands the same either way.
+    let x = shown.x + crop.sx * shown.scale, y = shown.y + crop.sy * shown.scale;
+    let w = crop.sw * shown.scale, h = crop.sh * shown.scale;
+    // Clamp to what's visible (a very wide window on a narrow screen).
+    const x0 = Math.max(0, x), y0 = Math.max(0, y);
+    w = Math.min(box.width, x + w) - x0; h = Math.min(box.height, y + h) - y0; x = x0; y = y0;
+    Object.assign(guide.style, { left: `${x}px`, top: `${y}px`, width: `${w}px`, height: `${h}px` });
+    guide.hidden = false;
+  };
+  place();
+  clearInterval(showCropGuide._t);
+  showCropGuide._t = setInterval(() => (S.screen === 'capture' ? place() : clearInterval(showCropGuide._t)), 500);
+}
+
+/** The photo window's width/height for the chosen frame (a strip: one cell). */
+function photoWindowAspect() {
+  const frame = currentFrame();
+  if (!frame) return null;
+  const key = `${frame.id}|${frame.template}`;
+  if (S._aspectKey === key) return S._aspect;
+  const strip = isStrip(frame);
+  const { W, H } = printSize(strip ? 'strip' : 'card', 300);
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  let aspect = null;
+  try {
+    const meta = renderCard(c.getContext('2d'), {
+      frame, frameId: frame.id, W, H,
+      photo: placeholderPhoto(), photos: strip ? [0, 1, 2, 3].map(() => placeholderPhoto()) : [],
+      card: mintCard({ frame, frameId: frame.id, seasonId: S.cfg.collection.seasonId, mint: 1 }),
+    });
+    const win = meta?.cell || meta?.artWindow;
+    if (win?.w && win?.h) aspect = win.w / win.h;
+  } catch (e) { clog(`crop guide: ${e.message}`); }
+  S._aspectKey = key; S._aspect = aspect;
+  return aspect;
+}
 
 async function runShootSequence() {
   const c = S.cfg.capture;
@@ -1272,14 +1234,14 @@ async function runShootSequence() {
  */
 async function takeShot(i) {
   if (!S.camera.shoot) {
-    // A capture card that dropped out mid-countdown is usually back within a
-    // second or two (Camera reconnects on its own) — wait rather than fail.
-    if (!S.camera.isLive) {
+    // Only once the video is playing (+300 ms), so the first frame isn't
+    // black; a camera that dropped out mid-countdown is retried every 2 s.
+    if (!(S.camera.isLive && S.camera.ready)) {
       $('#countdown').textContent = '…';
-      await S.camera.waitLive?.(10000);
+      await S.camera.waitReady(15000);
       $('#countdown').textContent = '';
     }
-    return S.camera.grab({ mirror: false });
+    return S.camera.grab();
   }
   $('#countdown').textContent = '📸';
   try {
@@ -1287,7 +1249,7 @@ async function takeShot(i) {
   } catch (e) {
     console.error(`[stills] shot ${i + 1}: ${e.message}`);
     toast(`Photo ${i + 1}: ${e.message}`, true);
-    return S.camera.grab({ mirror: false });
+    return S.camera.grab();
   } finally {
     $('#countdown').textContent = '';
   }
@@ -1893,124 +1855,52 @@ async function retake() {
 /* --------------------------------------------------------------- print */
 
 /**
- * Most dye-subs (DNP DS40 included) only load 4x6 media, so a lone
- * 2.5x3.5 card — or a lone 2x6 strip — can't be sent as its own page, since
- * the printer has nothing that size loaded. Tile copies of the master onto
- * a sheet-sized page instead, with hairline cut marks at each boundary so
- * the operator (or the printer's own cutter, for a strip on a DS40) trims
- * them apart. Returns one canvas per physical sheet needed (the last one
- * may be partly blank if count doesn't divide evenly).
- *
- * Also how a 2x6 strip becomes printable on a 4x6-only machine at all:
- * two copies side by side exactly fill a 4x6 sheet, which is the same
- * layout DNP's own "2x6 (4x6 divided)" media mode expects — the two
- * copies aren't a bonus, they're what makes the page size valid.
- *
- * sheet.rotateForCutter (the DS40 strip sheet): the printer's own auto-cutter
- * only slices along the sheet's short/feed axis, not along whichever axis the
- * unit image happens to be tall on. So each unit gets pre-rotated 90 and
- * tiled by its rotated footprint — a 2x6 strip occupies a 6-wide x 2-tall
- * spot — so that the cutter's slices land on the strip's own boundaries and
- * the cut-apart piece reads right-side up once turned upright.
+ * DNP DS40 pages, built at its native 6x4 size (src/js/layout.mjs) so that
+ * neither the browser nor the driver has anything to scale:
+ *   cards   1844 x 1240 landscape, two 750 x 1050 cards per page, cut marks,
+ *           cut by hand.                 → printer.queue4x6 (no cut)
+ *   strips  1240 x 1844 portrait, the 620 x 1844 strip twice side by side.
+ *                                        → printer.queueStrip (2-inch cut at x = 620)
+ * Identical pages go as one job with that many copies. The main process
+ * saves every page as a PNG before printing it.
  */
-function buildGangSheet(unitCanvas, count, sheet, unit) {
-  const dpi = unitCanvas.width / unit.widthIn;
-  const rotate = !!sheet.rotateForCutter;
-  const unitW = rotate ? unitCanvas.height : unitCanvas.width;
-  const unitH = rotate ? unitCanvas.width : unitCanvas.height;
-  const effUnitWidthIn = rotate ? unit.heightIn : unit.widthIn;
-  const effUnitHeightIn = rotate ? unit.widthIn : unit.heightIn;
-  const cols = Math.max(1, Math.floor(sheet.widthIn / effUnitWidthIn));
-  const rows = Math.max(1, Math.floor(sheet.heightIn / effUnitHeightIn));
-  const perSheet = cols * rows;
-  const sheetW = Math.round(sheet.widthIn * dpi);
-  const sheetH = Math.round(sheet.heightIn * dpi);
-  // Centered by default; sheet.offsetXIn/offsetYIn (inches, +down/+right)
-  // nudge that off-center when a printer's real registration doesn't match
-  // its declared page geometry exactly — tune per-printer, no code change.
-  const marginX = (sheetW - cols * unitW) / 2 + (sheet.offsetXIn || 0) * dpi;
-  const marginY = (sheetH - rows * unitH) / 2 + (sheet.offsetYIn || 0) * dpi;
-
-  const sheets = [];
-  for (let remaining = count; remaining > 0; remaining -= perSheet) {
-    const canvas = document.createElement('canvas');
-    canvas.width = sheetW; canvas.height = sheetH;
-    const ctx = canvas.getContext('2d');
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(0, 0, sheetW, sheetH);
-    const onThisSheet = Math.min(perSheet, remaining);
-    for (let i = 0; i < onThisSheet; i++) {
-      const x = marginX + (i % cols) * unitW;
-      const y = marginY + Math.floor(i / cols) * unitH;
-      if (rotate) {
-        ctx.save();
-        ctx.translate(x + unitW / 2, y + unitH / 2);
-        // Confirmed on a real DS40: +90° came out backwards once cut apart.
-        ctx.rotate(-Math.PI / 2);
-        ctx.drawImage(unitCanvas, -unitCanvas.width / 2, -unitCanvas.height / 2);
-        ctx.restore();
-      } else {
-        ctx.drawImage(unitCanvas, x, y);
-      }
-    }
-    if (sheet.cutMarks) drawSheetCutMarks(ctx, sheetW, sheetH, marginX, marginY, unitW, unitH, cols, rows);
-    sheets.push(canvas);
-  }
-  return sheets;
+function newCanvas({ W, H }) {
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  return c;
 }
 
-/** Tick marks at each card boundary, drawn out to the sheet's own edges — a straightedge guide, not a border. */
-function drawSheetCutMarks(ctx, sheetW, sheetH, marginX, marginY, cardW, cardH, cols, rows) {
-  const tick = Math.round(sheetW * 0.02);
-  ctx.save();
-  ctx.strokeStyle = '#c4c4c4';
-  ctx.lineWidth = Math.max(1, Math.round(sheetW / 1000));
-  ctx.beginPath();
-  for (let c = 0; c <= cols; c++) {
-    const x = marginX + c * cardW;
-    ctx.moveTo(x, 0); ctx.lineTo(x, tick);
-    ctx.moveTo(x, sheetH - tick); ctx.lineTo(x, sheetH);
-  }
-  for (let r = 0; r <= rows; r++) {
-    const y = marginY + r * cardH;
-    ctx.moveTo(0, y); ctx.lineTo(tick, y);
-    ctx.moveTo(sheetW - tick, y); ctx.lineTo(sheetW, y);
-  }
-  ctx.stroke();
-  ctx.restore();
+function cardJobs(card, count) {
+  const per = cardSheetLayout(card.width, card.height).slots.length;
+  const page = n => { const c = newCanvas(pageSize('landscape')); composeCardSheet(c.getContext('2d'), card, n); return c; };
+  const jobs = [];
+  const full = Math.floor(count / per), rest = count % per;
+  if (full) jobs.push({ canvas: page(per), copies: full });
+  if (rest) jobs.push({ canvas: page(rest), copies: 1 });
+  return jobs;
+}
+
+function stripJobs(strip, count) {
+  const c = newCanvas(stripPageLayout());
+  composeStripPage(c.getContext('2d'), strip);
+  // Every page carries two strips.
+  return [{ canvas: c, copies: Math.max(1, Math.ceil(count / 2)) }];
+}
+
+async function sendPage(job, kind, label) {
+  const r = await window.booth.printers.print({ dataUrl: job.canvas.toDataURL('image/png'), kind, copies: job.copies, label })
+    .catch(err => ({ ok: false, reason: err.message }));
+  clog(`print ${label} (${kind}, ${job.canvas.width}x${job.canvas.height}, x${job.copies}): ${r.ok ? 'ok' : `FAILED ${r.reason || ''}`}${r.file ? ` — saved ${r.file}` : ''}${r.paper ? `\n  ${r.paper}` : ''}`);
+  (r.notes || []).forEach(n => clog(`print warn: ${n}`));
+  if (!r.ok) throw new Error(r.reason || `${label} print was rejected`);
+  return r;
 }
 
 async function doPrint() {
   const btn = $('#btn-print');
   btn.disabled = true;
   const st = $('#print-status');
-  const p = S.cfg.printing;
-
-  /** Send one already-composed page. Shared by every print call below so a
-   *  rejection always surfaces the same way regardless of which item it was.
-   *  pageSize (e.g. "dnp6x4") picks the printer's own named media instead of
-   *  an arbitrary Custom.WxHin the driver may not recognize; lpOptions are
-   *  extra per-job -o flags (e.g. the DS40's Cutter=2Inch for strip sheets). */
-  const sendPage = async (dataUrl, widthIn, heightIn, printerName, copies, label, pageSize, lpOptions, windowsPaper) => {
-    const r = await window.booth.printers.print({ dataUrl, widthIn, heightIn, printerName, copies, silent: p.silent, pageSize, lpOptions, windowsPaper });
-    clog(`print ${label} ${widthIn}x${heightIn}in: ${r.ok ? `ok ${r.paper || ''}` : `FAILED ${r.reason || ''}`}`);
-    if (!r.ok) throw new Error(r.reason || `${label} print was rejected`);
-  };
-
-  /** Card or strip, ganged onto printing.sheet/stripSheet when enabled, one page per call otherwise. */
-  const printGanged = async (unitCanvas, count, sheet, unit, printerName, label) => {
-    if (sheet?.enabled) {
-      for (const page of buildGangSheet(unitCanvas, count, sheet, unit)) {
-        await sendPage(page.toDataURL('image/jpeg', 0.95), sheet.widthIn, sheet.heightIn, printerName, 1, label, sheet.pageSize, sheet.lpOptions, sheet.windowsPaper);
-      }
-    } else {
-      // JPEG, not PNG: the Pi wraps this straight into a PDF via /DCTDecode to
-      // get exact physical sizing out of CUPS, and dye-sub is continuous tone
-      // anyway so q95 is indistinguishable from lossless on paper.
-      await sendPage(unitCanvas.toDataURL('image/jpeg', 0.95), unit.widthIn, unit.heightIn, printerName, count, label, unit.pageSize, unit.lpOptions);
-    }
-  };
-
+  st.classList.remove('bad');
   try {
     // Normally S.cardCanvas holds a card and its count is prints.card. But when
     // the customer's chosen frame is itself a strip style (e.g. the "2 Photo
@@ -2021,22 +1911,21 @@ async function doPrint() {
     const cardCount = cardIsStrip ? S.product.prints.strip : S.product.prints.card;
     if (cardCount) {
       st.textContent = `Printing ${cardCount} ${cardIsStrip ? 'strip' : 'card'}${cardCount > 1 ? 's' : ''}…`;
-      const geo = cardIsStrip ? p.strip : p.card;
-      const sheet = cardIsStrip ? p.stripSheet : p.sheet;
-      const printerName = cardIsStrip ? (p.stripPrinterName || p.cardPrinterName) : p.cardPrinterName;
-      await printGanged(S.cardCanvas, cardCount, sheet, geo, printerName, cardIsStrip ? 'Strip' : 'Card');
+      for (const job of cardIsStrip ? stripJobs(S.cardCanvas, cardCount) : cardJobs(S.cardCanvas, cardCount)) {
+        await sendPage(job, cardIsStrip ? 'strip' : '4x6', cardIsStrip ? 'strip' : 'card');
+      }
     }
-
     if (S.product.prints.strip && S.stripCanvas) {
       st.textContent = 'Printing your strip…';
-      await printGanged(S.stripCanvas, S.product.prints.strip, p.stripSheet, p.strip, p.stripPrinterName || p.cardPrinterName, 'Strip');
+      for (const job of stripJobs(S.stripCanvas, S.product.prints.strip)) await sendPage(job, 'strip', 'strip');
     }
-
     st.textContent = 'Sent to the printer.';
     await sleep(900);
     go('thanks');
   } catch (e) {
+    // On screen, with the printer's own reason, so the operator can act on it.
     st.textContent = `Print failed: ${e.message}`;
+    st.classList.add('bad');
     toast('Print failed — the operator can refund this sale.', true);
     btn.disabled = false;
   }
@@ -2058,7 +1947,7 @@ ON_ENTER.admin = async () => {
     window.booth.cards.stats({ seasonId: S.cfg.collection.seasonId }),
     window.booth.printers.list(),
   ]);
-  const devices = S.camera?.devices?.length ? S.camera.devices : await new Camera(S.cfg.camera).listDevices().catch(() => []);
+  const { devices, matches: camMatches } = await matchRoles(S.cfg).catch(() => ({ devices: [], matches: {} }));
   const stillsOn = !!(S.cfg.camera?.stills?.enabled && window.booth.stills);
 
   $('#admin-body').innerHTML = `
@@ -2077,12 +1966,17 @@ ON_ENTER.admin = async () => {
     </div>
 
     <div class="card-panel">
-      <h3>Camera</h3>
-      ${devices.length
-        ? devices.map(d => `<div class="kv"><span>${d.label || 'unnamed'}</span><b>${d.deviceId === S.camera?.deviceId ? 'IN USE' : ''}</b></div>`).join('')
-        : '<div class="kv"><span>No video devices found</span></div>'}
+      <h3>Cameras</h3>
+      ${cameraAngles().map(r => {
+        const m = camMatches[r.id];
+        return `<div class="kv"><span>${escapeHtml(r.label)} <span style="color:var(--ink-dim)">· ${escapeHtml(r.name)}${r.mode ? ` · ${r.mode}` : ''}</span></span><b style="${m ? '' : 'color:var(--bad)'}">${m ? escapeHtml(m.device.label) : 'not found'}</b></div>`;
+      }).join('')}
+      <div class="kv"><span>Video devices</span><b>${devices.length}</b></div>
+      <div style="display:flex;gap:10px;margin-top:12px">
+        <button class="btn btn-ghost" data-go="diagnostics">Camera diagnostics</button>
+      </div>
       <p style="color:var(--ink-dim);font-size:13px;margin-top:12px">
-        Add part of the capture card's name to <code>camera.preferredLabels</code> in booth.config.json.</p>
+        Cameras are matched by name (<code>cameras.standard.labelMatch</code> / <code>cameras.wide.labelMatch</code> in booth.config.json).</p>
     </div>
 
     <div class="card-panel" style="grid-column:1/-1">
@@ -2108,25 +2002,28 @@ ON_ENTER.admin = async () => {
       <h3>Printers</h3>
       ${printers.length
         ? printers.map(p => {
-            const tag = [p.willUse && 'CARDS', p.willUseStrips && 'STRIPS'].filter(Boolean).join(' + ');
+            const tag = [p.willUse && '4x6', p.willUseStrips && 'STRIPS'].filter(Boolean).join(' + ');
             const btn = (role, label) => `<button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;margin-left:6px" data-use-printer="${escapeHtml(p.name)}" data-role="${role}">${label}</button>`;
             return `<div class="kv"><span>${escapeHtml(p.displayName || p.name)}${tag ? ` <b style="color:var(--accent)">· ${tag}</b>` : ''}</span><b>${window.booth.printers.use
-              ? `${p.willUse ? '' : btn('cards', 'Cards')}${p.willUseStrips ? '' : btn('strips', 'Strips')}`
+              ? `${p.willUse ? '' : btn('cards', '4x6')}${p.willUseStrips ? '' : btn('strips', 'Strips')}`
               : p.isDefault ? 'DEFAULT' : ''}</b></div>`;
           }).join('')
         : '<div class="kv"><span>None detected</span></div>'}
       ${info.platform === 'win32' && printers.some(p => p.willUse) ? `
         <div class="kv"><span>Paper sizes</span><b id="paper-sizes" style="font-weight:400;font-size:12px;text-align:right">loading…</b></div>
-        <div class="kv"><span>Print method</span><b>${[['xps', 'Windows (default)'], ['classic', 'Standard'], ['driver', 'Driver paper'], ['browser', 'Browser']].map(([m, label]) => {
-          const cur = ['classic', 'driver', 'browser'].includes(S.cfg.printing?.windowsMethod) ? S.cfg.printing.windowsMethod : 'xps';
+        <div class="kv"><span>Print method</span><b>${[['chromium', 'Print page (default)'], ['xps', 'Windows XPS']].map(([m, label]) => {
+          const cur = S.cfg.printing?.windowsMethod === 'xps' ? 'xps' : 'chromium';
           return `<button class="btn ${cur === m ? '' : 'btn-ghost'}" style="padding:4px 10px;font-size:12px;margin-left:6px" data-print-method="${m}">${label}</button>`;
         }).join('')}</b></div>` : ''}
       <div style="display:flex;gap:10px;align-items:center;margin-top:12px;flex-wrap:wrap">
-        <button class="btn btn-ghost" id="print-test">Print test card sheet</button>
-        <button class="btn btn-ghost" id="print-test-strip">Print test strip sheet</button>
+        <button class="btn btn-ghost" id="print-test">Test print 4x6</button>
+        <button class="btn btn-ghost" id="print-test-strip">Test print strips</button>
         ${window.booth.printers.diagnose ? '<button class="btn btn-ghost" id="print-check">Check printer</button>' : ''}
         <span id="print-test-result" style="font-size:12px;color:var(--ink-dim)"></span>
       </div>
+      <div class="kv"><span>4x6 queue</span><b>${escapeHtml(S.cfg.printer?.queue4x6 || '(photo printer, found by name)')}</b></div>
+      <div class="kv"><span>Strip queue (2-inch cut)</span><b style="${S.cfg.printer?.queueStrip || info.platform !== 'win32' ? '' : 'color:var(--bad)'}">${escapeHtml(S.cfg.printer?.queueStrip || (info.platform === 'win32' ? 'not set — strips won\'t be cut' : 'same as 4x6'))}</b></div>
+      <div class="kv"><span>Finish · copies</span><b>${escapeHtml(S.cfg.printer?.finish || 'glossy')} · ${S.cfg.printer?.copies || 1}</b></div>
       ${printers.length && !printers.some(p => p.willUse) && info.platform === 'win32'
         ? '<p style="color:var(--bad);font-size:13px;margin-top:10px">No photo printer installed — install the DNP driver (see README → Printing on Windows).</p>' : ''}
     </div>
@@ -2199,21 +2096,21 @@ ON_ENTER.admin = async () => {
     ON_ENTER.admin();
   }));
 
+  // Calibration pages (layout.mjs drawCalibration): edge line, 20 px safe
+  // border, 10 px ruler ticks, the cut line for strips, the pixel size as text.
   const printTest = async (e, kind) => {
     const btn = e.currentTarget, out = $('#print-test-result');
-    btn.disabled = true; out.textContent = 'Printing…';
-    const pr = S.cfg.printing || {};
-    const sheet = (kind === 'strip' ? pr.stripSheet : pr.sheet)?.enabled ? (kind === 'strip' ? pr.stripSheet : pr.sheet) : { widthIn: 6, heightIn: 4 };
-    const r = await window.booth.printers.print({
-      dataUrl: testSheet(sheet.widthIn, sheet.heightIn, pr.dpi || 300, kind).toDataURL('image/jpeg', 0.95),
-      widthIn: sheet.widthIn, heightIn: sheet.heightIn,
-      printerName: (kind === 'strip' ? pr.stripPrinterName || pr.cardPrinterName : pr.cardPrinterName) || null,
-      copies: 1, silent: true, pageSize: sheet.pageSize, lpOptions: sheet.lpOptions, windowsPaper: sheet.windowsPaper,
-    }).catch(err => ({ ok: false, reason: err.message }));
-    clog(`print test ${kind} sheet: ${r.ok ? `ok ${r.paper || ''}` : `FAILED ${r.reason || ''}`}`);
-    out.style.whiteSpace = 'pre-wrap';
-    out.textContent = r.ok ? `Sent ✓ ${r.paper || ''}` : `Failed: ${r.reason}`;
-    out.style.color = r.ok ? '' : 'var(--bad)';
+    btn.disabled = true; out.textContent = 'Printing…'; out.style.color = '';
+    const c = newCanvas(kind === 'strip' ? stripPageLayout() : pageSize('landscape'));
+    drawCalibration(c.getContext('2d'), { kind, orientation: 'landscape', label: new Date().toLocaleString() });
+    try {
+      const r = await sendPage({ canvas: c, copies: 1 }, kind, `test-${kind}`);
+      out.style.whiteSpace = 'pre-wrap';
+      out.textContent = `Sent ✓ ${c.width}x${c.height} — saved ${r.file || ''}${(r.notes || []).map(n => `\n⚠ ${n}`).join('')}\n${r.paper || ''}`;
+    } catch (err) {
+      out.textContent = `Failed: ${err.message}`;
+      out.style.color = 'var(--bad)';
+    }
     btn.disabled = false;
   };
   $('#print-check')?.addEventListener('click', async e => {
@@ -2225,7 +2122,7 @@ ON_ENTER.admin = async () => {
     out.textContent = r.text;
     btn.disabled = false;
   });
-  $('#print-test')?.addEventListener('click', e => printTest(e, 'card'));
+  $('#print-test')?.addEventListener('click', e => printTest(e, '4x6'));
   $('#print-test-strip')?.addEventListener('click', e => printTest(e, 'strip'));
 
   $$('[data-use-printer]').forEach(b => b.addEventListener('click', async () => {
@@ -2233,7 +2130,7 @@ ON_ENTER.admin = async () => {
     const r = await window.booth.printers.use(b.dataset.usePrinter, b.dataset.role).catch(e => ({ ok: false, error: e.message }));
     if (!r.ok) { toast(r.error, true); b.disabled = false; return; }
     S.cfg = r.config;
-    toast(`${b.dataset.role === 'strips' ? 'Strips' : 'Cards'} print to ${b.dataset.usePrinter}`);
+    toast(`${b.dataset.role === 'strips' ? 'Strips' : '4x6 prints'} go to ${b.dataset.usePrinter}`);
     ON_ENTER.admin();
   }));
 
@@ -2260,51 +2157,77 @@ ON_ENTER.admin = async () => {
     if (!r.ok) toast(r.error || 'Could not open the folder', true);
   });
 
+  $$('#admin-body [data-go]').forEach(b => b.addEventListener('click', () => go(b.dataset.go)));
   $('#admin-reload')?.addEventListener('click', () => window.booth.app.reload());
   $('#admin-quit')?.addEventListener('click', () => window.booth.app.quit());
 };
 
-/* --------------------------------------------------------------- utils */
+/* ---------------------------------------------------------- diagnostics */
 
 /**
- * A sheet that can't be mistaken for blank or for the wrong way round:
- * colour bands, a border 0.1in in from every edge (shows any cropping), TOP
- * with an arrow, and each corner labelled.
+ * Hidden screen (operator panel → Camera diagnostics, or Ctrl+Shift+D):
+ * every video device's label and deviceId, which one each role matched, and
+ * the resolution each camera really streams at. The cameras are opened one
+ * after the other, never together.
  */
-function testSheet(widthIn, heightIn, dpi, kind = 'card') {
-  const c = document.createElement('canvas');
-  c.width = Math.round(widthIn * dpi); c.height = Math.round(heightIn * dpi);
-  const x = c.getContext('2d'), W = c.width, H = c.height;
-  if (kind === 'strip') {
-    // Two halves along the sheet's short side, where the DS40's 2-inch cut
-    // should fall: if the cut works, STRIP 1 and STRIP 2 come out as two pieces.
-    const half = (H >= W ? [[0, 0, W / 2, H], [W / 2, 0, W / 2, H]] : [[0, 0, W, H / 2], [0, H / 2, W, H / 2]]);
-    [['#1e88e5', 'STRIP 1'], ['#8e24aa', 'STRIP 2']].forEach(([col, label], i) => {
-      const [hx, hy, hw, hh] = half[i];
-      x.fillStyle = col; x.fillRect(hx, hy, hw, hh);
-      x.save(); x.translate(hx + hw / 2, hy + hh / 2); if (hh > hw) x.rotate(-Math.PI / 2);
-      x.fillStyle = '#fff'; x.strokeStyle = '#000'; x.lineWidth = dpi * 0.02; x.textAlign = 'center'; x.textBaseline = 'middle';
-      x.font = `900 ${dpi * 0.4}px system-ui, sans-serif`; x.strokeText(label, 0, 0); x.fillText(label, 0, 0);
-      x.restore();
-    });
-    x.setLineDash([dpi * 0.12, dpi * 0.08]); x.strokeStyle = '#fff'; x.lineWidth = dpi * 0.03; x.beginPath();
-    if (H >= W) { x.moveTo(W / 2, 0); x.lineTo(W / 2, H); } else { x.moveTo(0, H / 2); x.lineTo(W, H / 2); }
-    x.stroke();
-    return c;
+ON_ENTER.diagnostics = async () => {
+  S.camera?.stop();
+  S.camera = null;
+  stopActiveCamera();
+  const body = $('#diag-body');
+  const video = $('#diag-video');
+  const token = S.diagToken = {};
+  const alive = () => S.diagToken === token && S.screen === 'diagnostics';
+  body.innerHTML = '<p>Listing cameras…</p>';
+  $('#diag-refresh').onclick = () => ON_ENTER.diagnostics();
+  let devices = [], matches = {};
+  try { ({ devices, matches } = await matchRoles(S.cfg)); } catch (e) {
+    body.innerHTML = `<p style="color:var(--bad)">${escapeHtml(e.message)}</p>`;
+    return;
   }
-  const colors = ['#e53935', '#fb8c00', '#fdd835', '#43a047', '#1e88e5', '#8e24aa'];
-  colors.forEach((col, i) => { x.fillStyle = col; x.fillRect(0, (i * H) / colors.length, W, H / colors.length + 1); });
-  x.strokeStyle = '#000'; x.lineWidth = dpi * 0.03;
-  x.strokeRect(dpi * 0.1, dpi * 0.1, W - dpi * 0.2, H - dpi * 0.2);
-  x.fillStyle = '#fff'; x.strokeStyle = '#000'; x.lineWidth = dpi * 0.02; x.textAlign = 'center'; x.textBaseline = 'middle';
-  const text = (t, px, cx, cy) => { x.font = `900 ${px}px system-ui, sans-serif`; x.strokeText(t, cx, cy); x.fillText(t, cx, cy); };
-  text('▲ TOP ▲', dpi * 0.55, W / 2, H * 0.2);
-  text(`HOLOBOOTH TEST · ${widthIn}×${heightIn} in`, dpi * 0.32, W / 2, H / 2);
-  text(new Date().toLocaleTimeString(), dpi * 0.2, W / 2, H * 0.72);
-  [['TOP-LEFT', 0.12, 0.08, 'left'], ['TOP-RIGHT', 0.88, 0.08, 'right'], ['BOTTOM-LEFT', 0.12, 0.92, 'left'], ['BOTTOM-RIGHT', 0.88, 0.92, 'right']]
-    .forEach(([t, fx, fy, al]) => { x.textAlign = al; text(t, dpi * 0.16, W * fx, H * fy); });
-  return c;
-}
+  const roles = cameraAngles();
+  const results = {};
+  const roleOf = id => roles.filter(r => matches[r.id]?.device.deviceId === id).map(r => r.label).join(', ');
+  const render = () => {
+    body.innerHTML = `
+      <h3>Video devices (${devices.length})</h3>
+      <table>
+        <tr><th>Label</th><th>deviceId</th><th>Role</th></tr>
+        ${devices.map(d => `<tr><td>${escapeHtml(d.label || '(no label)')}</td><td><code>${escapeHtml(d.deviceId)}</code></td><td>${escapeHtml(roleOf(d.deviceId) || '—')}</td></tr>`).join('') || '<tr><td colspan="3">None</td></tr>'}
+      </table>
+      <h3>Roles</h3>
+      <table>
+        <tr><th>Role</th><th>Looks for (label contains)</th><th>Matched</th><th>Stream</th></tr>
+        ${roles.map(r => {
+          const m = matches[r.id], res = results[r.id];
+          return `<tr>
+            <td><b>${escapeHtml(r.label)}</b><br><span style="color:var(--ink-dim)">${escapeHtml(r.name)}${r.mode ? ` · mode ${escapeHtml(r.mode)}` : ''}</span></td>
+            <td>${r.match.map(escapeHtml).join(', ')}${r.deviceLabel ? `<br><span style="color:var(--ink-dim)">saved: ${escapeHtml(r.deviceLabel)}</span>` : ''}</td>
+            <td>${m ? `${escapeHtml(m.device.label)}<br><span style="color:var(--ink-dim)">${escapeHtml(m.how)}</span>` : '<b style="color:var(--bad)">not found</b>'}</td>
+            <td>${res ? escapeHtml(res) : m ? 'testing…' : '—'}</td></tr>`;
+        }).join('')}
+      </table>`;
+  };
+  render();
+  for (const r of roles) {
+    if (!matches[r.id] || !alive()) continue;
+    const cam = new Camera(S.cfg, r.id);
+    try {
+      const st = await cam.start(video);
+      results[r.id] = `asked ${r.width}x${r.height}@${r.frameRate} → got ${st.width}x${st.height} @ ${Math.round(st.frameRate || 0)} fps · video ${video.videoWidth}x${video.videoHeight}${cam.ready ? '' : ' · NOT playing'}${r.mirrorPreview ? ' · preview mirrored' : ''}`;
+      await sleep(2000); // long enough to see the picture
+    } catch (e) {
+      results[r.id] = `failed: ${e.message}`;
+    } finally {
+      cam.stop();
+    }
+    clog(`diagnostics: ${r.id}: ${results[r.id]}`);
+    if (alive()) render();
+  }
+  if (alive()) video.srcObject = null;
+};
+
+/* --------------------------------------------------------------- utils */
 
 const escapeHtml = str => String(str).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
 

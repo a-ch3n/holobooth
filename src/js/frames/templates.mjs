@@ -1162,6 +1162,8 @@ export function strip(ctx, o) {
   const colY = pad * 0.7 + headerH;
   const colH = n * cellH + (n - 1) * gap;
   meta.artWindow = { x: pad, y: colY, w: cellW, h: colH, r: W * 0.012 };
+  // One photo's window: what the capture screen's crop guide shows.
+  meta.cell = { w: cellW, h: cellH };
 
   for (let i = 0; i < n; i++) {
     const y = colY + i * (cellH + gap);
@@ -1187,6 +1189,16 @@ export function strip(ctx, o) {
   fitText(ctx, `${meta.dateLabel}  ·  ${meta.serial}`,
     W / 2, fy + footerH * 0.72, cellW * 0.92, W * 0.036, 600, t.fontBody, 'center');
   ctx.restore();
+
+  // Everything that mustn't be cut off, for the safe-area check
+  // (test/layout.test.mjs): the photos and each line of text.
+  const textBox = (cy, w, h) => ({ x: W / 2 - w / 2, y: cy - h / 2, w, h });
+  meta.contentRects = [
+    { ...meta.artWindow },
+    ...(headerH ? [textBox(pad * 0.55 + headerH * 0.62, cellW * 0.92, headerH * 0.62)] : []),
+    textBox(fy + footerH * 0.40, cellW * 0.86, W * 0.082),
+    textBox(fy + footerH * 0.72, cellW * 0.92, W * 0.036),
+  ];
 }
 
 export const TEMPLATES = { creature, creatureMax, creatureFullArt, party, kawaii, assetPack, strip };

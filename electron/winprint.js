@@ -1,76 +1,26 @@
 /**
- * winprint.js — Windows printing through the printer driver's own paper
- * sizes, the same way Windows' "Print a test page" does.
+ * winprint.js — Windows printer helpers for the XPS print method and the
+ * operator panel: the driver's paper sizes, the XPS print itself
+ * (winprint-xps.ps1), and what Windows says about the queue afterwards.
  *
- * Chromium's print path sends a custom page size (e.g. 6x4in in microns).
- * DNP's driver only accepts its own named forms, so those jobs never came out,
- * while the driver's test page printed fine. This picks the driver's paper
- * size that matches the sheet (either orientation), sets landscape to suit,
- * and draws the image edge to edge with GDI+ via PowerShell. Nothing to install.
- *
- * Paper choice, among sizes matching the sheet's dimensions:
- *   paperHint set (e.g. the strip sheet's "2\s*inch|2in|x2"): prefer a name matching it
- *   no hint: prefer one WITHOUT cut/x2 in its name, so cards are never cut
+ * The default Windows print path is Chromium's (electron/main.js). This is
+ * the fallback: printing.windowsMethod "xps", the same path Ctrl+P photo
+ * printing uses.
  */
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
 
+// Lists the driver's own paper sizes (PaperSize is in hundredths of an inch).
 const SCRIPT = String.raw`
-param([string]$Printer, [string]$Image = '', [double]$W = 0, [double]$H = 0, [int]$Copies = 1, [string]$Hint = '', [switch]$List)
+param([string]$Printer)
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 $doc = New-Object System.Drawing.Printing.PrintDocument
 $doc.PrinterSettings.PrinterName = $Printer
 if (-not $doc.PrinterSettings.IsValid) { Write-Output "ERR Printer not found: $Printer"; exit 2 }
-$sizes = @($doc.PrinterSettings.PaperSizes)
-if ($List) { foreach ($s in $sizes) { Write-Output ("SIZE {0}|{1}|{2}" -f $s.PaperName, $s.Width, $s.Height) }; exit 0 }
-# PaperSize is in hundredths of an inch.
-$ww = [int]($W * 100); $hh = [int]($H * 100)
-$fit = @($sizes | Where-Object { ([math]::Abs($_.Width - $ww) -le 15 -and [math]::Abs($_.Height - $hh) -le 15) -or ([math]::Abs($_.Width - $hh) -le 15 -and [math]::Abs($_.Height - $ww) -le 15) })
-if ($fit.Count -eq 0) {
-  $all = ($sizes | ForEach-Object { '{0} ({1}x{2}in)' -f $_.PaperName, ($_.Width / 100), ($_.Height / 100) }) -join '; '
-  Write-Output "ERR The printer has no $($W)x$($H)in paper size. It has: $all"; exit 3
-}
-$pick = $null
-if ($Hint) { $pick = $fit | Where-Object { $_.PaperName -match $Hint } | Select-Object -First 1 }
-if (-not $pick) { $pick = $fit | Where-Object { $_.PaperName -notmatch '(?i)cut|x\s*2' } | Select-Object -First 1 }
-if (-not $pick) { $pick = $fit[0] }
-$ps = $doc.DefaultPageSettings
-$ps.PaperSize = $pick
-$ps.Margins = New-Object System.Drawing.Printing.Margins(0, 0, 0, 0)
-$ps.Landscape = (($W -gt $H) -ne ($pick.Width -gt $pick.Height))
-$doc.PrinterSettings.Copies = [int16][math]::Max(1, $Copies)
-$doc.DocumentName = 'HoloBooth'
-$doc.PrintController = New-Object System.Drawing.Printing.StandardPrintController
-$script:img = [System.Drawing.Image]::FromFile($Image)
-$script:ran = $false; $script:drawErr = $null; $script:info = ''
-# Errors inside the page handler would otherwise just leave a blank sheet:
-# catch them, and record what was drawn where, so the result says.
-$doc.add_PrintPage({
-  param($src, $ev)
-  try {
-    $g = $ev.Graphics
-    $b = $ev.PageBounds
-    $hx = [single]$ev.PageSettings.HardMarginX; $hy = [single]$ev.PageSettings.HardMarginY
-    # Origin is the printable area's corner; step back over the hard margin so the image covers the whole sheet.
-    # A plain 24-bit copy, drawn into whole-unit coordinates: some dye-sub
-    # drivers render GDI+'s 32-bit/alpha path as an empty (white) page.
-    $bmp = New-Object System.Drawing.Bitmap($script:img.Width, $script:img.Height, [System.Drawing.Imaging.PixelFormat]::Format24bppRgb)
-    $gg = [System.Drawing.Graphics]::FromImage($bmp); $gg.DrawImage($script:img, 0, 0, $script:img.Width, $script:img.Height); $gg.Dispose()
-    $g.PageUnit = [System.Drawing.GraphicsUnit]::Display
-    $g.DrawImage($bmp, (New-Object System.Drawing.Rectangle([int](-$hx), [int](-$hy), [int]$b.Width, [int]$b.Height)))
-    $bmp.Dispose()
-    $script:info = "page=$($b.Width)x$($b.Height) hardMargin=$hx,$hy dpi=$($g.DpiX) unit=$($g.PageUnit) image=$($script:img.Width)x$($script:img.Height)"
-    $script:ran = $true
-  } catch { $script:drawErr = $_.Exception.Message }
-  $ev.HasMorePages = $false
-})
-try { $doc.Print() } finally { $script:img.Dispose() }
-if ($script:drawErr) { Write-Output "ERR Drawing the page failed: $($script:drawErr)"; exit 5 }
-if (-not $script:ran) { Write-Output 'ERR The page was never drawn (print handler did not run)'; exit 6 }
-Write-Output ("OK {0}|{1}x{2}|landscape={3}|{4}" -f $pick.PaperName, $pick.Width, $pick.Height, $ps.Landscape, $script:info)
+foreach ($s in @($doc.PrinterSettings.PaperSizes)) { Write-Output ("SIZE {0}|{1}|{2}" -f $s.PaperName, $s.Width, $s.Height) }
 `;
 
 let scriptPath = null;
@@ -95,37 +45,13 @@ function runPs(args, timeout = 90000) {
 
 /** The printer's own paper sizes: [{ name, widthIn, heightIn }]. */
 async function paperSizes(printer) {
-  const { out } = await runPs(['-Printer', printer, '-List'], 30000);
+  const { out } = await runPs(['-Printer', printer], 30000);
   return out.split(/\r?\n/).filter(l => l.startsWith('SIZE ')).map(l => {
     const [name, w, h] = l.slice(5).split('|');
     return { name, widthIn: +w / 100, heightIn: +h / 100 };
   });
 }
 
-async function printWindows({ dataUrl, widthIn, heightIn, printer, copies = 1, paperHint = '' }) {
-  const ext = /^data:image\/png/.test(dataUrl) ? 'png' : 'jpg';
-  const img = path.join(os.tmpdir(), `holobooth-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.${ext}`);
-  fs.writeFileSync(img, Buffer.from(String(dataUrl).split(',')[1] || '', 'base64'));
-  try {
-    const args = ['-Printer', printer, '-Image', img, '-W', String(widthIn), '-H', String(heightIn), '-Copies', String(copies)];
-    if (paperHint) args.push('-Hint', paperHint);
-    const { err, out, stderr } = await runPs(args);
-    const ok = out.split(/\r?\n/).find(l => l.startsWith('OK '));
-    if (ok) return { ok: true, reason: null, paper: ok.slice(3) };
-    const msg = out.split(/\r?\n/).find(l => l.startsWith('ERR '))?.slice(4)
-      || stderr.split(/\r?\n/).filter(Boolean).slice(-3).join(' ') || err?.message || 'unknown error';
-    return { ok: false, reason: msg };
-  } finally {
-    setTimeout(() => fs.rm(img, { force: true }, () => {}), 60000);
-  }
-}
-
-/**
- * What Windows itself says: every printer with its port, driver and status,
- * and every job sitting in a queue. The answer to "nothing came out" —
- * a job stuck in an error state, two DS40 entries on different ports, a
- * printer Windows thinks is offline.
- */
 const DIAG = `
 $ErrorActionPreference = 'SilentlyContinue'
 $printers = @(Get-Printer | ForEach-Object { [pscustomobject]@{ name = $_.Name; port = $_.PortName; driver = $_.DriverName; status = "$($_.PrinterStatus)"; default = $false } })
@@ -161,46 +87,8 @@ function summarize(d, focus) {
 }
 
 /**
- * Print a JPEG the way Windows prints a photo: Windows Photo Viewer's
- * ImageView_PrintTo (built into Windows 10/11). It uses the printer's own
- * default paper and Printing Preferences, like the test page that works, and
- * so also that entry's cut setting (the strips entry has the 2-inch cut on,
- * the cards entry doesn't). The picture is fitted to the page and turned to
- * match it.
- */
-function photoViewerDll() {
-  const roots = [process.env.ProgramW6432, process.env.ProgramFiles, 'C:\\Program Files'].filter(Boolean);
-  for (const r of roots) {
-    const p = path.join(r, 'Windows Photo Viewer', 'PhotoViewer.dll');
-    if (fs.existsSync(p)) return p;
-  }
-  return null;
-}
-
-async function printPhotoViewer({ dataUrl, printer, copies = 1 }) {
-  const dll = photoViewerDll();
-  if (!dll) return { ok: false, reason: 'Windows Photo Viewer (PhotoViewer.dll) not found on this PC' };
-  const img = path.join(os.tmpdir(), `holobooth-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.jpg`);
-  fs.writeFileSync(img, Buffer.from(String(dataUrl).split(',')[1] || '', 'base64'));
-  try {
-    for (let i = 0; i < Math.max(1, copies); i++) {
-      const r = await new Promise(resolve => {
-        execFile('rundll32.exe', [`${dll},ImageView_PrintTo`, '/pt', img, printer], { timeout: 60000, windowsHide: true },
-          err => resolve(err ? { ok: false, reason: `Photo Viewer print failed: ${err.message}` } : { ok: true }));
-      });
-      if (!r.ok) return r;
-    }
-    return { ok: true, reason: null, paper: 'method=photo (printer default paper and preferences)' };
-  } finally {
-    // The spooler reads the file after rundll32 returns; leave it a while.
-    setTimeout(() => fs.rm(img, { force: true }, () => {}), 120000);
-  }
-}
-
-/**
  * Print through Windows' XPS path (electron/winprint-xps.ps1): the same one
- * Ctrl+P photo printing uses, which prints on the DS40 where the GDI and
- * Chromium paths didn't. Starts from the printer's Printing Preferences, so
+ * Ctrl+P photo printing uses. Starts from the printer's Printing Preferences, so
  * each Windows printer entry's paper and 2inch-cut setting apply.
  */
 let xpsScript = null;
@@ -213,24 +101,19 @@ function ensureXpsScript() {
   return xpsScript;
 }
 
-async function printXps({ dataUrl, widthIn, heightIn, printer, copies = 1, turn = 'right' }) {
-  const img = path.join(os.tmpdir(), `holobooth-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.jpg`);
-  fs.writeFileSync(img, Buffer.from(String(dataUrl).split(',')[1] || '', 'base64'));
-  try {
-    const out = await new Promise(resolve => {
-      execFile('powershell.exe', ['-STA', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ensureXpsScript(),
-        '-Printer', printer, '-Image', img, '-W', String(widthIn), '-H', String(heightIn), '-Copies', String(copies), '-Turn', turn === 'left' ? 'left' : 'right'],
-      { timeout: 120000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) =>
-        resolve({ err, out: String(stdout || '').trim(), stderr: String(stderr || '').trim() }));
-    });
-    const ok = out.out.split(/\r?\n/).find(l => l.startsWith('OK '));
-    if (ok) return { ok: true, reason: null, paper: ok.slice(3) };
-    const msg = out.out.split(/\r?\n/).find(l => l.startsWith('ERR '))?.slice(4)
-      || out.stderr.split(/\r?\n/).filter(Boolean).slice(-3).join(' ') || out.err?.message || 'unknown error';
-    return { ok: false, reason: `XPS print: ${msg}` };
-  } finally {
-    setTimeout(() => fs.rm(img, { force: true }, () => {}), 120000);
-  }
+/** file: the page image on disk (the saved PNG). widthIn/heightIn: the 4x6 sheet, either way round. */
+async function printXps({ file, widthIn, heightIn, printer, copies = 1, turn = 'right' }) {
+  const out = await new Promise(resolve => {
+    execFile('powershell.exe', ['-STA', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ensureXpsScript(),
+      '-Printer', printer, '-Image', file, '-W', String(widthIn), '-H', String(heightIn), '-Copies', String(copies), '-Turn', turn === 'left' ? 'left' : 'right'],
+    { timeout: 120000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) =>
+      resolve({ err, out: String(stdout || '').trim(), stderr: String(stderr || '').trim() }));
+  });
+  const ok = out.out.split(/\r?\n/).find(l => l.startsWith('OK '));
+  if (ok) return { ok: true, reason: null, paper: ok.slice(3) };
+  const msg = out.out.split(/\r?\n/).find(l => l.startsWith('ERR '))?.slice(4)
+    || out.stderr.split(/\r?\n/).filter(Boolean).slice(-3).join(' ') || out.err?.message || 'unknown error';
+  return { ok: false, reason: `XPS print: ${msg}` };
 }
 
-module.exports = { printWindows, printXps, printPhotoViewer, photoViewerDll, paperSizes, diagnose, summarize, SCRIPT };
+module.exports = { printXps, paperSizes, diagnose, summarize, SCRIPT };

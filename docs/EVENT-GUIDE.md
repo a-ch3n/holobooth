@@ -120,22 +120,24 @@ the host.
 
 Do these in this order:
 
-1. **Cameras:** plug in the Logitech Brio and the M50 (capture card). On
-   the M50: movie mode, clean screen (INFO), Eco off, dummy battery.
-2. **OBS:** open it, select the **Booth** scene (Brio left, M50 right),
-   and click **Start Virtual Camera**.
-3. **Printer:** turn the DS40 on and check paper and ribbon.
-4. **Internet:** connect, plus a hotspot as a backup, if you're taking
+1. **Cameras:** plug in the Logitech Brio and the M50 (over USB with EOS
+   Webcam Utility, or HDMI into the capture card, whichever
+   `cameras.wide.mode` says). On the M50: Movie mode, clean screen (INFO),
+   auto power off disabled, dummy battery. Quit Canon EOS Utility.
+2. **Printer:** turn the DS40 on and check paper and ribbon.
+3. **Internet:** connect, plus a hotspot as a backup, if you're taking
    payments or using downloads.
-5. **Start the booth:** `npm start`.
-6. **Operator screen** (bottom-left corner × 5):
+4. **Start the booth:** `npm start`.
+5. **Operator screen** (bottom-left corner × 5):
    - **Event mode** is the one you want.
-   - **Printers:** press **Print test card sheet** (and **Print test strip
-     sheet** if you sell strips). Check the colours and that **TOP** is at
-     the top.
-   - **Photo camera / Camera log:** both camera tiles show a live picture.
-7. **Paid events:** one real sale with your own card, then refund it.
-8. During the event, the **Camera log** in the operator screen records
+   - **Cameras:** both say which device they matched (not "not found").
+     **Camera diagnostics** opens each camera in turn and shows its
+     picture and real resolution.
+   - **Printers:** press **Test print 4x6** (and **Test print strips** if
+     you sell strips). The black edge line and red line 20 px in should
+     show, and strips should come out as two pieces cut on the blue line.
+6. **Paid events:** one real sale with your own card, then refund it.
+7. During the event, the **Camera log** in the operator screen records
    what went wrong if something does. **Copy camera log** and send it to
    whoever is helping you.
 

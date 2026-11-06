@@ -239,7 +239,6 @@ body.debug { cursor: auto; }
 .angle-option:active { transform: scale(.97); }
 .angle-option.on { border-color: var(--accent); box-shadow: 0 0 0 4px rgba(255,215,110,.15); }
 .angle-option.missing { opacity: .45; }
-.angle-preview { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 12px; background: #080a0f; margin-bottom: 14px; }
 .angle-option .ic { font-size: 44px; margin-bottom: 14px; }
 .angle-option .lbl { font-size: 22px; font-weight: 800; }
 .angle-option .sub { color: var(--ink-dim); font-size: 14px; margin-top: 4px; }
@@ -297,6 +296,26 @@ body.debug { cursor: auto; }
   color: rgba(255,255,255,.6); background: rgba(0,0,0,.45);
   padding: 6px 12px; border-radius: 8px;
 }
+/* A camera that isn't there, or dropped out: say so, big, mid-screen. */
+.cam-status.bad {
+  top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 3;
+  font-size: clamp(22px, 3.2vw, 40px); font-weight: 800; color: #fff;
+  background: rgba(180, 24, 24, .92); padding: 22px 34px; border-radius: 16px; text-align: center;
+}
+/* Everything outside the printed area is dimmed. */
+.crop-guide {
+  position: absolute; pointer-events: none; z-index: 1;
+  box-shadow: 0 0 0 100vmax rgba(0, 0, 0, .55);
+  outline: 2px solid rgba(255, 255, 255, .7); outline-offset: -1px; border-radius: 6px;
+}
+.angle-status.bad { color: var(--bad); font-weight: 700; }
+.diag { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 20px; padding: 20px 28px; overflow: auto; flex: 1; }
+.diag-body table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.diag-body th, .diag-body td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.diag-body td code { font-size: 11px; word-break: break-all; color: var(--ink-dim); }
+.diag-body h3 { margin: 18px 0 8px; font-size: 14px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-dim); }
+#diag-video { width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 12px; object-fit: contain; }
+@media (max-width: 800px) { .diag { grid-template-columns: 1fr; } }
 .flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; }
 .flash.go { animation: flash .32s ease; }
 @keyframes flash { 0% { opacity: .95; } 100% { opacity: 0; } }
@@ -583,3 +602,4 @@ body.debug { cursor: auto; }
   letter-spacing: .04em; padding: 7px 12px; border-radius: 999px;
   box-shadow: 0 2px 10px rgba(0,0,0,.35);
 }
+#print-status.bad { color: var(--bad); font-weight: 700; white-space: pre-wrap; }

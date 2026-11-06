@@ -1,34 +1,32 @@
 /**
- * camera.js — HDMI capture card handling.
+ * camera.js — the two booth cameras.
  *
- * The trick that makes a real camera work in a photobooth: a capture card
- * (Elgato Cam Link, or any cheap generic UVC HDMI dongle) turns the camera's
- * clean HDMI output into a standard webcam. So there is no vendor SDK, no
- * gPhoto, no tethering library — just getUserMedia against the right device.
+ *   standard  Logitech Brio, a USB (UVC) webcam.            config: cameras.standard
+ *   wide      Canon M50 for the 0.5 / High Angle shot.      config: cameras.wide
+ *             mode "usb":  Canon EOS Webcam Utility (Windows/macOS)
+ *             mode "hdmi": M50 HDMI out -> USB capture card (Cam Link, generic UVC)
  *
- * What actually bites you in practice, and what this module handles:
- *  - Device labels are empty until a stream has been granted once, so you
- *    can't pick the right camera before asking for *a* camera.
- *  - The built-in laptop webcam is usually device #0, so naive code films the
- *    operator's face instead of the customer.
- *  - Capture cards need an explicit resolution request or Chromium settles for
- *    640x480, which looks fine on screen and terrible at 300dpi.
- *  - Unplugging HDMI mid-event kills the track silently; we watch and recover.
+ * Rules this module enforces:
+ *  - A camera is found by its device LABEL, never by its position in the list.
+ *    Labels are blank until the page has been granted a camera once, so
+ *    permission is requested first, then the devices are listed.
+ *  - The matched deviceId and label are saved (config/booth.config.local.json,
+ *    this PC only). Next start: the saved deviceId first, then the label. If
+ *    neither is there, a clear error ("Standard camera (Brio) not found") —
+ *    never a silent switch to some other camera.
+ *  - ONE camera stream open at a time. Opening one stops every track of the
+ *    other first: the Brio and a capture card streaming together fight over
+ *    USB bandwidth (black frames, "Hardware MFT ... lack of hardware
+ *    resources" on Windows).
+ *  - A capture is only allowed once the video fired 'playing' plus ~300 ms,
+ *    so the first frame isn't black.
+ *  - The Brio's PREVIEW is mirrored (selfie feel). The M50's isn't. Saved and
+ *    printed images are never mirrored.
+ *  - Stills come off the video at the stream's native size (videoWidth x
+ *    videoHeight), not the on-screen size.
+ *  - A stream that ends on its own (M50 auto power-off, a bumped cable) shows
+ *    "Camera disconnected - reconnecting" and is retried every 2 s.
  */
-
-/**
- * One permission probe for the whole page. Two Camera instances probing at
- * once (the angle picker starts one per angle) both open the default camera,
- * and on Windows that second open fails: "Hardware MFT failed to start
- * streaming due to lack of hardware resources".
- */
-let probing = null;
-async function probeOnce() {
-  probing ||= navigator.mediaDevices.getUserMedia({ video: true })
-    .then(s => s.getTracks().forEach(t => t.stop()), () => {})
-    .finally(() => { probing = null; });
-  return probing;
-}
 
 /**
  * Everything the cameras do, timestamped, for the operator panel's "Copy
@@ -43,299 +41,330 @@ export function clog(msg) {
   console.log(`[camera] ${msg}`);
 }
 
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
 // Chromium's names for "the device exists but won't open" — almost always
 // another app (or another stream in this one) already holding it.
 const BUSY = ['NotReadableError', 'AbortError', 'TrackStartError'];
 
-// Capture cards first. 'EOS Webcam' (Canon's EOS Webcam Utility, camera over USB) is last:
-// once installed it lists a virtual camera even with nothing on USB, and would win with a blank picture.
-const DEFAULT_PREFERRED = ['Cam Link', 'Elgato', 'HDMI', 'USB Video', 'USB3', 'UVC', 'Capture', 'EOS Webcam'];
+export const ROLES = ['standard', 'wide'];
+
+/* ------------------------------------------------------------ config */
+
+const DEFAULTS = {
+  standard: {
+    label: 'Standard', name: 'Standard camera (Brio)',
+    labelMatch: ['Logitech BRIO', 'BRIO'], mirrorPreview: true,
+  },
+  wide: {
+    label: 'High Angle', name: '0.5 camera (Canon M50)', mode: 'hdmi',
+    labelMatch: { usb: ['EOS Webcam Utility'], hdmi: ['Cam Link', 'USB Video', 'USB3.0 Video', 'Capture'] },
+    mirrorPreview: false,
+  },
+};
+
+/** One role's settings from booth.config.json's cameras block, defaults filled in. */
+export function roleConfig(appCfg, role) {
+  const c = { ...DEFAULTS[role], ...(appCfg?.cameras?.[role] || {}) };
+  const lm = c.labelMatch;
+  const match = (Array.isArray(lm) ? lm : lm?.[c.mode] || []).filter(Boolean);
+  return {
+    role,
+    ...c,
+    match,
+    exclude: appCfg?.camera?.excludeLabels || [],
+    width: c.width || 1920,
+    height: c.height || 1080,
+    frameRate: c.frameRate || 30,
+    mirrorPreview: c.mirrorPreview ?? role === 'standard',
+    settleMs: appCfg?.camera?.settleMs ?? 300,
+  };
+}
+
+/** The roles turned on in the config (enabled: false hides one), for the angle picker. */
+export function cameraRoles(appCfg) {
+  return ROLES.filter(r => appCfg?.cameras?.[r] && appCfg.cameras[r].enabled !== false).map(r => ({ id: r, ...roleConfig(appCfg, r) }));
+}
+
+/**
+ * Which device is this role's camera? Only devices whose label matches the
+ * role's labelMatch are candidates. Among those: the saved deviceId, then
+ * the saved label, then the first labelMatch entry that matches (in order).
+ * null when none matches: the caller shows "... not found".
+ * @param {MediaDeviceInfo[]} devices
+ * @param {ReturnType<typeof roleConfig>} rc
+ * @param {string[]} [taken] deviceIds already matched to the other role
+ */
+export function matchDevice(devices, rc, taken = []) {
+  const lower = s => String(s || '').toLowerCase();
+  const rank = d => rc.match.findIndex(m => lower(d.label).includes(lower(m)));
+  const candidates = devices.filter(d => d.kind === 'videoinput' && d.label &&
+    !taken.includes(d.deviceId) &&
+    !rc.exclude.some(x => lower(d.label).includes(lower(x))) &&
+    rank(d) !== -1);
+  if (!candidates.length) return null;
+  const byId = rc.deviceId && candidates.find(d => d.deviceId === rc.deviceId);
+  if (byId) return { device: byId, how: 'saved deviceId' };
+  const byLabel = rc.deviceLabel && candidates.find(d => d.label === rc.deviceLabel);
+  if (byLabel) return { device: byLabel, how: 'saved label' };
+  const best = [...candidates].sort((a, b) => rank(a) - rank(b))[0];
+  return { device: best, how: `label match "${rc.match[rank(best)]}"` };
+}
+
+/* ----------------------------------------------------------- devices */
+
+let permission = null;
+
+/**
+ * Labels come back empty until this page has been granted camera access
+ * once. So: ask for any camera, close it straight away, then enumerate.
+ * Skipped while a camera is already open (the grant exists, and opening the
+ * default camera again would disturb the one streaming).
+ */
+async function requestPermission() {
+  if (activeCamera?.stream) return;
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    s.getTracks().forEach(t => t.stop());
+  } catch (e) {
+    clog(`camera permission request: ${e.name}: ${e.message}`);
+  }
+}
+
+/** Every video input, with labels. */
+export async function listVideoDevices() {
+  if (!navigator.mediaDevices?.getUserMedia || !navigator.mediaDevices?.enumerateDevices) {
+    throw new Error('Camera access is unavailable in this window. Open the booth from Electron or a local web server.');
+  }
+  await (permission ||= requestPermission());
+  const video = async () => (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+  let devices = await video();
+  if (devices.length && devices.some(d => !d.label)) {
+    // Permission was lost (or never granted): ask again, once.
+    await requestPermission();
+    devices = await video();
+  }
+  clog(`devices: ${devices.map(d => `"${d.label || '?'}"`).join(', ') || 'none'}`);
+  return devices;
+}
+
+/** Each role's matched device (or null), for the angle picker and diagnostics. */
+export async function matchRoles(appCfg, devices = null) {
+  devices ||= await listVideoDevices();
+  const out = {};
+  const taken = [];
+  for (const r of cameraRoles(appCfg)) {
+    const m = matchDevice(devices, r, taken);
+    if (m) taken.push(m.device.deviceId);
+    out[r.id] = m;
+  }
+  return { devices, matches: out };
+}
+
+/* ------------------------------------------------------------ stream */
+
+/** The one camera with a stream open. */
+let activeCamera = null;
 
 export class Camera {
-  constructor(config = {}) {
-    this.cfg = {
-      preferredLabels: config.preferredLabels || DEFAULT_PREFERRED,
-      excludeLabels: config.excludeLabels || [],
-      constraints: config.constraints || { width: 1920, height: 1080, frameRate: 30 },
-      mirrorPreview: config.mirrorPreview !== false,
-      warmupMs: config.warmupMs ?? 800,
-      watchdog: config.watchdog !== false,
-      obsGate: config.obsGate !== false,
-    };
+  /**
+   * @param {object} appCfg  the whole booth config
+   * @param {'standard'|'wide'} role
+   */
+  constructor(appCfg, role = 'standard', { remember } = {}) {
+    this.role = role;
+    this.rc = roleConfig(appCfg, role);
+    this.base = appCfg?.camera || {};
+    this.remember = remember || ((r, d) => globalThis.window?.booth?.cameras?.remember?.(r, d));
     this.stream = null;
     this.deviceId = null;
+    this.label = null;
     this.devices = [];
     this.video = null;
+    this.ready = false;
+    this.settings = null;
     this.onStatus = () => {};
     this._lost = false;
+    this._wanted = false;
   }
 
+  get name() { return this.rc.name; }
+
   _status(st) {
-    clog(`${st.level}: ${st.message}`);
+    clog(`${this.role} ${st.level}: ${st.message}`);
     this.onStatus(st);
   }
 
-  /* ------------------------------------------------------------ devices */
-
-  /**
-   * Enumerating before permission returns devices with blank labels, which
-   * makes label matching impossible. Only then: take any camera, throw it
-   * away, and enumerate again. Electron grants permission up front, so the
-   * kiosk normally never opens a camera just to read its name.
-   */
-  async listDevices() {
-    if (!navigator.mediaDevices?.getUserMedia || !navigator.mediaDevices?.enumerateDevices) {
-      throw new Error('Camera access is unavailable in this window. Open the booth from Electron or a local web server.');
-    }
-    const video = async () => (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
-    let devices = await video();
-    if (!devices.length || devices.some(d => !d.label)) {
-      await probeOnce();
-      devices = await video();
-    }
-    this.devices = devices;
-    // OBS's Virtual Camera exists as a device even when OBS is closed, and
-    // then shows only a placeholder. Only let it be picked while OBS runs.
-    const holders = await globalThis.window?.booth?.app?.cameraHolders?.().catch(() => null);
-    this._obsRunning = Array.isArray(holders) && holders.includes('OBS Studio');
-    clog(`devices: ${devices.map(d => `"${d.label || '?'}"`).join(', ') || 'none'}${this._obsRunning ? ' (OBS running)' : ''}`);
-    return this.devices;
-  }
-
-  /** Higher score = more likely to be the HDMI capture card. */
-  score(device) {
-    const label = (device.label || '').toLowerCase();
-    if (this.cfg.excludeLabels.some(x => label.includes(x.toLowerCase()))) return -1000;
-    if (this.cfg.obsGate && label.includes('obs virtual camera') && !this._obsRunning) return -1000;
-    const idx = this.cfg.preferredLabels.findIndex(x => label.includes(x.toLowerCase()));
-    return idx === -1 ? 0 : 1000 - idx;
-  }
-
-  /** strict: return null instead of falling back to a camera that matches no preferred label. */
-  async pickDevice(explicitId = null, { strict = false } = {}) {
-    if (!this.devices.length) await this.listDevices();
-    if (explicitId && this.devices.some(d => d.deviceId === explicitId)) return explicitId;
-    const ranked = [...this.devices].sort((a, b) => this.score(b) - this.score(a));
-    const best = ranked[0];
-    if (strict) return best && this.score(best) > 0 ? best.deviceId : null;
-    if (!best) {
-      // The on-screen toast is brief and customer-facing — the operator
-      // checking this needs the actual troubleshooting steps, which belong
-      // in the console, not a 4-second banner.
-      console.error(
-        '[camera] No video input devices found. Check: the capture card/camera is ' +
-        'plugged in; on Windows, Settings > Privacy & security > Camera has camera ' +
-        'access AND "Let desktop apps access your camera" both turned on (Chromium ' +
-        'can enumerate zero devices with either off, even with hardware connected); ' +
-        'and no other app (OBS, Windows Camera, a leftover previous run of this app) ' +
-        'already has the capture card open — most HDMI capture dongles only allow one ' +
-        'app at a time.'
-      );
-      throw new Error('No video input devices found. Is the capture card plugged in? (See console for more.)');
-    }
-    if (this.score(best) <= 0) {
-      this._status({
-        level: 'warn',
-        message: `No HDMI capture device matched. Falling back to "${best.label || 'unnamed camera'}". ` +
-                 `Add part of its name to camera.preferredLabels in booth.config.json.`,
-      });
-    }
-    return best.deviceId;
-  }
-
-  /* ------------------------------------------------------------- stream */
-
-  async start(videoEl, explicitId = null) {
+  /** Finds this role's camera and opens it. Throws "<name> not found" when it isn't plugged in. */
+  async start(videoEl) {
     this.video = videoEl;
-    let useGenericStream = false;
-    try {
-      this.deviceId = await this.pickDevice(explicitId);
-    } catch (error) {
-      // Some Chromium kiosk builds can open a camera but hide its device list
-      // until permission has settled. Let getUserMedia choose that camera.
-      if (!/No video input devices found/.test(error.message)) throw error;
-      useGenericStream = true;
-      this.deviceId = null;
+    this._wanted = true;
+    this.devices = await listVideoDevices();
+    const m = matchDevice(this.devices, this.rc);
+    if (!m) {
+      const e = new Error(`${this.rc.name} not found`);
+      e.code = 'CAMERA_NOT_FOUND';
+      clog(`${this.role}: no device label matches ${JSON.stringify(this.rc.match)}${this.rc.deviceLabel ? ` (saved: "${this.rc.deviceLabel}")` : ''}`);
+      this._status({ level: 'error', message: e.message });
+      throw e;
     }
-    const c = this.cfg.constraints;
+    clog(`${this.role}: "${m.device.label}" (by ${m.how})`);
+    if (m.device.deviceId !== this.rc.deviceId || m.device.label !== this.rc.deviceLabel) {
+      this.rc.deviceId = m.device.deviceId;
+      this.rc.deviceLabel = m.device.label;
+      await Promise.resolve(this.remember(this.role, { deviceId: m.device.deviceId, label: m.device.label })).catch(() => {});
+    }
+    return this._open(m.device);
+  }
 
-    // Ask for the exact device but only *ideal* geometry: a capture card that
-    // can't do 1080p60 should downgrade, not fail outright.
+  async _open(device) {
+    // One stream at a time: every track of the other camera stops first.
+    if (activeCamera && activeCamera !== this) activeCamera.stop();
+    this._release();
+    activeCamera = this;
+    const rc = this.rc;
     const constraints = {
       audio: false,
       video: {
-        ...(useGenericStream ? {} : { deviceId: { exact: this.deviceId } }),
-        width: { ideal: c.width },
-        height: { ideal: c.height },
-        frameRate: { ideal: c.frameRate },
-        resizeMode: 'none',
+        deviceId: { exact: device.deviceId },
+        // ideal, not exact: EOS Webcam Utility often gives less than 1080p, and
+        // that's fine — take what it returns and log it.
+        width: { ideal: rc.width },
+        height: { ideal: rc.height },
+        frameRate: { ideal: rc.frameRate },
       },
     };
-
-    this._release();
-    this._wanted = true;
-    const picked = this.devices.find(d => d.deviceId === this.deviceId);
-    clog(`open "${picked?.label || (useGenericStream ? 'default camera' : this.deviceId)}" asking ${c.width}x${c.height}@${c.frameRate}`);
+    clog(`${this.role}: open "${device.label}" asking ${rc.width}x${rc.height}@${rc.frameRate}`);
     try {
       this.stream = await openWithRetry(constraints);
     } catch (error) {
+      if (activeCamera === this) activeCamera = null;
       if (BUSY.includes(error.name)) {
-        // Name the program holding it, if it's one we know (Windows).
-        let holders = await globalThis.window?.booth?.app?.cameraHolders?.().catch(() => []) || [];
-        // Opening OBS's own Virtual Camera: OBS running is the point, not the culprit.
-        if (/obs virtual camera/i.test(picked?.label || '')) holders = holders.filter(h => h !== 'OBS Studio');
-        console.error(
-          `[camera] Can't open the camera (${error.name}: ${error.message}). ` +
-          (holders.length ? `Running now and able to hold it: ${holders.join(', ')}. ` : '') +
-          'Only one program can use a camera or capture card at a time: fully quit OBS (system ' +
-          'tray → Exit), Lumabooth, the Windows Camera app, Zoom/Teams and EOS Webcam Utility, ' +
-          'and check Task Manager for a leftover HoloBooth/Electron window. Then restart this app.'
-        );
+        const holders = await globalThis.window?.booth?.app?.cameraHolders?.().catch(() => []) || [];
         throw new Error(holders.length
-          ? `Camera is busy — close ${holders.join(', ')}`
-          : 'Camera is busy — another program has it open (see console)');
+          ? `${rc.name} is busy — close ${holders.join(', ')}`
+          : `${rc.name} is busy — another program has it open (quit Canon EOS Utility, OBS, Zoom/Teams, the Camera app)`);
       }
-      // A stale deviceId is common after a capture card reconnects. Retry once
-      // without pinning the request to the old device.
-      if (!useGenericStream && ['NotFoundError', 'OverconstrainedError'].includes(error.name)) {
-        this.deviceId = null;
-        this.stream = await navigator.mediaDevices.getUserMedia({
-          audio: false,
-          video: { width: { ideal: c.width }, height: { ideal: c.height }, frameRate: { ideal: c.frameRate } },
-        });
-      } else {
-        throw error;
+      if (['NotFoundError', 'OverconstrainedError'].includes(error.name)) {
+        const e = new Error(`${rc.name} not found`);
+        e.code = 'CAMERA_NOT_FOUND';
+        throw e;
       }
+      throw error;
     }
-    await this.attach(videoEl);
+    this.deviceId = device.deviceId;
+    this.label = device.label;
 
     const track = this.stream.getVideoTracks()[0];
     this._lost = false;
-    this._label = track.label;
-    track.addEventListener('mute', () => clog(`track muted (no frames from "${track.label}")`));
-    track.addEventListener('unmute', () => clog(`track unmuted ("${track.label}")`));
+    track.addEventListener('mute', () => clog(`${this.role}: track muted (no frames from "${track.label}")`));
+    track.addEventListener('unmute', () => clog(`${this.role}: track unmuted`));
     track.addEventListener('ended', () => {
-      clog(`track ended by the device ("${track.label}")`);
+      clog(`${this.role}: track ended by the device ("${track.label}")`);
       if (this.stream?.getVideoTracks()[0] !== track) return; // already replaced
       this._lost = true;
-      this._status({ level: 'warn', message: 'Camera signal dropped — reconnecting…' });
+      this.ready = false;
+      this._status({ level: 'warn', message: 'Camera disconnected - reconnecting' });
       this._reconnect();
     });
 
-    // Capture cards often output black for the first few frames while they
-    // lock onto the HDMI signal. Waiting beats printing a black card.
-    await new Promise(r => setTimeout(r, this.cfg.warmupMs));
-
-    const s = track.getSettings();
-    this._status({
-      level: 'ok',
-      message: `${track.label} — ${s.width}x${s.height} @ ${Math.round(s.frameRate || 0)}fps`,
-      settings: s,
-    });
+    if (this.video) await this.attach(this.video);
+    const s = this.settings = track.getSettings();
+    clog(`${this.role}: "${track.label}" asked ${rc.width}x${rc.height}@${rc.frameRate}, got ${s.width}x${s.height}@${Math.round(s.frameRate || 0)} (video element ${this.video?.videoWidth}x${this.video?.videoHeight})`);
+    this._status({ level: 'ok', message: `${track.label} — ${s.width}x${s.height} @ ${Math.round(s.frameRate || 0)}fps`, settings: s });
     return s;
   }
 
   /**
-   * Shows the already-open stream in another <video>. Used to carry the
-   * angle picker's live preview straight into the shoot: closing a camera
-   * and reopening it a moment later is exactly when Windows reports it busy.
+   * Shows the open stream in a <video>, mirrored for the Brio only, and
+   * resolves once it's playing plus settleMs (capture is allowed after that).
    */
   async attach(videoEl) {
     this.video = videoEl;
+    this.ready = false;
     videoEl.srcObject = this.stream;
     videoEl.muted = true;
     videoEl.playsInline = true;
-    videoEl.style.transform = this.cfg.mirrorPreview ? 'scaleX(-1)' : 'none';
-    await videoEl.play().catch(() => {});
+    videoEl.style.transform = this.rc?.mirrorPreview ? 'scaleX(-1)' : 'none';
+    const playing = new Promise(res => {
+      if (!videoEl.paused && videoEl.readyState >= 3) return res(true);
+      videoEl.addEventListener('playing', () => res(true), { once: true });
+    });
+    videoEl.play().catch(() => {});
+    const ok = await Promise.race([playing, sleep(10000).then(() => false)]);
+    if (!ok) clog(`warn: ${this.role}: video never fired 'playing' in 10 s`);
+    await sleep(this.rc?.settleMs ?? 300);
+    this.ready = ok && !!videoEl.videoWidth;
     this._watch?.();
   }
 
   /**
    * Some capture cards stall instead of disconnecting: the track stays
-   * "live", no 'ended' fires, and the picture just freezes. Count frames
-   * actually presented and reconnect if none arrive for 4 s while the
-   * preview is on screen (hidden <video>s legitimately get no frames).
+   * "live", no 'ended' fires, and the picture just freezes. Reconnect if no
+   * new frame is decoded for 4 s while the preview is on screen.
    */
   _watch() {
     clearInterval(this._watchdog);
     const v = this.video;
-    if (!v?.requestVideoFrameCallback || !this.cfg.watchdog) return;
-    let last = performance.now();
-    const tick = () => { last = performance.now(); if (this.video === v && this._wanted) v.requestVideoFrameCallback(tick); };
-    v.requestVideoFrameCallback(tick);
-    // A second, independent frame counter. Only when BOTH say no new frames
-    // is it a real freeze — one quiet signal alone (a window behind DevTools,
-    // a driver quirk) mustn't make the booth drop a working camera.
-    const decoded = () => v.getVideoPlaybackQuality?.().totalVideoFrames ?? null;
-    let lastDecoded = decoded(), decodedAt = performance.now();
+    if (!v?.getVideoPlaybackQuality || this.base.watchdog === false) return;
+    let lastCount = v.getVideoPlaybackQuality().totalVideoFrames, at = performance.now();
     this._watchdog = setInterval(() => {
       if (!this._wanted || this.video !== v) return clearInterval(this._watchdog);
       if (this._reconnecting) return;
       const now = performance.now();
-      const d = decoded();
-      if (d !== lastDecoded) { lastDecoded = d; decodedAt = now; }
-      if (document.hidden || !v.isConnected || !v.getClientRects().length) { last = decodedAt = now; return; }
-      const quietFor = Math.min(now - last, d === null ? Infinity : now - decodedAt);
-      if (quietFor > 4000) {
-        clog(`picture froze — no new frames for ${(quietFor / 1000).toFixed(1)}s ` +
-          `(painted ${((now - last) / 1000).toFixed(1)}s ago, decoded count ${d} unchanged ${d === null ? 'n/a' : ((now - decodedAt) / 1000).toFixed(1) + 's'}, ` +
-          `track ${this.stream?.getVideoTracks()[0]?.readyState}, muted ${this.stream?.getVideoTracks()[0]?.muted}) — reconnecting`);
+      const n = v.getVideoPlaybackQuality().totalVideoFrames;
+      if (n !== lastCount || document.hidden || !v.isConnected || !v.getClientRects().length) { lastCount = n; at = now; return; }
+      if (now - at > 4000) {
+        clog(`${this.role}: picture froze — no new frames for ${((now - at) / 1000).toFixed(1)}s — reconnecting`);
         this._lost = true;
-        this._status({ level: 'warn', message: 'Camera picture froze — reconnecting…' });
+        this.ready = false;
+        this._status({ level: 'warn', message: 'Camera disconnected - reconnecting' });
         this._release();
         this._reconnect();
       }
     }, 1000);
   }
 
-  /**
-   * Cheap HDMI capture cards drop off the USB bus for a moment whenever the
-   * camera's HDMI signal changes (the M50 dimming its screen, a mode change,
-   * a loose micro-HDMI plug). The card comes back a second later, often with
-   * a new deviceId, so reopen by label instead of just reporting it dead.
-   * Only the same device: while the card is gone, the next camera on the
-   * list is often EOS Webcam Utility's virtual camera, which is blank.
-   */
+  /** Every 2 s until the camera is back (by saved deviceId, then label) or stop() is called. */
   async _reconnect() {
     if (this._reconnecting) return;
     this._reconnecting = true;
-    const want = this._label;
     try {
-      for (let i = 0; i < 30 && this._wanted; i++) {
-        await sleep(1000);
-        if (!this._wanted || !this.video) return; // stopped on purpose meanwhile
+      for (let i = 1; this._wanted; i++) {
+        await sleep(2000);
+        if (!this._wanted) return;
         try {
-          this.devices = [];
-          const same = (await this.listDevices()).find(d => d.label === want);
-          if (!same) continue;
-          await this.start(this.video, same.deviceId);
-          clog(`reconnected after ${i + 1} attempt(s)`);
+          const m = matchDevice(await listVideoDevices(), this.rc);
+          if (!m) { if (i % 5 === 1) this._status({ level: 'warn', message: 'Camera disconnected - reconnecting' }); continue; }
+          await this._open(m.device);
+          clog(`${this.role}: reconnected after ${i} attempt(s)`);
           return;
-        } catch { /* still re-locking onto the signal */ }
+        } catch (e) { clog(`${this.role}: reconnect attempt ${i}: ${e.message}`); }
       }
-      if (this._wanted) this._status({ level: 'error', message: 'Camera signal lost. Check the HDMI cable, and that the camera is on with auto power off and eco mode disabled.' });
     } finally {
       this._reconnecting = false;
     }
   }
 
-  /** Waits (briefly) for a live picture — e.g. while a dropped capture card reconnects. */
-  async waitLive(ms = 10000) {
+  /** Waits (briefly) until a capture is allowed — e.g. while a dropped camera reconnects. */
+  async waitReady(ms = 10000) {
     const t0 = Date.now();
-    while (!(this.isLive && this.video?.videoWidth) && Date.now() - t0 < ms) await sleep(100);
-    return this.isLive;
+    while (!(this.isLive && this.ready) && Date.now() - t0 < ms) await sleep(100);
+    return this.isLive && this.ready;
   }
 
   _release() {
+    clearInterval(this._watchdog);
     this.stream?.getTracks().forEach(t => t.stop());
     this.stream = null;
+    this.ready = false;
   }
 
   stop() {
-    if (this.stream) clog(`stop (app closed "${this._label}")`);
+    if (this.stream) clog(`${this.role}: stop "${this.label}"`);
     this._wanted = false;
-    clearInterval(this._watchdog);
     this._release();
+    if (activeCamera === this) activeCamera = null;
   }
 
   get isLive() {
@@ -343,30 +372,25 @@ export class Camera {
   }
 
   get resolution() {
-    const s = this.stream?.getVideoTracks()[0]?.getSettings();
-    return s ? { width: s.width, height: s.height } : { width: 0, height: 0 };
+    return { width: this.video?.videoWidth || 0, height: this.video?.videoHeight || 0 };
   }
 
   /* ------------------------------------------------------------ capture */
 
   /**
-   * Grab one full-resolution frame. Un-mirrors, because the preview is
-   * mirrored for the customer's benefit but the print should read correctly
-   * (otherwise every T-shirt slogan comes out backwards).
+   * One frame at the stream's native resolution. Never mirrored: the preview
+   * is mirrored for the customer, the print must read the right way round.
    */
-  grab({ mirror = null } = {}) {
-    if (!this.video || !this.video.videoWidth) throw new Error('Camera not ready');
+  grab() {
+    if (!this.video?.videoWidth) throw new Error('Camera not ready');
     const w = this.video.videoWidth, h = this.video.videoHeight;
     const canvas = document.createElement('canvas');
     canvas.width = w; canvas.height = h;
-    const ctx = canvas.getContext('2d');
-    const flip = mirror === null ? false : mirror;
-    if (flip) { ctx.translate(w, 0); ctx.scale(-1, 1); }
-    ctx.drawImage(this.video, 0, 0, w, h);
+    canvas.getContext('2d').drawImage(this.video, 0, 0, w, h);
     return canvas;
   }
 
-  /** Burst of frames for the GIF / boomerang, at native resolution / 2. */
+  /** Burst of frames for the GIF / boomerang, at native resolution x scale. */
   async burst({ frames = 12, intervalMs = 90, scale = 0.5 } = {}) {
     const out = [];
     const w = Math.round(this.video.videoWidth * scale);
@@ -376,27 +400,15 @@ export class Camera {
       c.width = w; c.height = h;
       c.getContext('2d').drawImage(this.video, 0, 0, w, h);
       out.push(c);
-      if (i < frames - 1) await new Promise(r => setTimeout(r, intervalMs));
+      if (i < frames - 1) await sleep(intervalMs);
     }
     return out;
   }
+}
 
-  /**
-   * Centre-crop a landscape 16:9 frame to the card's portrait window.
-   * Doing this at capture time (not render time) keeps the print master
-   * pixel-for-pixel — no double resampling.
-   */
-  static cropToAspect(source, aspect = 2.5 / 3.5, focal = { x: 0.5, y: 0.42 }) {
-    const sw = source.width, sh = source.height;
-    let cw = sw, ch = sw / aspect;
-    if (ch > sh) { ch = sh; cw = sh * aspect; }
-    const sx = Math.max(0, Math.min(sw - cw, (sw - cw) * focal.x));
-    const sy = Math.max(0, Math.min(sh - ch, (sh - ch) * focal.y));
-    const out = document.createElement('canvas');
-    out.width = Math.round(cw); out.height = Math.round(ch);
-    out.getContext('2d').drawImage(source, sx, sy, cw, ch, 0, 0, out.width, out.height);
-    return out;
-  }
+/** Stops whichever camera is streaming (leaving a screen, diagnostics). */
+export function stopActiveCamera() {
+  activeCamera?.stop();
 }
 
 /**
@@ -479,7 +491,6 @@ async function openWithRetry(constraints, tries = 4) {
 
 /* ================================================================ stills */
 
-const sleep = ms => new Promise(r => setTimeout(r, ms));
 const jpegBlob = b64 => new Blob([Uint8Array.from(atob(b64), ch => ch.charCodeAt(0))], { type: 'image/jpeg' });
 
 /**
@@ -498,16 +509,16 @@ const jpegBlob = b64 => new Blob([Uint8Array.from(atob(b64), ch => ch.charCodeAt
  * still takes the photos over USB.
  */
 export class StillsCamera {
-  constructor(config = {}, api = globalThis.window?.booth?.stills) {
-    const st = config.stills || {};
+  constructor(appCfg = {}, role = 'standard', api = globalThis.window?.booth?.stills) {
+    const st = appCfg.camera?.stills || {};
     this.api = api;
+    this.role = role;
+    this.rc = roleConfig(appCfg, role);
     this.cfg = {
-      mirrorPreview: config.mirrorPreview !== false,
       fps: st.liveviewFps || 12,
       maxDimension: st.maxDimension || 3000,
-      warmupMs: config.warmupMs ?? 800,
     };
-    this.previewCam = st.preview === 'video' ? new Camera(config) : null;
+    this.previewCam = st.preview === 'video' ? new Camera(appCfg, role) : null;
     this.stills = true;
     this.devices = [];
     this.video = null;
@@ -553,6 +564,7 @@ export class StillsCamera {
       await sleep(100);
     }
     // Created after the first frame, so the stream starts at the live view's real size.
+    if (activeCamera && activeCamera !== this) activeCamera.stop();
     this.stream = this.canvas.captureStream(this.cfg.fps);
     await this.attach(videoEl);
     this._status({ level: 'ok', message: `${st.message} — live view ${this.canvas.width}x${this.canvas.height}, photos at full resolution with flash` });
@@ -651,327 +663,3 @@ export class StillsCamera {
   }
 }
 
-/* ============================================================ OBS split */
-
-/**
- * Two cameras through ONE device. OBS holds both capture cards and puts them
- * side by side in a single scene (3840x1080: camera 1 left, camera 2 right);
- * OBS Virtual Camera sends that one picture. Opening two capture cards at
- * once is exactly what failed on the booth PC (the second open killed the
- * first), and OBS Virtual Camera can only output one scene — so: one stream,
- * cut into regions here.
- *
- * ObsSplitSource opens OBS Virtual Camera once and is shared (ref-counted);
- * each SplitCamera shows one region in its own <video>, with the same surface
- * as Camera, so the angle picker, the shoot and the GIF work unchanged.
- */
-export class ObsSplitSource {
-  constructor(config = {}) {
-    const sp = config.obsSplit || {};
-    this.layout = sp.layout === 'stacked' ? 'stacked' : 'side-by-side';
-    this.regions = sp.regions || 2;
-    this.cam = new Camera({
-      ...config,
-      preferredLabels: [sp.deviceLabel || 'OBS Virtual Camera'],
-      excludeLabels: [],
-      constraints: {
-        width: sp.width || (this.layout === 'stacked' ? 1920 : 1920 * this.regions),
-        height: sp.height || (this.layout === 'stacked' ? 1080 * this.regions : 1080),
-        frameRate: sp.frameRate || 30,
-      },
-      // The source <video> is off-screen, so the on-screen freeze check doesn't apply;
-      // a dropped device still reconnects through the track's 'ended' event.
-      watchdog: false,
-      // Don't rely on spotting OBS in the process list (it can miss); the
-      // live-picture check after opening is what tells a real feed from
-      // the placeholder OBS shows when it's closed or not started.
-      obsGate: false,
-    });
-    this.cam.onStatus = st => this.onStatus?.(st);
-    this.users = 0;
-    this._opening = null;
-  }
-
-  get video() { return this.cam.video; }
-  // Only once opened AND checked live — not while the check is still running.
-  get isLive() { return this._ready && this.cam.isLive && !!this.cam.video?.videoWidth; }
-
-  /**
-   * A real camera feed always changes from frame to frame (sensor noise if
-   * nothing else); the placeholder OBS's virtual camera shows while OBS is
-   * closed or the virtual camera is stopped never does. Samples for ~1.5 s.
-   */
-  async _isLive() {
-    const v = this.cam.video;
-    const c = document.createElement('canvas');
-    c.width = 320; c.height = 90;
-    const ctx = c.getContext('2d', { willReadFrequently: true });
-    const sample = () => { ctx.drawImage(v, 0, 0, c.width, c.height); return ctx.getImageData(0, 0, c.width, c.height).data; };
-    const first = sample();
-    for (let i = 0; i < 5; i++) {
-      await new Promise(r => setTimeout(r, 300));
-      const next = sample();
-      for (let j = 0; j < first.length; j += 4) if (first[j] !== next[j] || first[j + 1] !== next[j + 1] || first[j + 2] !== next[j + 2]) return true;
-    }
-    clog('warn: OBS Virtual Camera picture is completely still (OBS closed, or Start Virtual Camera not clicked)');
-    return false;
-  }
-
-  /**
-   * The rectangle of the source frame that region i occupies: where the
-   * camera's picture actually is inside its slot (found by _detect), so a
-   * camera placed a little off in OBS still comes out centered and without
-   * black bars. Falls back to the plain slot until something is detected.
-   */
-  rect(i) {
-    return this.boxes?.[this.single ? 0 : i] || this.slot(i);
-  }
-
-  /** The nominal slot for region i: half the picture (or all of it for one camera). */
-  slot(i) {
-    const v = this.cam.video, W = v.videoWidth, H = v.videoHeight, n = this.regions;
-    // OBS sending one ordinary camera picture: never cut it in pieces.
-    if (this.single) return { sx: 0, sy: 0, sw: W, sh: H };
-    return this.layout === 'stacked'
-      ? { sx: 0, sy: Math.round(i * H / n), sw: W, sh: Math.round(H / n) }
-      : { sx: Math.round(i * W / n), sy: 0, sw: Math.round(W / n), sh: H };
-  }
-
-  async acquire() {
-    this.users++;
-    if (this.isLive) return;
-    try {
-      await (this._opening ||= this._open().finally(() => { this._opening = null; }));
-    } catch (e) {
-      this.users--;
-      throw e;
-    }
-  }
-
-  async _open() {
-    const id = await this.cam.pickDevice(null, { strict: true }).catch(() => null);
-    if (!id) {
-      this.cam.devices = [];
-      throw new Error('OBS Virtual Camera not available — start OBS and click Start Virtual Camera');
-    }
-    let v = this._el;
-    if (!v) {
-      v = this._el = document.createElement('video');
-      v.muted = true; v.playsInline = true; v.autoplay = true;
-      // Off-screen but in the page, so Chromium keeps decoding it.
-      v.style.cssText = 'position:fixed;left:-10000px;top:0;width:64px;height:36px;pointer-events:none';
-      document.body.appendChild(v);
-    }
-    const st = await this.cam.start(v, id);
-    if (!(await this._isLive())) {
-      this.cam.stop();
-      throw new Error('OBS Virtual Camera has no live picture — open OBS and click Start Virtual Camera');
-    }
-    const ratio = st.width / st.height;
-    const want = this.layout === 'stacked' ? 16 / 9 / this.regions : 16 / 9 * this.regions;
-    // An ordinary ~16:9 picture means OBS is sending ONE camera (a single
-    // camera's scene, or a 1920x1080 canvas), not the side-by-side scene.
-    this.single = Math.abs(ratio - 16 / 9) / (16 / 9) < 0.2;
-    this.problem = this.single
-      ? `OBS is sending one camera (${st.width}x${st.height}), not both side by side. In OBS: Settings → Video → 3840x1080, ` +
-        'make one scene with both cameras next to each other, select it, then Stop and Start Virtual Camera.'
-      : Math.abs(ratio - want) / want > 0.15
-        ? `OBS is sending ${st.width}x${st.height}, expected ${this.layout === 'stacked' ? '1920x2160' : '3840x1080'} — the cameras will look squeezed. Check OBS Settings → Video.`
-        : null;
-    clog(`obs split: source ${st.width}x${st.height}, ${this.single ? 'ONE camera (not split)' : `${this.layout}, ${this.regions} slots of ${this.slot(0).sw}x${this.slot(0).sh}`}`);
-    if (this.problem) clog(`warn: ${this.problem}`);
-    this.boxes = null;
-    await this._detectSettled();
-    this._ready = true;
-  }
-
-  /**
-   * Finds each camera's picture inside its slot: the bounding box of rows and
-   * columns that aren't OBS's empty black canvas. A camera image is never
-   * pure black edge to edge, an empty OBS canvas is, so this is reliable
-   * with a tiny threshold. A slot with no picture is reported as empty.
-   */
-  _detect() {
-    const v = this.cam.video;
-    if (!v?.videoWidth) return false;
-    const W = v.videoWidth, H = v.videoHeight, k = Math.max(1, Math.round(W / 640));
-    const w = Math.round(W / k), h = Math.round(H / k);
-    const c = (this._probe ||= document.createElement('canvas'));
-    c.width = w; c.height = h;
-    const ctx = c.getContext('2d', { willReadFrequently: true });
-    ctx.drawImage(v, 0, 0, w, h);
-    const px = ctx.getImageData(0, 0, w, h).data;
-    // OBS's empty canvas is exact black; anything above ~4/255 is picture
-    // (a black backdrop still has some light on it).
-    const lit = (x, y) => { const o = (y * w + x) * 4; return px[o] + px[o + 1] + px[o + 2] > 12; };
-    const n = this.single ? 1 : this.regions;
-    const boxes = [], empty = [];
-    for (let i = 0; i < n; i++) {
-      const s = this.slot(i);
-      const x0 = Math.floor(s.sx / k), x1 = Math.min(w, Math.ceil((s.sx + s.sw) / k));
-      const y0 = Math.floor(s.sy / k), y1 = Math.min(h, Math.ceil((s.sy + s.sh) / k));
-      const minCol = Math.max(2, (y1 - y0) * 0.02), minRow = Math.max(2, (x1 - x0) * 0.02);
-      const colLit = x => { let c2 = 0; for (let y = y0; y < y1; y++) if (lit(x, y) && ++c2 >= minCol) return true; return false; };
-      const rowLit = y => { let c2 = 0; for (let x = x0; x < x1; x++) if (lit(x, y) && ++c2 >= minRow) return true; return false; };
-      let l = x0, r = x1 - 1, t = y0, b = y1 - 1;
-      while (l <= r && !colLit(l)) l++;
-      while (r >= l && !colLit(r)) r--;
-      while (t <= b && !rowLit(t)) t++;
-      while (b >= t && !rowLit(b)) b--;
-      if (r >= l && b >= t) {
-        // The camera's OWN black bars (a GoPro or M50 sending a 4:3 or
-        // letterboxed picture over HDMI). HDMI black is often 16/255, not 0,
-        // so the pass above keeps them. Bars are flat and dark; they're only
-        // trimmed in matching pairs and when what's left is a normal photo
-        // shape — a dark backdrop at one edge of a real photo is not a bar.
-        const lum = (x, y) => { const o = (y * w + x) * 4; return (px[o] + px[o + 1] + px[o + 2]) / 3; };
-        const flat = vals => { let mn = 255, mx = 0; for (const v of vals) { if (v < mn) mn = v; if (v > mx) mx = v; } return mx < 48 && mx - mn <= 10; };
-        const col = x => { const v = []; for (let y = t; y <= b; y++) v.push(lum(x, y)); return v; };
-        const row = (y, L, R) => { const v = []; for (let x = L; x <= R; x++) v.push(lum(x, y)); return v; };
-        const pair = (a1, a2, span) => Math.abs(a1 - a2) <= Math.max(2, span * 0.03);
-        const shape = (ww, hh) => [16 / 9, 4 / 3, 3 / 2, 1, 3 / 4, 2 / 3, 9 / 16].some(ar => Math.abs(ww / hh - ar) / ar < 0.05);
-        let L = l, R = r;
-        while (L < R && flat(col(L))) L++;
-        while (R > L && flat(col(R))) R--;
-        if ((L > l || R < r) && pair(L - l, r - R, r - l) && shape(R - L + 1, b - t + 1)) { l = L; r = R; }
-        let T = t, B = b;
-        while (T < B && flat(row(T, l, r))) T++;
-        while (B > T && flat(row(B, l, r))) B--;
-        if ((T > t || B < b) && pair(T - t, b - B, b - t) && shape(r - l + 1, B - T + 1)) { t = T; b = B; }
-      }
-      const area = (r - l + 1) * (b - t + 1), slotArea = (x1 - x0) * (y1 - y0);
-      if (r < l || b < t || area < slotArea * 0.05) { empty[i] = true; boxes[i] = null; continue; }
-      const box = { sx: l * k, sy: t * k, sw: Math.min(W - l * k, (r - l + 1) * k), sh: Math.min(H - t * k, (b - t + 1) * k) };
-      // Hysteresis: ignore jitter of a few pixels so the picture doesn't twitch.
-      const old = this.boxes?.[i];
-      boxes[i] = old && ['sx', 'sy', 'sw', 'sh'].every(key => Math.abs(old[key] - box[key]) <= W * 0.01) ? old : box;
-      if (boxes[i] !== old) clog(`obs split: camera ${i + 1} found at ${box.sx},${box.sy} ${box.sw}x${box.sh}`);
-    }
-    this.boxes = boxes;
-    this.empty = empty;
-    return true;
-  }
-
-  /** Detect, retrying briefly: OBS sends black for a moment after the virtual camera starts. */
-  async _detectSettled() {
-    for (let i = 0; i < 6; i++) {
-      this._detect();
-      if (this.empty && !this.empty.some(Boolean)) break;
-      await new Promise(r => setTimeout(r, 400));
-    }
-    (this.empty || []).forEach((e, i) => e && clog(`warn: obs split: no picture in ${this.slotName(i)} of the OBS output`));
-    clearInterval(this._redetect);
-    // Keep following OBS if a source is moved or resized while running.
-    this._redetect = setInterval(() => (this.users ? this._detect() : clearInterval(this._redetect)), 3000);
-  }
-
-  slotName(i) {
-    if (this.single) return 'the picture';
-    if (this.regions === 2) return this.layout === 'stacked' ? ['the top half', 'the bottom half'][i] : ['the left half', 'the right half'][i];
-    return `slot ${i + 1}`;
-  }
-
-  release() {
-    this.users = Math.max(0, this.users - 1);
-    if (!this.users) { clearInterval(this._redetect); this.boxes = null; this._ready = false; this.cam.stop(); }
-  }
-}
-
-export class SplitCamera {
-  constructor(source, region, config = {}) {
-    this.source = source;
-    this.region = region;
-    this.split = true;
-    this.cfg = { mirrorPreview: config.mirrorPreview !== false, warmupMs: config.warmupMs ?? 800, fps: config.obsSplit?.frameRate || 30 };
-    this.devices = [];
-    this.video = null;
-    this.stream = null;
-    this.onStatus = () => {};
-    this._held = false;
-    this._running = false;
-  }
-
-  _status(st) { clog(`${st.level}: ${st.message}`); this.onStatus(st); }
-
-  async start(videoEl) {
-    this.stop();
-    const token = this._token;
-    await this.source.acquire();
-    // stop() was called while OBS was opening (the customer moved on): let go.
-    if (token !== this._token) { this.source.release(); throw new Error('stopped'); }
-    this._held = true;
-    if (this.source.single && this.region > 0) {
-      this.stop();
-      throw new Error(this.source.problem);
-    }
-    if (this.source.empty?.[this.region]) {
-      this.stop();
-      throw new Error(`No picture in ${this.source.slotName(this.region)} of OBS — add this camera to the OBS scene there, then Stop and Start Virtual Camera`);
-    }
-    this.canvas = document.createElement('canvas');
-    this.ctx = this.canvas.getContext('2d');
-    this._running = true;
-    this._drawn = false;
-    this._draw();
-    const t0 = Date.now();
-    while (!this._drawn) {
-      if (Date.now() - t0 > 8000) { this.stop(); throw new Error('No picture from OBS Virtual Camera'); }
-      await new Promise(r => setTimeout(r, 50));
-    }
-    this.stream = this.canvas.captureStream(this.cfg.fps);
-    await this.attach(videoEl);
-    const r = this.source.rect(this.region);
-    this._status(this.source.problem
-      ? { level: 'warn', message: this.source.problem }
-      : { level: 'ok', message: `OBS Virtual Camera — camera ${this.region + 1} (${r.sw}x${r.sh})` });
-    return this.resolution;
-  }
-
-  _draw() {
-    const gen = this._gen = (this._gen || 0) + 1;
-    const step = () => {
-      if (!this._running || gen !== this._gen) return;
-      const v = this.source.video;
-      if (v?.videoWidth) {
-        const { sx, sy, sw, sh } = this.source.rect(this.region);
-        if (this.canvas.width !== sw || this.canvas.height !== sh) { this.canvas.width = sw; this.canvas.height = sh; }
-        this.ctx.drawImage(v, sx, sy, sw, sh, 0, 0, sw, sh);
-        this._drawn = true;
-      }
-      setTimeout(step, 1000 / this.cfg.fps);
-    };
-    step();
-  }
-
-  attach(videoEl) { return Camera.prototype.attach.call(this, videoEl); }
-
-  /** Straight off the region canvas — the newest frame, at full size. */
-  grab({ mirror = false } = {}) {
-    if (!this.canvas?.width || !this.source.isLive) throw new Error('Camera not ready');
-    const c = document.createElement('canvas');
-    c.width = this.canvas.width; c.height = this.canvas.height;
-    const ctx = c.getContext('2d');
-    if (mirror) { ctx.translate(c.width, 0); ctx.scale(-1, 1); }
-    ctx.drawImage(this.canvas, 0, 0);
-    return c;
-  }
-
-  burst(opts) { return Camera.prototype.burst.call(this, opts); }
-
-  async waitLive(ms = 10000) {
-    const t0 = Date.now();
-    while (!this.isLive && Date.now() - t0 < ms) await new Promise(r => setTimeout(r, 100));
-    return this.isLive;
-  }
-
-  stop() {
-    this._token = (this._token || 0) + 1;
-    this._running = false;
-    this.stream?.getTracks().forEach(t => t.stop());
-    this.stream = null;
-    if (this._held) { this._held = false; this.source.release(); }
-  }
-
-  get isLive() { return this._running && this.source.isLive; }
-  get resolution() { return { width: this.canvas?.width || 0, height: this.canvas?.height || 0 }; }
-}

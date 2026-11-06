@@ -4,6 +4,9 @@
  * so the exact pixels you see on the kiosk are the pixels that print.
  */
 
+import { coverCrop } from '../layout.mjs';
+
+
 export const TAU = Math.PI * 2;
 
 /* ------------------------------------------------------------------ paths */
@@ -339,17 +342,15 @@ export function confetti(ctx, x, y, w, h, colors, count = 26, seed = 7, kinds = 
 /* ------------------------------------------------------------------ image */
 
 /**
- * Cover-fit an image into a rect (like CSS object-fit: cover), honouring a
- * focal point so faces stay centred when the photo is cropped hard.
+ * Cover-fit an image into a rect (like CSS object-fit: cover): a centre crop
+ * at the rect's aspect ratio, never stretched. Same maths (coverCrop) as the
+ * capture screen's crop guide, so what the customer sees is what prints.
  */
 export function drawCover(ctx, img, x, y, w, h, focal = { x: 0.5, y: 0.5 }) {
   const iw = img.width, ih = img.height;
   if (!iw || !ih) return;
-  const scale = Math.max(w / iw, h / ih);
-  const dw = iw * scale, dh = ih * scale;
-  const dx = x + (w - dw) * focal.x;
-  const dy = y + (h - dh) * focal.y;
-  ctx.drawImage(img, dx, dy, dw, dh);
+  const { sx, sy, sw, sh } = coverCrop(iw, ih, w, h, focal);
+  ctx.drawImage(img, sx, sy, sw, sh, x, y, w, h);
 }
 
 export function clipped(ctx, pathFn, drawFn) {

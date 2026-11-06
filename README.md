@@ -150,7 +150,7 @@ attract → pick a style → [personalise] → pay → [angle] → shoot → [fi
 ```
 
 `[angle]` and `[filter]` are both optional and skipped automatically unless
-configured: `[angle]` only appears with 2+ entries in `camera.angles.list`,
+configured: `[angle]` only appears with both cameras set up in `cameras`,
 `[filter]` only with `filters.enabled` and a real `filters.list` in
 `config/booth.config.json`. `[filter]` runs on the actual photo just taken,
 not a live camera feed — tap through the looks (Vintage Film, a punchier
@@ -346,64 +346,83 @@ The simulation and the film stack fine together.
 
 | Part | What to get | Notes |
 |---|---|---|
-| Camera | Any body with **clean HDMI out** | A Fujifilm X-E5 works well — set HDMI output to clean/no-info so overlays don't print |
-| Capture card | Elgato Cam Link 4K, or a generic UVC HDMI dongle | This is what makes the camera look like a webcam. Generic dongles are often 1080p30 MJPEG — fine for stills |
-| Lens | 16–23mm equivalent | Two people at four feet in a booth |
-| Printer | DNP DS620A / Citizen CX-02 dye-sub, or Canon SELPHY on a budget | Dye-sub prints are dry and handleable instantly, which matters when there's a line |
-| Payment | Stripe **M2** + a phone running the companion app (`companion-app/`), or Tap to Pay on a spare iPhone | Card-present rates beat online rates. The M2 is Bluetooth-only — see the companion app's README for why a phone is in the loop |
+| Standard camera | **Logitech Brio** (USB webcam) | Plugs straight into USB, no capture card. Set its widest field of view (90°) |
+| 0.5 / High Angle camera | **Canon M50** + an ultra-wide lens | Over USB with Canon **EOS Webcam Utility**, or HDMI into a capture card |
+| Capture card (M50 over HDMI only) | Elgato Cam Link 4K, or a generic UVC HDMI dongle | Makes the M50's HDMI look like a webcam. Generic dongles are often 1080p30 MJPEG — fine for stills |
+| Printer | **DNP DS40** dye-sub, 6×4 media | Dye-sub prints are dry and handleable instantly, which matters when there's a line. See [Printing](#printing) |
+| Payment | Stripe **WisePOS E**, or **M2** + a phone running the companion app (`companion-app/`) | Card-present rates beat online rates. See [Payments](#payments) |
 | Display | 1080×1920 portrait touchscreen | CSS is built for portrait but reflows |
-| Lighting | Constant LED panel, not flash | Flash and rolling-shutter HDMI capture do not get along |
+| Lighting | Constant LED panel, not flash | Flash and rolling-shutter video capture do not get along |
 
-### The HDMI camera path, specifically
+### Cameras: Logitech Brio (Standard) and Canon M50 (High Angle / 0.5)
 
-Camera HDMI → capture card → USB. The card enumerates as a UVC webcam, so
-`getUserMedia` sees it and there's no vendor SDK to fight. Then:
+The two buttons on the angle screen keep their names: **Standard** uses the
+Brio, **High Angle** (the 0.5 shot) uses the M50. Both are set up in
+`cameras` in `config/booth.config.json`:
 
-1. Put a distinctive part of the device's name in `camera.preferredLabels`
-   (`"Cam Link"`, `"USB Video"`, whatever your dongle calls itself). The
-   operator panel lists every device it sees with its exact label.
-2. Keep `excludeLabels` populated — otherwise on a laptop the built-in webcam is
-   device #0 and the booth films the operator.
-3. Turn off the camera's auto-power-off. A camera that sleeps mid-event drops
-   the HDMI signal; `camera.js` catches the dead track and surfaces it, but it
-   can't wake your camera for you.
-4. `warmupMs` exists because capture cards output black for a beat while they
-   lock onto the signal. Don't set it to 0.
+- `cameras.standard`: the Brio. `labelMatch: ["Logitech BRIO", "BRIO"]`.
+- `cameras.wide`: the M50, with `mode` set to one of:
+  - `"usb"`: Canon **EOS Webcam Utility** over the M50's USB cable
+    (Windows/macOS). Its device is called "EOS Webcam Utility".
+  - `"hdmi"`: M50 HDMI out → USB capture card. Matched by "Cam Link",
+    "USB Video", "USB3.0 Video" or "Capture" (`labelMatch.hdmi`).
 
-**Two cameras through OBS (`camera.obsSplit`, on by default).** Opening
-two capture cards at once can make Windows cut off the first one, and OBS
-Virtual Camera only sends one picture. So OBS holds both cameras and puts
-them **side by side in one scene**. HoloBooth opens OBS Virtual Camera once
-and cuts it in two: each angle tile gets a live preview, and either can be
-picked and shot at full 1920×1080.
+How a camera is found, every time:
+1. Permission to use the camera is asked first: device names are blank
+   until it's granted. Then the devices are listed.
+2. The deviceId saved for that role on this PC (in
+   `config/booth.config.local.json`, written automatically the first time
+   it matches), then the saved name, then the first `labelMatch` entry
+   contained in a device's name. **Never** the device's position in the
+   list, and never "whatever camera there is".
+3. Not there: the screen says **"Standard camera (Brio) not found"** or
+   **"0.5 camera (Canon M50) not found"**, and that button is greyed out.
 
-1. **OBS → Settings → Video:** Base (Canvas) and Output (Scaled)
-   resolution both **3840x1080**, FPS **30**.
-2. Make a new scene, e.g. **Booth**. Add both cameras to it with
-   **Sources → + → Video Capture Device → Add Existing**:
-   - **Logitech Brio (Standard) on the left half:** right-click → Transform → Edit Transform,
-     Position **0, 0**, Size **1920 × 1080**.
-   - **Canon M50 (High Angle, via the capture card) on the right half:** Position **1920, 0**, Size **1920 × 1080**.
-3. Select the **Booth** scene and click **Start Virtual Camera**.
-4. Start HoloBooth. Which half is which angle is `obsRegion` in each
-   `camera.angles.list` entry: 0 = left, 1 = right.
+**One camera stream at a time.** The angle screen doesn't stream either
+camera; it only checks that each is plugged in. The shoot opens just the
+one picked, after stopping every track of the other. The Brio and a capture
+card streaming together fight over USB bandwidth (black frames, "Hardware
+MFT ... lack of hardware resources" on Windows, worse on a Raspberry Pi).
 
-Keep OBS running in the background. If it isn't running, the tiles say so
-and the shoot opens the camera directly instead. The camera log records
-the size OBS is actually sending, and warns if it isn't 3840x1080.
+- Asked for **1920×1080 @ 30** (ideal). The Brio gives that. EOS Webcam
+  Utility often gives less, and that's used as it comes. The size each
+  camera really sends is in the camera log and the diagnostics screen.
+- A photo is only taken once the preview is playing, plus 300 ms
+  (`camera.settleMs`), so the first frame isn't black.
+- The **Brio's preview is mirrored** (selfie feel). The M50's isn't.
+  Saved and printed photos are never mirrored.
+- Photos are taken at the camera's full resolution, not the screen size,
+  and centre-cropped to the frame's photo window. The shoot screen dims
+  everything outside that window, using the same crop maths as the print,
+  so what people see is what prints.
+- If a camera drops out (M50 auto power-off, a bumped cable), the screen
+  shows **"Camera disconnected - reconnecting"** and it's retried every 2 s.
 
-To start OBS with the virtual camera already on, use a shortcut:
-`"C:\Program Files\obs-studio\bin\64bit\obs64.exe" --startvirtualcam --scene "Booth" --minimize-to-tray`
-(set the shortcut's "Start in" to that `64bit` folder).
+**Camera diagnostics** (operator panel → Cameras → Camera diagnostics, or
+**Ctrl+Shift+D**): every video device's name and deviceId, which one each
+role matched and how, and the resolution each camera really streams at
+(they're opened one after the other, never together).
 
 **Camera log:** the operator panel (tap the bottom-left corner 5 times)
-has a **Camera log** of everything the camera did: devices seen, what was
-opened at what size, drops, freezes and reconnects, and screen changes.
-**Copy camera log** puts it on the clipboard to send to whoever is helping.
+has a **Camera log** of everything the cameras did: devices seen, what was
+opened at what size, drops and reconnects. **Copy camera log** puts it on
+the clipboard to send to whoever is helping.
 
-Cameras with a **micro** HDMI port need a locking or right-angle cable. This is
-the single most common failure at an event: someone brushes the cable, the
-signal drops, and the next customer gets a black card.
+**Hardware setup, by hand:**
+- **Brio:** set the widest field of view (**90°**) in **Logi Tune** or
+  **Logitech G HUB**, so six people fit. It's saved in the camera.
+- **M50:**
+  - Turn off **auto power off** (menu → Eco mode off, Power saving → disable).
+  - Power it from a **DR-E12 DC coupler** (dummy battery) and its AC adapter
+    (sold together as the ACK-E12 kit), not the battery.
+  - Mode dial on **Movie**.
+  - HDMI: press **INFO** until the screen is clean, or the icons print.
+  - EOS Webcam Utility: quit **Canon EOS Utility** first; they conflict.
+- **Lens:** a real 0.5 look needs an ultra-wide, e.g. the **EF-M 11-22mm at
+  11mm** (or the EF-M 10-18mm at 10mm). The 24mm lens won't look wide.
+- Cameras with a **micro** HDMI port need a locking or right-angle cable.
+  This is the most common failure at an event: someone brushes the cable,
+  the signal drops, and the next customer gets a black card.
 
 ### Real photos with flash (Canon M50 and other DSLR/mirrorless bodies)
 
@@ -447,8 +466,8 @@ closes macOS's own camera daemon first, because it grabs the camera on plug-in.
 - **Wi-Fi/Bluetooth off**, because the M50 disables USB control while
   they're on.
 - **Auto power off disabled.** Use a dummy battery (ACK-E12) for power.
-- **Only one program can hold the camera.** Quit Lumabooth, OBS and EOS
-  Webcam Utility.
+- **Only one program can hold the camera.** Quit Lumabooth, Canon EOS
+  Utility and EOS Webcam Utility.
 
 **What to expect:**
 - **Timing:** each photo takes about 1–3 s to focus, shoot and transfer,
@@ -462,7 +481,7 @@ closes macOS's own camera daemon first, because it grabs the camera on plug-in.
   them under the app's data folder in `stills/<date>/`. The kiosk uses a
   copy scaled to `maxDimension` (3000 px), which is plenty for 300 dpi.
 - **Fallback:** if the camera can't be reached at the start of a session,
-  the booth falls back to the video camera (`preferredLabels`) and shows
+  the booth falls back to the same role's video camera (`cameras`) and shows
   why. A paid customer still gets a shoot.
 - **Camera angles:** with several angles, only `camera.stills.angle`
   (default `standard`) uses the tethered camera. The others stay video.
@@ -649,68 +668,131 @@ the default one is ever retired.
 
 ## Printing
 
-### Printing on Windows (DNP DS40)
+Printer: **DNP DS40**, 300 dpi, 6×4 media. Settings are under `printer` in
+`config/booth.config.json`:
 
-Windows doesn't install DNP's driver by itself. Until it's installed, the
-printer won't appear in Windows Settings or in HoloBooth.
+| Key | What |
+|---|---|
+| `os` | `auto` (Windows printing on Windows, CUPS `lp` on Linux / Raspberry Pi / macOS), or force `windows` / `cups` |
+| `queue4x6` | Printer name for 4×6 pages (cards). `null` = the photo printer found by name |
+| `queueStrip` | Printer name for strip pages (the 2-inch-cut queue on Windows) |
+| `finish` | `glossy` or `matte` |
+| `copies` | Copies of every page on top of what the order needs (1 = just the order) |
+| `turn` | `right` / `left`: which way a card page is turned onto the DS40's portrait paper (CUPS, XPS) |
 
-1. Download the **DS40 Windows driver** from DNP's support site
-   (dnpphoto.com → Support → Drivers).
-2. Turn the printer on, plug it in by USB, and run DNP's installer.
-3. Check **Settings → Bluetooth & devices → Printers & scanners** lists it.
+### Pages at the DS40's native size
 
-With `cardPrinterName` / `stripPrinterName` left `null`, HoloBooth finds
-the photo printer by name (DNP, Citizen, SELPHY, Mitsubishi and so on)
-instead of using the Windows default, which is often "Microsoft Print to
-PDF". If there's no photo printer, it says so instead of printing
-nowhere. The operator panel marks the printer it will use **PRINTS HERE**.
-Windows prints a 6×4 sheet as a **landscape** page (Print method:
-**Standard**, the setting that has printed on the DS40). Sending it
-portrait asks the DNP driver for a page wider than its 4×6 paper, and it
-drops the job. **Driver paper** and **Browser** are alternatives for
-other printers.
+Every page is built at exactly the DS40's 6×4 size with bleed, so nothing
+has to scale it (`src/js/layout.mjs`):
 
-**Strip cut on Windows:** the DS40's 2-inch cut is a printer-preferences
-setting on Windows, not a per-job option. Cards must not be cut, so use
-two Windows printer entries for the same DS40, one per job type:
-1. Make sure both entries (e.g. "DS40" and "DS40 (Copy 1)") point to the
-   same USB port: right-click → Printer properties → Ports.
-2. On the one for strips: Printing preferences → turn on the 2-inch cut.
-3. In the operator panel, under Printers, tap **Cards** on one and
-   **Strips** on the other. **Print test strip sheet** should come out
-   as two pieces.
+- **4×6 (cards):** 1844 × 1240 px, landscape. Two 2.5×3.5″ cards
+  (750 × 1050 px) side by side, centred, with cut marks; cut by hand.
+  Printed to `printer.queue4x6`.
+- **2×6 strips:** one 1240 × 1844 px portrait page with **two identical
+  620 × 1844 px strips side by side**. The DS40's 2-inch cut splits it at
+  x = 620 into two strips. Photos and text stay at least 20 px from every
+  strip edge and the cut line. Printed to `printer.queueStrip`.
 
-Dye-subs are unforgiving about page geometry — if the page size doesn't match the
-media exactly, the driver silently scales and your 2.5×3.5″ card comes out at
-2.42×3.39″ and no longer fits a card sleeve. Both platforms solve it, differently:
+Every page is **saved as a PNG before it's printed**, under the app's data
+folder: `media/<date>/prints/` (operator panel → Open photos folder), so
+the file can be compared with the print.
 
-- **Desktop:** `electron/main.js` builds a page whose `@page size` matches the
-  media in inches with `margin: 0`, and passes the size to Electron in microns.
-- **Pi:** `pi/print.mjs` wraps the browser's JPEG in a one-page PDF whose
-  MediaBox is exactly 180×252 pt and prints it with `-o print-scaling=none`.
-  A PNG carries no physical size so `lp` has to guess; a PDF MediaBox is
-  unambiguous. No ImageMagick, no Ghostscript — PDF carries a JPEG bitstream
-  verbatim via `/DCTDecode`.
+**Test prints** (operator panel → Printers): **Test print 4x6** and **Test
+print strips** print a calibration page:
+- a 1 px black line on the very edge pixels
+- a red line 20 px inside it (the safe area)
+- ruler ticks every 10 px (long ones every 50 px) along all four edges
+- for strips, the blue cut line at x = 620
+- the page's pixel size as text
 
-Don't "fix" either one by letting the driver fit-to-page.
+Reading it: a missing black line on a side means the printer crops there,
+and the ticks say by how much. If a red line is cut off, content would be
+lost. If the ticks measure wrong, something scaled the page. On strips, the
+cut should fall on the blue line.
 
-Most dye-subs (a DNP DS40 included) only load 4×6 media, so neither a lone
-2.5×3.5″ card nor a lone 2×6″ strip can go to the printer as its own page —
-there's no media that size loaded. `buildGangSheet()` in `app.js` tiles
-copies of whichever one you're printing onto a sheet-sized canvas with
-hairline cut marks, and that composed sheet is what actually gets sent as
-the print job:
+### Windows: two DS40 queues (needed for strips)
 
-- **Cards** (`printing.sheet`, enabled by default): two 2.5×3.5″ cards side
-  by side on a 6×4″ sheet.
-- **Strips** (`printing.stripSheet`, enabled by default): two 2×6″ copies of
-  the same strip side by side on a 4×6″ sheet — the same layout DNP calls
-  "2×6 (4×6 divided)" media, where the printer's own cutter splits the sheet
-  into two strips. If a purchase only calls for one strip, the second slot
-  just prints blank; nothing extra is charged or given away.
+Windows doesn't install DNP's driver by itself. Download the **DS40 Windows
+driver** from DNP's support site (dnpphoto.com → Support → Drivers), turn
+the printer on, plug it in by USB and run the installer. Check **Settings →
+Bluetooth & devices → Printers & scanners** lists it.
 
-Set either `enabled: false` if your printer actually takes that media size
-directly, and it'll fall back to sending a single page at that exact size.
+Electron can't set the DS40's cut per job on Windows, so the same printer
+is added **twice**: one queue that never cuts (4×6), one that always cuts
+(strips).
+
+1. **4×6 queue (no cut).** On the DS40 entry the installer made (e.g.
+   "DS40"): **Printing preferences → Paper Size (6x4), 2inch cut: Disable**.
+   Set Glossy or Matte here too.
+2. **Add the second queue** on the same port. In PowerShell as
+   administrator (use your entry's exact name):
+   ```powershell
+   $p = Get-Printer -Name "DS40"
+   Add-Printer -Name "DS40 Strips" -DriverName $p.DriverName -PortName $p.PortName
+   ```
+   (Or Settings → Printers & scanners → Add device → "The printer that I
+   want isn't listed" → Add a local printer → *use the DS40's existing USB
+   port* → the DNP DS40 driver → name it "DS40 Strips".)
+3. **Strip queue (cut).** On "DS40 Strips": **Printing preferences →
+   Paper Size (6x4), 2inch cut: Enable**, and the same finish.
+4. **Tell HoloBooth.** Operator panel → Printers: tap **4x6** on "DS40"
+   and **Strips** on "DS40 Strips". Or put them in the config:
+   ```json
+   "printer": { "queue4x6": "DS40", "queueStrip": "DS40 Strips" }
+   ```
+   (Saved on this PC, in `config/booth.config.local.json`.)
+5. **Test print strips** should come out as two pieces, cut on the blue
+   line. **Test print 4x6** should come out uncut.
+
+With `queueStrip` unset, strips go to the 4×6 queue and come out uncut;
+the operator panel shows that in red.
+
+**Print method** (operator panel, or `printing.windowsMethod`):
+- `chromium` (default): a hidden print window holding only the page image,
+  printed silently: `@page { size: 4in 6in; margin: 0 }` (6in 4in for
+  landscape), the image `object-fit: cover`, and `webContents.print` with
+  `silent`, `printBackground`, the queue as `deviceName`, `marginType:
+  'none'`, `landscape` matching the page, `scaleFactor: 100`, the copies,
+  and `pageSize` in microns (101600 × 152400). It waits for the image's load
+  event, and a failure's reason is shown on screen. Covering 6 in with
+  1844 px is a 97.6% scale, which trims about 5 px off the two long edges
+  (inside the 20 px safe area). `printing.chromiumPage: "native"` prints a
+  page of exactly the image's pixels at 300 dpi (4.13 × 6.15 in) instead;
+  compare the two with the test prints.
+- `xps`: Windows' XPS print path (what Ctrl+P photo printing uses),
+  starting from the queue's Printing Preferences. Test by hand:
+  `powershell -STA -ExecutionPolicy Bypass -File .\electron\winprint-xps.ps1 -Printer "DS40"`.
+
+Glossy/matte on Windows is set in each queue's Printing Preferences.
+Chromium can't pass it per job.
+
+### Linux / Raspberry Pi (CUPS + Gutenprint)
+
+```bash
+sudo apt install cups printer-driver-gutenprint
+sudo lpadmin -p DS40 -E -v "$(lpinfo -v | grep -i dnp | awk '{print $2}')" -m gutenprint.5.3://dnp-ds40/expert
+lpoptions -p DS40 -l      # the option names HoloBooth will use
+```
+
+HoloBooth prints with `lp`, never the Chromium dialog. It reads the
+printer's own options from `lpoptions -p <printer> -l` at print time and
+picks from what's there. Nothing is hardcoded. With Gutenprint's DS40
+driver (checked against `gutenprint.5.3://dnp-ds40/expert`) that gives:
+
+| Page | Options sent |
+|---|---|
+| 4×6 | `PageSize=w288h432` `StpLaminate=Glossy` (or `Matte`) `StpiShrinkOutput=Crop` `print-scaling=none` `fit-to-page=false` |
+| strips | `PageSize=w288h432-div2` (the driver's "2x6*2": 4×6 cut in two), the same finish and no-scaling options |
+
+The page goes to CUPS as a one-page PDF exactly 1240 × 1844 px at 300 dpi
+(297.6 × 442.56 pt, which is Gutenprint's 4×6 printable area), so it's
+printed at native size. A landscape card page is turned inside the PDF
+(`printer.turn`). Run through the DS40's CUPS filters, the page came out
+1240 × 1844 px with the edge, safe and cut lines on the same pixel
+columns as the file. Vertically it lands 1 px lower: Ghostscript's
+rounding, 0.08 mm. DNP's own macOS driver names things differently (e.g.
+`PageSize=dnp6x4` plus `Cutter=2Inch`); the same matching finds those.
+Extra options for every job: `printer.lpOptions`.
 
 ---
 

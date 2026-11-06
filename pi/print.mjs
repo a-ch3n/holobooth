@@ -1,16 +1,22 @@
 /**
- * print.mjs — exact-size printing on Linux through CUPS.
+ * print.mjs — native-size printing through CUPS (Linux / Raspberry Pi, and
+ * macOS), shared by electron/main.js and pi/kiosk-server.mjs.
  *
- * The problem this solves: dye-sub printers are unforgiving about geometry. If
- * the page you hand CUPS isn't exactly the media size, the driver scales it,
- * and a 2.5x3.5" card comes out at 2.42x3.39" — close enough to look fine and
- * wrong enough that it won't sit in a card sleeve.
+ * The page arrives at the DS40's native 6x4 size: 1240 x 1844 (portrait) or
+ * 1844 x 1240 (landscape) px at 300 dpi. It's wrapped in a one-page PDF whose
+ * MediaBox is exactly those pixels at 300 dpi (297.6 x 442.56 pt) — always
+ * portrait, a landscape page drawn turned inside it — so nothing has to
+ * scale or rotate it. CUPS gets scaling switched off on top of that.
  *
- * A PNG carries no physical size, so `lp` has to guess. A PDF carries a
- * MediaBox in points, which is unambiguous. So: take the browser's JPEG,
- * wrap it in a one-page PDF whose MediaBox is exactly the card, and print that
- * with scaling switched off. No ImageMagick, no Ghostscript, no dependencies —
- * PDF can carry a JPEG bitstream verbatim via /DCTDecode.
+ * Option names come from the printer itself (`lpoptions -p <printer> -l`),
+ * never hardcoded. Gutenprint's DS40 driver reports (checked against
+ * gutenprint.5.3://dnp-ds40):
+ *   PageSize        w288h432 (4x6)   w288h432-div2 (2x6*2: 4x6 cut in two)
+ *   StpLaminate     Glossy | Matte
+ *   StpiShrinkOutput  Shrink | Crop | Expand   (Crop = never shrink)
+ *   and its 4x6 printable area is 297.6 x 442.56 pt = 1240 x 1844 px.
+ * DNP's own macOS driver names things differently (e.g. PageSize dnp6x4 and
+ * a separate Cutter=2Inch); the same matching finds those too.
  */
 
 import { execFile } from 'node:child_process';
@@ -24,8 +30,8 @@ const PT_PER_IN = 72;
 
 /* ------------------------------------------------------------------ pdf */
 
-/** Minimal JPEG dimension reader — we need the pixel size for the transform. */
-function jpegSize(buf) {
+/** Minimal JPEG dimension reader. */
+export function jpegSize(buf) {
   let i = 2;
   while (i < buf.length) {
     if (buf[i] !== 0xff) { i++; continue; }
@@ -39,13 +45,24 @@ function jpegSize(buf) {
   throw new Error('Not a JPEG, or no SOF marker found');
 }
 
-/** Wrap a JPEG in a one-page PDF sized exactly widthIn x heightIn. */
-export function jpegToPdf(jpeg, widthIn, heightIn) {
+/**
+ * One-page PDF, portrait, exactly the image's pixels at dpi. A landscape
+ * image is drawn turned 90 degrees (turn: 'left' = its top to the page's
+ * left edge, 'right' = to the right edge), still pixel for pixel.
+ */
+export function jpegToPdf(jpeg, { dpi = 300, turn = 'left' } = {}) {
   const { width: pw, height: ph } = jpegSize(jpeg);
-  const W = +(widthIn * PT_PER_IN).toFixed(3);
-  const H = +(heightIn * PT_PER_IN).toFixed(3);
+  const landscape = pw > ph;
+  const imgW = +(pw / dpi * PT_PER_IN).toFixed(3);
+  const imgH = +(ph / dpi * PT_PER_IN).toFixed(3);
+  const W = landscape ? imgH : imgW; // page: always portrait
+  const H = landscape ? imgW : imgH;
+  // Image space is the unit square; cm maps it onto the page.
+  const cm = !landscape ? `${imgW} 0 0 ${imgH} 0 0`
+    : turn === 'right' ? `0 ${-imgW} ${imgH} 0 0 ${H}`
+    : `0 ${imgW} ${-imgH} 0 ${W} 0`;
 
-  const content = Buffer.from(`q\n${W} 0 0 ${H} 0 0 cm\n/Im0 Do\nQ\n`, 'latin1');
+  const content = Buffer.from(`q\n${cm} cm\n/Im0 Do\nQ\n`, 'latin1');
   const objs = [
     '<< /Type /Catalog /Pages 2 0 R >>',
     '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
@@ -60,7 +77,6 @@ export function jpegToPdf(jpeg, widthIn, heightIn) {
   const parts = [Buffer.from('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n', 'latin1')];
   const offsets = [];
   let pos = parts[0].length;
-
   objs.forEach((o, i) => {
     const n = i + 1;
     offsets.push(pos);
@@ -74,14 +90,81 @@ export function jpegToPdf(jpeg, widthIn, heightIn) {
       parts.push(tail); pos += tail.length;
     }
   });
-
   const xrefPos = pos;
   let xref = `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n`;
   for (const off of offsets) xref += `${String(off).padStart(10, '0')} 00000 n \n`;
   xref += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xrefPos}\n%%EOF\n`;
   parts.push(Buffer.from(xref, 'latin1'));
+  return { pdf: Buffer.concat(parts), pageWpt: W, pageHpt: H, pixels: { width: pw, height: ph } };
+}
 
-  return Buffer.concat(parts);
+/* -------------------------------------------------------------- options */
+
+/**
+ * `lpoptions -p NAME -l` → { PageSize: { label, choices, default }, ... }.
+ * Lines look like: "PageSize/Media Size: *B7 w288h432 w288h432-div2".
+ */
+export function parseLpoptions(text) {
+  const out = {};
+  for (const line of String(text).split('\n')) {
+    const m = line.match(/^([^/:\s]+)(?:\/([^:]*))?:\s*(.*)$/);
+    if (!m) continue;
+    const choices = m[3].trim().split(/\s+/).filter(Boolean);
+    const def = choices.find(c => c.startsWith('*'));
+    out[m[1]] = { label: m[2] || m[1], choices: choices.map(c => c.replace(/^\*/, '')), default: def ? def.slice(1) : null };
+  }
+  return out;
+}
+
+export async function readPrinterOptions(printerName) {
+  const args = printerName ? ['-p', printerName, '-l'] : ['-l'];
+  const { stdout } = await run('lpoptions', args);
+  return parseLpoptions(stdout);
+}
+
+const FOUR_BY_SIX = /(^|[^\d.])(4x6|6x4)([^\d]|$)|^w288h432$/i;
+const DIVIDED = /div2|2x6|x2\b|\*2|cut|split|_2$/i;
+
+/**
+ * Picks this printer's own option values for one print. kind '4x6' or 'strip'.
+ * Returns the -o values to pass and a human-readable note per choice, or
+ * problems when something the job needs isn't offered.
+ */
+export function chooseOptions(options, { kind = '4x6', finish = 'glossy' } = {}) {
+  const set = [], notes = [], problems = [];
+  const pageKey = ['PageSize', 'media', 'PageRegion'].find(k => options[k]);
+  const sizes = pageKey ? options[pageKey].choices : [];
+  const plain = sizes.find(c => c === 'w288h432') || sizes.find(c => FOUR_BY_SIX.test(c) && !DIVIDED.test(c));
+  const divided = sizes.find(c => c === 'w288h432-div2') || sizes.find(c => FOUR_BY_SIX.test(c) && DIVIDED.test(c) && !/div4|div3/i.test(c));
+  let cutKey = null;
+
+  if (kind === 'strip') {
+    if (divided) { set.push(`${pageKey}=${divided}`); notes.push(`${pageKey}=${divided} (4x6 cut into two 2x6)`); }
+    else {
+      // DNP's macOS driver: plain 6x4 paper plus its own cutter option.
+      cutKey = Object.keys(options).find(k => /cut/i.test(k) && !/waste/i.test(k) && options[k].choices.some(c => /2\s*_?inch|2in/i.test(c)));
+      if (plain) set.push(`${pageKey}=${plain}`);
+      if (cutKey) {
+        const v = options[cutKey].choices.find(c => /2\s*_?inch|2in/i.test(c));
+        set.push(`${cutKey}=${v}`); notes.push(`${pageKey}=${plain}, ${cutKey}=${v}`);
+      } else problems.push(`this printer offers no 2-inch cut (PageSize choices: ${sizes.join(' ') || 'none'}) — strips will come out uncut`);
+    }
+  } else if (plain) { set.push(`${pageKey}=${plain}`); notes.push(`${pageKey}=${plain}`); }
+  if (!plain && !(kind === 'strip' && divided)) problems.push(`no 4x6 paper size in ${pageKey || 'PageSize'} (${sizes.join(' ') || 'none'})`);
+
+  // Glossy / matte overcoat (Gutenprint: StpLaminate; other drivers: Finish, Overcoat, Surface...).
+  const finKey = Object.keys(options).find(k => /laminat|overcoat|finish|surface|coat/i.test(k + options[k].label));
+  if (finKey && finish) {
+    const want = /^m/i.test(finish) ? /matte?/i : /gloss/i;
+    const v = options[finKey].choices.find(c => want.test(c));
+    if (v) { set.push(`${finKey}=${v}`); notes.push(`${finKey}=${v}`); }
+    else problems.push(`${finKey} has no "${finish}" (${options[finKey].choices.join(' ')})`);
+  }
+
+  // Never shrink the page to fit: it's already exactly the printable area.
+  if (options.StpiShrinkOutput?.choices.includes('Crop')) { set.push('StpiShrinkOutput=Crop'); notes.push('StpiShrinkOutput=Crop'); }
+
+  return { set, notes, problems, cutKey };
 }
 
 /* ------------------------------------------------------------------ lp */
@@ -103,64 +186,50 @@ export async function listPrinters() {
 
 /**
  * @param {object} o
- * @param {string} o.dataUrl   image/jpeg or image/png data URL from the kiosk
- * @param {number} o.widthIn   @param {number} o.heightIn
+ * @param {Buffer} o.jpeg        the page as a JPEG at native size (1240x1844 or 1844x1240)
+ * @param {'4x6'|'strip'} o.kind
  * @param {string} [o.printerName]
  * @param {number} [o.copies]
- * @param {string} [o.pageSize]   the printer's own named media (from
- *   `lpoptions -p NAME -l`'s PageSize/Media Size line, e.g. "dnp6x4") —
- *   pass this whenever the driver has a real preset for the sheet's exact
- *   dimensions. Many dye-sub drivers (DNP included) only support a fixed
- *   list of named sizes and don't handle an arbitrary Custom.WxHin well —
- *   confirmed on a real DS40, where an unrecognized custom size printed
- *   off-center and at a slight angle. Falls back to Custom.WxHin when omitted.
- * @param {string[]} [o.lpOptions]  extra `-o` values, e.g. a DS40 strip
- *   sheet's Cutter=2Inch to arm the auto-cutter — from booth.config.json,
- *   both globally and per sheet (see printing.stripSheet.lpOptions).
+ * @param {string} [o.finish]    'glossy' | 'matte'
+ * @param {string} [o.turn]      which way a landscape page is turned onto the portrait media
+ * @param {string[]} [o.lpOptions]  extra -o values from the config (win over detected ones)
  */
 export async function printImage(o) {
-  const { dataUrl, widthIn, heightIn, printerName, copies = 1, lpOptions = [], dryRun = false, pageSize = null } = o;
+  const { jpeg, kind = '4x6', printerName, copies = 1, finish = 'glossy', turn = 'left', lpOptions = [], dryRun = false, options = null } = o;
+  if (!Buffer.isBuffer(jpeg)) throw new Error('printImage: jpeg Buffer required');
 
-  const [meta, b64] = String(dataUrl).split(',');
-  if (!b64) throw new Error('printImage: dataUrl has no payload');
-  if (!/jpeg|jpg/i.test(meta)) {
-    // The kiosk should send JPEG — PDF can embed it verbatim. PNG would need
-    // re-encoding, which means a dependency we don't want on a Pi.
-    throw new Error('printImage expects an image/jpeg data URL (see canvas.toDataURL("image/jpeg", .95))');
+  const { pdf, pageWpt, pageHpt, pixels } = jpegToPdf(jpeg, { turn });
+  let detected;
+  try {
+    detected = chooseOptions(options || await readPrinterOptions(printerName), { kind, finish });
+  } catch (e) {
+    detected = { set: [], notes: [], problems: [`couldn't read the printer's options (lpoptions -p ${printerName || '(default)'} -l): ${(e.stderr || e.message || '').trim()}`] };
   }
-
-  const pdf = jpegToPdf(Buffer.from(b64, 'base64'), widthIn, heightIn);
   const dir = await mkdtemp(join(tmpdir(), 'holobooth-'));
-  const file = join(dir, `card-${Date.now()}.pdf`);
+  const file = join(dir, `${kind}-${Date.now()}.pdf`);
   await writeFile(file, pdf);
 
   const args = [];
   if (printerName) args.push('-d', printerName);
   args.push('-n', String(Math.max(1, copies)));
-  // Exact geometry: matching media, no scaling, no margins the driver invents.
-  // Prefer the driver's own named preset when we have one — an arbitrary
-  // Custom size it doesn't recognize is what a real DNP DS40 silently
-  // mis-registered instead of rejecting.
-  args.push('-o', pageSize ? `PageSize=${pageSize}` : `media=Custom.${widthIn}x${heightIn}in`);
-  // The PDF's MediaBox is already built at exactly widthIn x heightIn (see
-  // jpegToPdf) — whichever way round that is IS the wanted orientation, and
-  // we don't want this DNP's own PPD default rotating it again on top of
-  // that. orientation-requested=3 ("portrait") came out perpendicular to the
-  // media's long edge on this printer — confirmed against a real DS40 — so
-  // pin it to 4 ("landscape") unconditionally instead.
-  args.push('-o', 'orientation-requested=4');
-  args.push('-o', 'print-scaling=none');
-  args.push('-o', 'fit-to-page=false');
-  for (const opt of lpOptions) args.push('-o', opt);
+  // The page is already the printable area at 300 dpi: no scaling, no fitting.
+  for (const opt of ['print-scaling=none', 'fit-to-page=false', ...detected.set, ...(lpOptions || [])]) args.push('-o', opt);
   args.push(file);
 
-  if (dryRun) return { ok: true, dryRun: true, command: `lp ${args.join(' ')}`, bytes: pdf.length, file };
+  const info = {
+    command: `lp ${args.join(' ')}`,
+    pixels: `${pixels.width}x${pixels.height}`,
+    pdfPage: `${pageWpt}x${pageHpt}pt`,
+    options: detected.notes,
+    problems: detected.problems,
+  };
+  if (dryRun) return { ok: true, dryRun: true, ...info, bytes: pdf.length, file };
 
   try {
     const { stdout } = await run('lp', args);
-    return { ok: true, jobId: (stdout.match(/request id is (\S+)/) || [])[1] || null, command: `lp ${args.join(' ')}` };
+    return { ok: true, jobId: (stdout.match(/request id is (\S+)/) || [])[1] || null, ...info };
   } catch (e) {
-    return { ok: false, reason: (e.stderr || e.message || '').trim() || 'lp failed' };
+    return { ok: false, reason: (e.stderr || e.message || '').trim() || 'lp failed', ...info };
   } finally {
     setTimeout(() => unlink(file).catch(() => {}), 60000).unref?.();
   }

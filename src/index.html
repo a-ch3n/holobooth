@@ -149,6 +149,8 @@
   <section class="screen screen-dark" data-screen="capture" hidden>
     <div class="stage">
       <video id="preview" autoplay muted playsinline></video>
+      <!-- What will print: the frame's photo window, centre-cropped (same maths as the print). -->
+      <div class="crop-guide" id="crop-guide" hidden></div>
       <div class="frame-overlay" id="frame-overlay"></div>
       <div class="countdown" id="countdown"></div>
       <div class="shot-pips" id="shot-pips"></div>
@@ -286,6 +288,21 @@
       <button class="btn btn-ghost" data-go="attract">Close</button>
     </header>
     <div class="admin-grid" id="admin-body"></div>
+  </section>
+
+  <!-- ============================================ DIAGNOSTICS (operator panel → Camera diagnostics, or Ctrl+Shift+D) -->
+  <section class="screen" data-screen="diagnostics" hidden>
+    <header class="bar">
+      <h2>Camera diagnostics</h2>
+      <div style="display:flex;gap:10px">
+        <button class="btn btn-ghost" id="diag-refresh">Test cameras again</button>
+        <button class="btn btn-ghost" data-go="admin">Back</button>
+      </div>
+    </header>
+    <div class="diag">
+      <div class="diag-body" id="diag-body"></div>
+      <video id="diag-video" autoplay muted playsinline></video>
+    </div>
   </section>
 
   <div class="toast" id="toast" hidden></div>

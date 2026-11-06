@@ -25,7 +25,8 @@ export const STRIP_ASPECT = 2 / 6;
  */
 export const SIZES = {
   card:  { widthIn: 2.5,  heightIn: 3.5,  dpi: 300 },
-  strip: { widthIn: 2.0,  heightIn: 6.0,  dpi: 300 },
+  // One of the two strips on a DS40 1240x1844 page (see src/js/layout.mjs).
+  strip: { widthIn: 620 / 300, heightIn: 1844 / 300, dpi: 300 },
   board: { widthIn: 24,   heightIn: 33.6, dpi: 150 },
 };
 
@@ -191,7 +192,7 @@ export function mintCard({
 export function renderCard(ctx, opts) {
   const {
     frameId, W, H, photo = null, photos = [], character = null,
-    card, foil = true, focal = { x: 0.5, y: 0.45 }, watermark = null,
+    card, foil = true, focal = { x: 0.5, y: 0.5 }, watermark = null,
     personalization = null, companion = null, stock = null,
     stickers = null, stickerImages = null,
   } = opts;
@@ -350,7 +351,7 @@ export function renderStrip(ctx, {
   const meta = {
     ...card,
     personal,
-    focal: { x: 0.5, y: 0.4 },
+    focal: { x: 0.5, y: 0.5 },
     dateLabel: new Date(card?.mintedAt || Date.now()).toLocaleDateString('en-US',
       { month: 'short', day: 'numeric', year: 'numeric' }),
     serial: card?.serial || '—',

@@ -37,9 +37,14 @@ Chromium, CUPS with Gutenprint, v4l-utils and gpiozero; copies the app to
 Then three things it can't do for you:
 
 1. **Name your printer.** `lpstat -e` lists them; put the exact name in
-   `printing.cardPrinterName`.
-2. **Name your capture card.** `v4l2-ctl --list-devices` shows it; put a
-   distinctive substring in `camera.preferredLabels`.
+   `printer.queue4x6` (leave `printer.queueStrip` null: strips go to the same
+   CUPS queue with the driver's cut paper size). `lpoptions -p <name> -l`
+   shows the options HoloBooth will pick from (see README → Printing).
+2. **Name your cameras.** `v4l2-ctl --list-devices` shows them; check
+   `cameras.standard.labelMatch` (Brio) and `cameras.wide.labelMatch.hdmi`
+   (the M50's capture card) contain part of each name. On a Pi the M50 has
+   to come in over HDMI (`cameras.wide.mode: "hdmi"`): EOS Webcam Utility is
+   Windows/macOS only.
 3. **Add your Stripe key** to `/etc/holobooth/stripe.env`, then
    `systemctl enable --now holobooth-payments`. Until then the booth runs on
    `mock` payments — deliberately, because a booth that takes money it can't
@@ -118,15 +123,16 @@ sudo lpadmin -p CARD -E -v "usb://DNP/DS620" -m "gutenprint.5.3://dnp-ds620/expe
 lpoptions -p CARD -l                       # what options this driver accepts
 ```
 
-Put anything driver-specific into `printing.lpOptions` in `booth.config.json`,
-e.g. `["StpQuality=Photo", "ColorModel=RGB"]`.
+Put anything driver-specific into `printer.lpOptions` in `booth.config.json`,
+e.g. `["StpColorCorrection=Accurate"]`. Paper size, cut, finish
+(`printer.finish`) and no-scaling are picked from `lpoptions` automatically.
 
 Set `printing.dryRun: true` to have the service build the PDF and log the exact
 `lp` command without printing. Use it to burn in the flow without burning ribbon.
 
-**Media:** most dye-subs only load 4×6. `printing.sheet.enabled` is the config
-for ganging cards onto a 4×6 with cut marks — cheaper and much faster than
-single-card media. (Still stubbed; see the main README.)
+**Media:** the DS40 loads 6×4. Cards go two to a 1844×1240 page with cut
+marks; strips go two to a 1240×1844 page that the printer cuts in half (see
+the main README → Printing).
 
 ---
 

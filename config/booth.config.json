@@ -10,41 +10,21 @@
     "sessionTimeoutMs": 240000
   },
   "camera": {
-    "//obs": "OBS Virtual Camera is first, but only picked while OBS is running (checked on Windows). Then OBS holds the capture card and passes the picture on. Start OBS, add the capture card as a Video Capture Device, and press Start Virtual Camera. With OBS closed it's skipped and the card is used directly.",
-    "//": "HDMI capture cards present themselves as UVC webcams. Put distinctive substrings of your device label here, highest priority first. Run `Settings > Camera` in-app to see the live device list.",
-    "preferredLabels": [
-      "OBS Virtual Camera",
-      "Logitech BRIO",
-      "BRIO",
-      "Cam Link",
-      "Elgato",
-      "HDMI",
-      "USB Video",
-      "USB3",
-      "UVC",
-      "Capture",
-      "EOS Webcam"
-    ],
+    "//": "Settings shared by both cameras. Which device is the Brio and which is the M50: see \"cameras\" below.",
+    "//excludeLabels": "Never used for either role, whatever its name (built-in laptop webcams).",
     "excludeLabels": [
       "FaceTime",
       "Integrated",
       "Built-in"
     ],
-    "//constraints": "30 fps, not 60: generic USB 3.0 HDMI capture cards (\"USB Video 3.0\") can start at 1080p60 and then stall, especially on a USB 2 port, and a booth gains nothing from 60.",
-    "constraints": {
-      "width": 1920,
-      "height": 1080,
-      "frameRate": 30
-    },
     "//windowsCaptureApi": "Windows only. mediafoundation (default): the same camera API the Windows Camera app uses. directshow: the API OBS uses; try it if a camera works in OBS but not here. Either way the capture card's MJPEG is decoded in software (see windowsHardwareMjpeg).",
     "windowsCaptureApi": "mediafoundation",
     "//windowsHardwareMjpeg": "Windows only. false (default): decode the capture card's MJPEG video in software. The GPU decoder froze a USB Video 3.0 card after a few seconds while the Windows Camera app ran fine.",
     "windowsHardwareMjpeg": false,
-    "mirrorPreview": true,
-    "cropToPortrait": true,
-    "warmupMs": 1200,
+    "//settleMs": "After the preview fires 'playing', wait this long before a photo may be taken, so the first frame isn't black.",
+    "settleMs": 300,
     "stills": {
-      "//": "Real photos like Lumabooth: the camera autofocuses, fires its shutter and flash, and the full-resolution JPEG is used for the print. Instead of a video frame. Windows: install digiCamControl (digicamcontrol.com), turn on File > Settings > Webserver (port 5513) and leave it running. Mac/Linux/Pi: install gphoto2. Only one program can hold the camera, so close Lumabooth, EOS Webcam Utility and OBS. If the camera can't be reached the booth falls back to the video feed (preferredLabels above) so a paid session still happens. Test it from the operator screen: Take a test photo.",
+      "//": "Real photos like Lumabooth: the camera autofocuses, fires its shutter and flash, and the full-resolution JPEG is used for the print. Instead of a video frame. Windows: install digiCamControl (digicamcontrol.com), turn on File > Settings > Webserver (port 5513) and leave it running. Mac/Linux/Pi: install gphoto2. Only one program can hold the camera, so close Lumabooth, EOS Webcam Utility and Canon EOS Utility. If the camera can't be reached the booth falls back to the video feed (cameras below) so a paid session still happens. Test it from the operator screen: Take a test photo.",
       "//enabled": "Off: the Canon M50 only allows live view over USB, not remote shooting, so it can't be tethered. Turn on with a body that supports USB remote shooting (e.g. Canon Rebel T6/T7/T7i/SL2/SL3). The M50 works as a video camera instead via EOS Webcam Utility or HDMI.",
       "enabled": false,
       "//backend": "auto = digicamcontrol on Windows, gphoto2 on Mac/Linux/Pi.",
@@ -57,46 +37,62 @@
       "//maxDimension": "Long edge the photo is scaled to. 3000px is plenty for 300dpi cards and strips, and keeps memory sane with 24 MP originals (full-size files are kept on disk).",
       "maxDimension": 3000,
       "timeoutMs": 15000,
-      "digicamcontrol": { "url": "http://127.0.0.1:5513" },
-      "gphoto2": { "bin": "gphoto2" }
-    },
-    "obsSplit": {
-      "//": "Both cameras through OBS. OBS holds both cameras (Logitech Brio left, Canon M50 capture card right) and shows them side by side in ONE scene (Settings > Video: Base and Output 3840x1080, 30 fps; camera 1 at x=0, camera 2 at x=1920, each 1920x1080). Start Virtual Camera with that scene. HoloBooth opens OBS Virtual Camera once and cuts it in two, so every angle tile gets a live preview and either can be picked, without ever opening two cameras (which kills the first one on the booth PC). If OBS isn't running, the shoot falls back to opening the camera directly.",
-      "enabled": true,
-      "//layout": "side-by-side (3840x1080, left/right) or stacked (1920x2160, top/bottom).",
-      "layout": "side-by-side",
-      "regions": 2,
-      "width": 3840,
+      "digicamcontrol": {
+        "url": "http://127.0.0.1:5513"
+      },
+      "gphoto2": {
+        "bin": "gphoto2"
+      }
+    }
+  },
+  "cameras": {
+    "//": "The two cameras. Each is found by its device LABEL (labelMatch: any entry contained in the label, first entry preferred), never by its position in the device list. The matched deviceId + label are saved in config/booth.config.local.json (this PC only) and tried first next time. Not found = an on-screen error (\"Standard camera (Brio) not found\"), never a different camera. Only one camera streams at a time. Operator panel → Camera diagnostics shows every device and what each role matched.",
+    "standard": {
+      "//": "Logitech Brio over USB (UVC). The \"Standard\" button. Set its widest field of view (90°) in Logi Tune / G HUB.",
+      "label": "Standard",
+      "sub": "Eye level",
+      "icon": "📷",
+      "name": "Standard camera (Brio)",
+      "labelMatch": [
+        "Logitech BRIO",
+        "BRIO"
+      ],
+      "//deviceId": "Filled in automatically on this PC (local config). null = match by label.",
+      "deviceId": null,
+      "deviceLabel": null,
+      "//size": "Asked for as \"ideal\": the camera may give less, and the actual size is logged.",
+      "width": 1920,
       "height": 1080,
-      "frameRate": 30
+      "frameRate": 30,
+      "//mirrorPreview": "Mirror the on-screen preview (selfie feel). Saved and printed photos are never mirrored.",
+      "mirrorPreview": true
     },
-    "angles": {
-      "//livePreviews": "false (default): the angle picker shows tiles and only checks each camera is plugged in; the shoot opens just the chosen one. true: live preview in every tile, which means all cameras streaming at once. On some Windows PCs opening a second camera kills the first, so leave this off unless you've tested it.",
-      "livePreviews": false,
-      "//": "Optional: two (or more) physical cameras. When 2+ entries are listed here, the customer picks one on a screen shown right after paying, before the shoot starts. Each entry's preferredLabels/excludeLabels/constraints override the defaults above for that angle only — fields left out fall back to the defaults. Leave this as a single entry (or remove it) to skip the picker and keep the single-camera flow exactly as it was.",
-      "list": [
-        {
-          "id": "standard",
-          "//obsRegion": "With obsSplit: which part of the OBS picture this angle is. 0 = left (the Logitech Brio), 1 = right (the Canon M50).",
-          "obsRegion": 0,
-          "label": "Standard",
-          "sub": "Eye level",
-          "icon": "📷",
-          "//": "Logitech Brio 4K over USB. Through OBS (left half) normally; if OBS isn't running the shoot opens the Brio directly, which works on its own as a webcam. 1080p30 is plenty for 300dpi cards and keeps USB bandwidth low next to the capture card.",
-          "preferredLabels": ["OBS Virtual Camera", "Logitech BRIO", "BRIO", "Logitech"],
-          "constraints": { "width": 1920, "height": 1080, "frameRate": 30 }
-        },
-        {
-          "id": "high",
-          "obsRegion": 1,
-          "label": "High Angle",
-          "sub": "Wide overhead",
-          "icon": "🔝",
-          "//": "Canon M50 with the EF-M 10-18mm, over HDMI into the USB3.0 capture card. Through OBS (right half) normally; without OBS the shoot opens the capture card directly.",
-          "preferredLabels": ["OBS Virtual Camera", "USB3.0 Video", "USB Video", "Capture", "HDMI", "Cam Link", "Elgato", "UVC"],
-          "constraints": { "width": 1920, "height": 1080, "frameRate": 30 }
-        }
-      ]
+    "wide": {
+      "//": "Canon M50 for the 0.5 shot: the \"High Angle\" button. Needs an ultra-wide lens for a real 0.5 look (EF-M 11-22mm at 11mm, or the 10-18mm at 10mm).",
+      "label": "High Angle",
+      "sub": "Wide overhead",
+      "icon": "🔝",
+      "name": "0.5 camera (Canon M50)",
+      "//mode": "usb = Canon EOS Webcam Utility over the M50's USB cable (Windows/macOS; quit Canon EOS Utility, they conflict). hdmi = M50 HDMI out into a USB capture card (Cam Link or a generic UVC card).",
+      "mode": "hdmi",
+      "labelMatch": {
+        "usb": [
+          "EOS Webcam Utility"
+        ],
+        "hdmi": [
+          "Cam Link",
+          "USB Video",
+          "USB3.0 Video",
+          "Capture"
+        ]
+      },
+      "deviceId": null,
+      "deviceLabel": null,
+      "//size": "EOS Webcam Utility often gives less than 1080p; whatever it returns is used and logged.",
+      "width": 1920,
+      "height": 1080,
+      "frameRate": 30,
+      "mirrorPreview": false
     }
   },
   "filters": {
@@ -104,11 +100,45 @@
     "enabled": true,
     "default": "none",
     "list": [
-      { "id": "none", "label": "Original", "sub": "Straight off the sensor", "icon": "📷", "cssFilter": "none" },
-      { "id": "vintage", "label": "Vintage Film", "sub": "Warm, faded, a little grainy", "icon": "🎞️", "cssFilter": "sepia(0.35) saturate(1.3) contrast(0.92) brightness(1.05) hue-rotate(-6deg)", "vignette": 0.35, "grain": 0.12 },
-      { "id": "noir", "label": "Noir Film", "sub": "Black & white, high-contrast grain", "icon": "🎥", "cssFilter": "grayscale(1) contrast(1.25) brightness(1.02)", "vignette": 0.3, "grain": 0.16 },
-      { "id": "g7x", "label": "Canon G7X Mk II", "sub": "Punchy point-and-shoot color", "icon": "📸", "cssFilter": "saturate(1.35) contrast(1.12) brightness(1.03) hue-rotate(-2deg)" },
-      { "id": "pro", "label": "Professional", "sub": "Neutral, studio-flat", "icon": "🎬", "cssFilter": "contrast(1.08) saturate(1.05) brightness(1.02)" }
+      {
+        "id": "none",
+        "label": "Original",
+        "sub": "Straight off the sensor",
+        "icon": "📷",
+        "cssFilter": "none"
+      },
+      {
+        "id": "vintage",
+        "label": "Vintage Film",
+        "sub": "Warm, faded, a little grainy",
+        "icon": "🎞️",
+        "cssFilter": "sepia(0.35) saturate(1.3) contrast(0.92) brightness(1.05) hue-rotate(-6deg)",
+        "vignette": 0.35,
+        "grain": 0.12
+      },
+      {
+        "id": "noir",
+        "label": "Noir Film",
+        "sub": "Black & white, high-contrast grain",
+        "icon": "🎥",
+        "cssFilter": "grayscale(1) contrast(1.25) brightness(1.02)",
+        "vignette": 0.3,
+        "grain": 0.16
+      },
+      {
+        "id": "g7x",
+        "label": "Canon G7X Mk II",
+        "sub": "Punchy point-and-shoot color",
+        "icon": "📸",
+        "cssFilter": "saturate(1.35) contrast(1.12) brightness(1.03) hue-rotate(-2deg)"
+      },
+      {
+        "id": "pro",
+        "label": "Professional",
+        "sub": "Neutral, studio-flat",
+        "icon": "🎬",
+        "cssFilter": "contrast(1.08) saturate(1.05) brightness(1.02)"
+      }
     ]
   },
   "capture": {
@@ -134,7 +164,10 @@
         "name": "1 Pokémon Card",
         "blurb": "One printed Pokémon card + digital copy",
         "amount": 700,
-        "prints": { "card": 1, "strip": 0 },
+        "prints": {
+          "card": 1,
+          "strip": 0
+        },
         "digital": true,
         "gif": false,
         "rarityBoost": 1.0
@@ -144,7 +177,10 @@
         "name": "2 Pokémon Cards",
         "blurb": "Two printed Pokémon cards + digital copies",
         "amount": 1200,
-        "prints": { "card": 2, "strip": 0 },
+        "prints": {
+          "card": 2,
+          "strip": 0
+        },
         "digital": true,
         "gif": false,
         "rarityBoost": 1.0
@@ -154,7 +190,10 @@
         "name": "Digital Pokémon Card",
         "blurb": "Digital card delivered by QR code",
         "amount": 500,
-        "prints": { "card": 0, "strip": 0 },
+        "prints": {
+          "card": 0,
+          "strip": 0
+        },
         "digital": true,
         "gif": false,
         "rarityBoost": 1.0
@@ -164,7 +203,10 @@
         "name": "Digital Photo Strip",
         "blurb": "One digital photo strip delivered by QR code",
         "amount": 500,
-        "prints": { "card": 0, "strip": 0 },
+        "prints": {
+          "card": 0,
+          "strip": 0
+        },
         "digital": true,
         "gif": false,
         "rarityBoost": 1.0
@@ -174,7 +216,10 @@
         "name": "2 Photo Strips",
         "blurb": "Two printed photo strips with your chosen theme",
         "amount": 700,
-        "prints": { "card": 0, "strip": 2 },
+        "prints": {
+          "card": 0,
+          "strip": 2
+        },
         "digital": true,
         "gif": false,
         "rarityBoost": 1.0
@@ -184,7 +229,10 @@
         "name": "1 Pokémon Card + 1 Photo Strip",
         "blurb": "One Pokémon card and one themed photo strip",
         "amount": 1200,
-        "prints": { "card": 1, "strip": 1 },
+        "prints": {
+          "card": 1,
+          "strip": 1
+        },
         "digital": true,
         "gif": false,
         "rarityBoost": 1.0
@@ -194,7 +242,10 @@
         "name": "2 Pokémon Cards + 2 Photo Strips",
         "blurb": "Two printed Pokémon cards and two themed photo strips",
         "amount": 1800,
-        "prints": { "card": 2, "strip": 2 },
+        "prints": {
+          "card": 2,
+          "strip": 2
+        },
         "digital": true,
         "gif": false,
         "rarityBoost": 1.0
@@ -242,57 +293,37 @@
       "print": false
     }
   },
+  "printer": {
+    "//": "DNP DS40, 300 dpi, 6x4 media. Every page is built at its native size: 1844x1240 (cards, landscape) or 1240x1844 (two 2x6 strips, portrait), and saved as a PNG before printing (media/<date>/prints/).",
+    "//os": "auto = Windows printing on Windows, CUPS (lp) on Linux / Raspberry Pi / macOS. Or force \"windows\" or \"cups\".",
+    "os": "auto",
+    "//queue4x6": "Printer name for 4x6 pages (cards). Windows: the DS40 entry set to 4x6 with NO cut. null = the photo printer found by name. Also settable in the operator panel (Printers → 4x6).",
+    "queue4x6": null,
+    "//queueStrip": "Printer name for strip pages. Windows: a SECOND entry for the same DS40, set to \"2inch cut\" in its Printing Preferences (README → Two DS40 queues). CUPS: null = same printer as queue4x6; strips are sent with the driver's cut paper size (Gutenprint: PageSize=w288h432-div2).",
+    "queueStrip": null,
+    "//finish": "glossy or matte. CUPS: matched to the driver's overcoat option (Gutenprint: StpLaminate=Glossy|Matte). Windows: set Glossy/Matte in each queue's Printing Preferences (Chromium can't pass it).",
+    "finish": "glossy",
+    "//copies": "Copies of every page on top of what the order needs: 1 = just the order.",
+    "copies": 1,
+    "//turn": "CUPS and Windows XPS: which way a landscape card page is turned onto the DS40's portrait paper, right or left. Flip it if cards come out upside down.",
+    "turn": "right",
+    "//lpOptions": "CUPS only: extra -o options added after the detected ones, e.g. [\"StpColorCorrection=Accurate\"]. `lpoptions -p <printer> -l` lists them.",
+    "lpOptions": []
+  },
   "printing": {
     "enabled": true,
-    "//": "Leave printerName null to use the OS default. dpi should match your dye-sub (DNP/Citizen = 300, Canon SELPHY = 300).",
-    "cardPrinterName": null,
-    "stripPrinterName": null,
+    "//": "Which printer, finish and copies: see \"printer\" above. dpi is the render resolution of cards and strips (DS40 = 300).",
     "dpi": 300,
-    "card": {
-      "widthIn": 2.5,
-      "heightIn": 3.5,
-      "bleedIn": 0.06
-    },
-    "strip": {
-      "widthIn": 2.0,
-      "heightIn": 6.0,
-      "bleedIn": 0.06
-    },
-    "//sheet": "Most dye-subs print 4x6. 'sheet' gangs card prints onto a 4x6 so you cut/perforate after. pageSize is the printer's own named media (see `lpoptions -p NAME -l`, the PageSize/Media Size line) — set it whenever your driver has one, since a Custom.WxHin size the driver doesn't recognize is what caused off-center, crooked cards on a real DNP DS40 (its PageSize list is fixed presets like dnp6x4, no arbitrary custom sizes).",
-    "sheet": {
-      "enabled": true,
-      "widthIn": 6.0,
-      "heightIn": 4.0,
-      "cutMarks": true,
-      "pageSize": "dnp6x4",
-      "//orientation": "orientation-requested: 3=portrait 4=landscape 5=reverse-landscape 6=reverse-portrait. 3 was confirmed wrong on a real DS40, 4 (pi/print.mjs's default) didn't fix the card either — trying 6 next. If still wrong, change to 5. offsetYIn/offsetXIn nudge the image within the sheet in inches (+down/+right) if it's still off-center once the rotation is right — no rebuild needed, just edit and reload.",
-      "lpOptions": ["orientation-requested=6"],
-      "offsetYIn": -0.15
-    },
-    "//stripSheet": "Two 2x6 strips, printed so the DNP's own auto-cutter physically separates them — confirmed on a real DS40. Its Cutter option only cuts along the sheet's short (feed) axis, so this is a 6x4 sheet (matching PageSize dnp6x4, same as the card sheet) with each strip pre-rotated 90 and stacked top/bottom (rotateForCutter) rather than side by side — Cutter=2Inch then slices the 4in feed length into two 2in-tall halves, each 6in wide, which is the strip's own 6in length once you turn the cut piece back upright. If your printer takes true 2x6 media directly, or has no such cutter mode, set enabled:false and rotateForCutter/lpOptions become irrelevant.",
-    "stripSheet": {
-      "enabled": true,
-      "widthIn": 6.0,
-      "heightIn": 4.0,
-      "cutMarks": true,
-      "pageSize": "dnp6x4",
-      "rotateForCutter": true,
-      "//orientation": "Same dnp6x4 media as the card sheet, which needed orientation-requested=6 (not pi/print.mjs's default of 4) on a real DS40 — trying 6 here too, since flipping the in-canvas pre-rotation direction made no visible difference (a sign the whole sheet's CUPS orientation dominates, same as the card). If still wrong, try 5.",
-      "lpOptions": ["Cutter=2Inch", "orientation-requested=6"],
-      "//windowsPaper": "Windows only: which of the driver's own 6x4 paper sizes to use, as a pattern. This one prefers the DNP's 2-inch-cut version so the two strips come out separated. See the paper list in the operator panel (Printers) to pick the exact name.",
-      "windowsPaper": "2\\s*inch|2in|x\\s*2|cut"
-    },
-    "silent": true,
-    "//windowsMethod": "Windows only. xps (default): print through Windows' XPS print path, the same as Ctrl+P photo printing, starting from the printer's Printing Preferences (its paper and 2inch cut setting) — DNP's driver discards Chromium's custom-size pages. Test by hand: powershell -STA -ExecutionPolicy Bypass -File .\\electron\\winprint-xps.ps1 -Printer \"DS40 (Copy 1)\". classic: a 6x4 sheet sent landscape through Chromium. driver: draw onto the driver's own paper size via PowerShell. browser: no page size, the printer's default paper. Switchable in the operator panel (Print method).",
-    "windowsMethod": "xps",
-    "//windowsTurn": "Windows xps only: wide sheets are turned 90 degrees and printed as portrait 4x6 pages (DNP drops landscape pages). right or left; flip it if prints come out upside down.",
-    "windowsTurn": "right",
-    "copiesMax": 4,
-    "lpOptions": [],
+    "//windowsMethod": "Windows only. chromium (default): a hidden print window holding only the page image, printed silently with 4x6 page size, no margins, scale 100. xps: Windows' XPS print path (what Ctrl+P photo printing uses), starting from the queue's Printing Preferences. Test by hand: powershell -STA -ExecutionPolicy Bypass -File .\\electron\\winprint-xps.ps1 -Printer \"DS40\". Switchable in the operator panel (Print method).",
+    "windowsMethod": "chromium",
+    "//chromiumPage": "Windows chromium method: \"4x6\" (default) prints a 4 x 6 in page with the image cover-fitted onto it (97.6%, ~5 px trimmed off the long edges). \"native\" prints a page of exactly the image's pixels at 300 dpi (4.13 x 6.15 in), nothing scaled. Compare with the test prints.",
+    "chromiumPage": "4x6",
+    "//copiesMax": "Upper limit on copies of one page in one job.",
+    "copiesMax": 10,
+    "//dryRun": "true: build and save the pages but send nothing to the printer.",
     "dryRun": false,
-    "//lpOptions": "Extra CUPS -o flags for your driver, e.g. [\"StpQuality=Photo\", \"ColorModel=RGB\"]. Run `lpoptions -p NAME -l` to see what your printer accepts.",
     "board": {
-      "//": "Oversized photo-prop board. Not printed by the booth \u2014 exported as a PDF you send to a print shop or run on a wide-format printer.",
+      "//": "Oversized photo-prop board. Not printed by the booth — exported as a PDF you send to a print shop or run on a wide-format printer.",
       "enabled": true,
       "widthIn": 24,
       "heightIn": 33.6,
@@ -318,7 +349,7 @@
   "collection": {
     "enabled": true,
     "seasonId": "PPB-2026",
-    "seasonName": "Pocket Creatures \u2014 Base Set",
+    "seasonName": "Pocket Creatures — Base Set",
     "dexUrl": "http://127.0.0.1:4242/dex",
     "identifyBy": "phone",
     "printCollectorIdOnCard": true
@@ -340,7 +371,7 @@
     "dataDir": "/var/lib/holobooth",
     "gpio": {
       "enabled": true,
-      "//": "BCM pin numbers. Wire each button between the pin and GND \u2014 internal pull-ups are used, so no resistors.",
+      "//": "BCM pin numbers. Wire each button between the pin and GND — internal pull-ups are used, so no resistors.",
       "start": 17,
       "shutter": 27,
       "cancel": 22,

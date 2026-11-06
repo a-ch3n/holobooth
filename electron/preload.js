@@ -19,6 +19,10 @@ contextBridge.exposeInMainWorld('booth', {
     method: m => ipcRenderer.invoke('printers:method', m),
     diagnose: () => ipcRenderer.invoke('printers:diagnose'),
   },
+  // Which device is the Brio / the M50: saved on this PC after the first match.
+  cameras: {
+    remember: (role, device) => ipcRenderer.invoke('cameras:remember', role, device),
+  },
   cards: {
     nextMint: args => ipcRenderer.invoke('cards:nextMint', args),
     record: card => ipcRenderer.invoke('cards:record', card),

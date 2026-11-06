@@ -29,7 +29,8 @@ import { createRequire } from 'node:module';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CONFIG_PATH = join(ROOT, 'config', 'booth.config.json');
 const LOCAL_CONFIG_PATH = join(ROOT, 'config', 'booth.config.local.json');
-const { readLocal, applyLocal, stripLocal } = createRequire(import.meta.url)('../electron/local-config.js');
+const { readLocal, applyLocal, stripLocal, writeLocalPatch } = createRequire(import.meta.url)('../electron/local-config.js');
+const { choosePrinter } = createRequire(import.meta.url)('../electron/printers.js');
 const readBase = () => JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
 const { createStills } = createRequire(import.meta.url)('../electron/stills.js');
 const loadConfig = () => applyLocal(readBase(), readLocal(LOCAL_CONFIG_PATH));
@@ -87,13 +88,42 @@ const METHODS = {
   'config.reload': () => (config = loadConfig()),
 
   'printers.list': () => listPrinters(),
-  'printers.print': args => {
+  // Same job shape as Electron (electron/main.js printImage): a PNG at the
+  // DS40's native 1844x1240 / 1240x1844, saved to disk before it's sent.
+  'printers.print': async ({ dataUrl, kind = '4x6', copies = 1, label = '' } = {}) => {
     if (config.printing?.enabled === false) return { ok: false, reason: 'Printing is disabled in booth.config.json' };
-    return printImage({
-      ...args,
-      lpOptions: config.printing?.lpOptions || [],
+    const pc = { queue4x6: null, queueStrip: null, finish: 'glossy', copies: 1, turn: 'right', lpOptions: [], ...(config.printer || {}) };
+    kind = kind === 'strip' ? 'strip' : '4x6';
+    const png = Buffer.from(String(dataUrl).split(',')[1] || '', 'base64');
+    const sharp = (await import('sharp')).default;
+    const { width, height } = await sharp(png).metadata();
+    if (!((width === 1844 && height === 1240) || (width === 1240 && height === 1844))) {
+      return { ok: false, reason: `The page is ${width}x${height} px; the DS40 needs exactly 1844x1240 or 1240x1844` };
+    }
+    const now = new Date();
+    const dir = join(DATA_DIR, 'media', now.toISOString().slice(0, 10), 'prints');
+    await mkdir(dir, { recursive: true });
+    const file = join(dir, `${now.toTimeString().slice(0, 8).replace(/:/g, '')}${String(now.getMilliseconds()).padStart(3, '0')}-${kind}${label ? `-${String(label).replace(/[^\w-]+/g, '_').slice(0, 40)}` : ''}.png`);
+    await writeFile(file, png);
+    const queue = kind === 'strip' ? (pc.queueStrip || pc.queue4x6) : pc.queue4x6;
+    const auto = queue ? { name: queue } : choosePrinter(await listPrinters(), null);
+    if (auto.error) return { ok: false, reason: auto.error, file };
+    const jpeg = await sharp(png).flatten({ background: '#ffffff' }).jpeg({ quality: 100, chromaSubsampling: '4:4:4' }).toBuffer();
+    const r = await printImage({
+      jpeg, kind, printerName: auto.name,
+      copies: Math.max(1, Math.min(Math.round(copies * (pc.copies || 1)), config.printing?.copiesMax || 10)),
+      finish: pc.finish, turn: pc.turn === 'right' ? 'right' : 'left', lpOptions: pc.lpOptions,
       dryRun: !!config.printing?.dryRun,
     });
+    console.log('[print]', JSON.stringify(r));
+    return { ...r, file, notes: r.problems || [], paper: `${r.command || ''}${r.options?.length ? ` (${r.options.join(', ')})` : ''}` };
+  },
+
+  'cameras.remember': async ({ role, deviceId, label } = {}) => {
+    if (!['standard', 'wide'].includes(role) || typeof deviceId !== 'string' || typeof label !== 'string') return { ok: false };
+    writeLocalPatch(LOCAL_CONFIG_PATH, { cameras: { [role]: { deviceId, deviceLabel: label } } });
+    config = loadConfig();
+    return { ok: true };
   },
 
   'cards.nextMint': ({ seasonId, frameId }) =>

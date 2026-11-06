@@ -4,7 +4,8 @@
  * Owns the things a browser tab can't: kiosk window, silent printing to the
  * dye-sub, filesystem, the payment bridge, and the local media server.
  */
-const { app, BrowserWindow, ipcMain, session, shell, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, session, shell, screen, nativeImage } = require('electron');
+const { pathToFileURL } = require('node:url');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -12,12 +13,11 @@ const os = require('node:os');
 const ROOT = path.join(__dirname, '..');
 const CONFIG_PATH = path.join(ROOT, 'config', 'booth.config.json');
 const LOCAL_CONFIG_PATH = path.join(ROOT, 'config', 'booth.config.local.json');
-const { readLocal, applyLocal, stripLocal } = require('./local-config');
+const { readLocal, applyLocal, stripLocal, writeLocalPatch } = require('./local-config');
 const DATA_DIR = path.join(app.getPath('userData'), 'holobooth');
 const DEV = !!process.env.HOLOBOOTH_DEV;
 
 let win = null;
-let printWin = null;
 let config = loadConfig();
 
 /**
@@ -55,9 +55,28 @@ function readBaseConfig() {
 
 /** booth.config.json plus this booth's gitignored booth.config.local.json. */
 function loadConfig() {
+  migrateLocal();
   const local = readLocal(LOCAL_CONFIG_PATH);
   if (local) console.log(`[config] using booth.config.local.json${local.server?.url ? ` — server ${local.server.url}` : ''}`);
   return testPayments(applyLocal(readBaseConfig(), local));
+}
+
+/**
+ * Printer names chosen in the operator panel used to be saved as
+ * printing.cardPrinterName / stripPrinterName; they're printer.queue4x6 /
+ * queueStrip now. Moves them once, in this PC's local file.
+ */
+function migrateLocal() {
+  const local = readLocal(LOCAL_CONFIG_PATH);
+  const p = local?.printing;
+  if (!p || !('cardPrinterName' in p || 'stripPrinterName' in p)) return;
+  local.printer = { ...(local.printer || {}) };
+  if (p.cardPrinterName && !local.printer.queue4x6) local.printer.queue4x6 = p.cardPrinterName;
+  if (p.stripPrinterName && !local.printer.queueStrip) local.printer.queueStrip = p.stripPrinterName;
+  delete p.cardPrinterName; delete p.stripPrinterName;
+  if (!Object.keys(p).length) delete local.printing;
+  fs.writeFileSync(LOCAL_CONFIG_PATH, JSON.stringify(local, null, 2));
+  console.log('[config] moved printer names to printer.queue4x6 / queueStrip in booth.config.local.json');
 }
 
 /**
@@ -159,139 +178,157 @@ function createWindow() {
 /* ------------------------------------------------------------ printing */
 
 /**
- * Print a data-URL image at an exact physical size.
+ * DNP DS40, 300 dpi, 6x4 media. Pages arrive at its native size, built by
+ * the kiosk (src/js/layout.mjs): 1844 x 1240 (cards, landscape) or
+ * 1240 x 1844 (two 2x6 strips side by side, portrait).
  *
- * Dye-subs are unforgiving: the page must be the exact media size with zero
- * margins, or the driver silently scales and your 2.5x3.5 card comes out at
- * 2.42x3.39 and no longer fits a card sleeve.
+ *   kind "4x6"   → printer.queue4x6   (DS40 set to 4x6, no cut)
+ *   kind "strip" → printer.queueStrip (Windows: a second DS40 queue set to
+ *                  "2inch cut"; CUPS: same printer, PageSize w288h432-div2)
  *
- * On macOS and Linux, hand this straight to `lp` via the same code the Pi
- * build already uses (pi/print.mjs) instead of Electron's own silent-print
- * API. That's not a style choice — webContents.print({ silent: true }) has
- * a real bug on macOS where the callback reports success while the job
- * never reaches the OS print spooler at all (confirmed against a real DNP
- * DS40: non-silent printing and printing from every other app worked fine,
- * silent printing through Electron vanished every time). `lp` is the same
- * CUPS underneath either OS, so the Pi's exact-geometry PDF approach works
- * unmodified here too.
+ * Every page is saved as a PNG first (media/<date>/prints/), so the file
+ * can be compared with what came out of the printer.
  *
- * Windows has no CUPS, so it keeps the original @page-sized BrowserWindow
- * printed through Electron's API, which doesn't have this bug there.
+ * Windows: printing.windowsMethod "chromium" (default) prints that PNG from
+ * a dedicated window holding only the image; "xps" goes through Windows'
+ * XPS path instead (winprint-xps.ps1). Linux / Raspberry Pi / macOS: `lp`,
+ * with options read from `lpoptions -p <printer> -l` (pi/print.mjs).
  */
-async function printImage({ dataUrl, widthIn, heightIn, printerName, copies = 1, silent = true, pageSize = null, lpOptions = [], windowsPaper = null }) {
-  console.log(`[print] ${process.platform} request: ${widthIn}x${heightIn}in, printer=${printerName || '(OS default)'}, copies=${copies}, silent=${silent}, pageSize=${pageSize || '(custom size)'}`);
+const NATIVE = { long: 1844, short: 1240 };
 
-  if (process.platform !== 'win32') {
-    const { printImage: printViaCups } = await import('../pi/print.mjs');
-    const result = await printViaCups({
-      dataUrl, widthIn, heightIn, printerName, copies, pageSize,
-      // Per-job options (e.g. the DS40 strip sheet's Cutter=2Inch) first, so
-      // a global booth.config.json override of the same key still wins.
-      lpOptions: [...(lpOptions || []), ...(config.printing?.lpOptions || [])],
-      dryRun: !!config.printing?.dryRun,
+function printerCfg() {
+  return { os: 'auto', queue4x6: null, queueStrip: null, finish: 'glossy', copies: 1, turn: 'right', lpOptions: [], ...(config.printer || {}) };
+}
+
+function printOs(pc = printerCfg()) {
+  if (pc.os === 'windows' || pc.os === 'cups') return pc.os;
+  return process.platform === 'win32' ? 'windows' : 'cups';
+}
+
+function savePrintFile(dataUrl, kind, label) {
+  const now = new Date();
+  const dir = path.join(DATA_DIR, 'media', now.toISOString().slice(0, 10), 'prints');
+  fs.mkdirSync(dir, { recursive: true });
+  const stamp = now.toTimeString().slice(0, 8).replace(/:/g, '') + String(now.getMilliseconds()).padStart(3, '0');
+  const safe = String(label || '').replace(/[^\w-]+/g, '_').slice(0, 40);
+  const file = path.join(dir, `${stamp}-${kind}${safe ? `-${safe}` : ''}.png`);
+  fs.writeFileSync(file, Buffer.from(String(dataUrl).split(',')[1] || '', 'base64'));
+  return file;
+}
+
+/**
+ * @param {{ dataUrl: string, kind: '4x6'|'strip', copies?: number, label?: string }} job
+ *   dataUrl: PNG at exactly 1844x1240 or 1240x1844.
+ */
+async function printImage({ dataUrl, kind = '4x6', copies = 1, label = '' } = {}) {
+  const pc = printerCfg();
+  kind = kind === 'strip' ? 'strip' : '4x6';
+  if (config.printing?.enabled === false) return { ok: false, reason: 'Printing is turned off (printing.enabled in booth.config.json)' };
+  if (!/^data:image\/png;base64,/.test(String(dataUrl))) return { ok: false, reason: 'print: expected a PNG data URL' };
+
+  const img = nativeImage.createFromDataURL(dataUrl);
+  const { width, height } = img.getSize();
+  const orientation = width > height ? 'landscape' : 'portrait';
+  if (!((width === NATIVE.long && height === NATIVE.short) || (width === NATIVE.short && height === NATIVE.long))) {
+    return { ok: false, reason: `The page is ${width}x${height} px; the DS40 needs exactly ${NATIVE.long}x${NATIVE.short} or ${NATIVE.short}x${NATIVE.long}` };
+  }
+  if (kind === 'strip' && orientation !== 'portrait') return { ok: false, reason: 'A strip page must be portrait (1240x1844)' };
+
+  // Saved before anything is sent, so a failed print still leaves the file.
+  const file = savePrintFile(dataUrl, kind, label);
+  const n = Math.max(1, Math.min(Math.round(copies * (pc.copies || 1)), config.printing?.copiesMax || 10));
+  const queue = kind === 'strip' ? (pc.queueStrip || pc.queue4x6) : pc.queue4x6;
+  const os = printOs(pc);
+  const notes = [];
+  if (kind === 'strip' && !pc.queueStrip && os === 'windows') {
+    notes.push('printer.queueStrip is not set: strips go to the 4x6 queue and will NOT be cut (README → Two DS40 queues)');
+  }
+  console.log(`[print] ${kind} ${width}x${height} ${orientation} x${n} → ${os} queue "${queue || '(auto)'}" — saved ${file}`);
+
+  if (config.printing?.dryRun) return { ok: true, dryRun: true, file, paper: `dry run: ${kind} ${width}x${height} → "${queue || '(auto)'}"`, notes };
+
+  if (os === 'cups') {
+    const { printImage: printViaCups, listPrinters } = await import('../pi/print.mjs');
+    // No queue configured: the photo printer by name, not the system default.
+    const auto = queue ? { name: queue } : require('./printers').choosePrinter(await listPrinters(), null);
+    if (auto.error) return { ok: false, reason: auto.error.replace(/ in Windows|Install the DNP.*$/g, ''), file };
+    const r = await printViaCups({
+      jpeg: img.toJPEG(100), kind, printerName: auto.name, copies: n,
+      finish: pc.finish, turn: pc.turn === 'right' ? 'right' : 'left', lpOptions: pc.lpOptions,
     });
-    console.log('[print] lp result:', JSON.stringify(result));
-    return result;
+    console.log('[print] lp:', JSON.stringify(r));
+    return { ...r, file, notes: [...notes, ...(r.problems || [])], paper: `${r.command || ''}${r.options?.length ? ` (${r.options.join(', ')})` : ''}` };
   }
 
-  // Pick the actual photo printer, not whatever Windows calls the default.
+  // Windows: the configured queue, or else the photo printer found by name.
   const printers = await win.webContents.getPrintersAsync().catch(() => []);
-  const choice = require('./printers').choosePrinter(printers, printerName);
+  const choice = require('./printers').choosePrinter(printers, queue);
   if (choice.error) {
     console.error(`[print] ${choice.error}`);
-    return { ok: false, reason: choice.error };
+    return { ok: false, reason: choice.error, file };
   }
   console.log(`[print] printing to "${choice.name}" (${choice.why})`);
-  printerName = choice.name;
-
-  // Default: through the driver's own paper sizes, like Windows' test page
-  // (see electron/winprint.js). printing.windowsMethod: "chromium" = the old way.
-  // classic (default): the Chromium print that worked on this DS40 in
-  // September — landscape for a wide sheet, so Windows sends the driver its
-  // own 4x6 paper turned sideways. driver / browser: alternatives kept for
-  // other printers (operator panel → Print method).
   const wp = require('./winprint');
-  // 'photo' (Windows Photo Viewer) is gone: ImageView_PrintTo isn't exported
-  // on current Windows 11 ("Missing entry"), so anyone who picked it gets XPS.
-  const want = config.printing?.windowsMethod === 'photo' ? 'xps' : config.printing?.windowsMethod || 'xps';
-  const method = ['xps', 'driver', 'browser', 'classic'].includes(want) ? want : 'xps';
-  if (method === 'xps') {
-    const r = await wp.printXps({
-      dataUrl, widthIn, heightIn, printer: printerName, turn: config.printing?.windowsTurn || 'right',
-      copies: Math.max(1, Math.min(copies, config.printing?.copiesMax || 4)),
-    });
-    await new Promise(res => setTimeout(res, 3000));
-    const queue = wp.summarize(await wp.diagnose(), printerName);
-    console.log(`[print] xps result: ${JSON.stringify(r)}\n${queue}`);
-    return { ...r, paper: `${r.paper || ''}\n${queue}` };
-  }
-  if (method === 'photo' && wp.photoViewerDll()) {
-    const r = await wp.printPhotoViewer({
-      dataUrl, printer: printerName,
-      copies: Math.max(1, Math.min(copies, config.printing?.copiesMax || 4)),
-    });
-    await new Promise(res => setTimeout(res, 3000));
-    const queue = wp.summarize(await wp.diagnose(), printerName);
-    console.log(`[print] photo viewer result: ${JSON.stringify(r)}\n${queue}`);
-    return { ...r, paper: `${r.paper || ''} printer="${printerName}"\n${queue}` };
-  }
-  if (method === 'driver') {
-    const r = await require('./winprint').printWindows({
-      dataUrl, widthIn, heightIn, printer: printerName,
-      copies: Math.max(1, Math.min(copies, config.printing?.copiesMax || 4)),
-      paperHint: windowsPaper || '',
-    });
-    console.log(`[print] windows (driver paper) result: ${JSON.stringify(r)}`);
-    return r;
-  }
+  const method = config.printing?.windowsMethod === 'xps' ? 'xps' : 'chromium';
+  const r = method === 'xps'
+    ? await wp.printXps({ file, widthIn: orientation === 'landscape' ? 6 : 4, heightIn: orientation === 'landscape' ? 4 : 6, printer: choice.name, copies: n, turn: pc.turn })
+    : await printChromium({ file, width, height, orientation, deviceName: choice.name, copies: n });
+  console.log(`[print] ${method} result: ${JSON.stringify(r)}`);
+  // What happened to the job after it was handed to Windows.
+  await new Promise(res => setTimeout(res, 3000));
+  const queueState = wp.summarize(await wp.diagnose(), choice.name);
+  console.log(`[print] after print:\n${queueState}`);
+  return { ...r, file, notes, paper: `method=${method} printer="${choice.name}" ${r.paper || ''}\n${queueState}` };
+}
 
+/**
+ * The print page: a window holding only the image, sized to the 4x6 page,
+ * printed silently once the image has loaded.
+ */
+async function printChromium({ file, width, height, orientation, deviceName, copies }) {
+  const landscape = orientation === 'landscape';
+  // printing.chromiumPage: "4x6" (default) = the 4 x 6 in page, the image
+  // cover-fitted onto it (97.6%: 1844 px across 6 in). "native" = a page of
+  // exactly the image's pixels at 300 dpi (4.13 x 6.15 in), nothing scaled.
+  const native = config.printing?.chromiumPage === 'native';
+  const [pw, ph] = native ? [Math.min(width, height) / 300, Math.max(width, height) / 300] : [4, 6];
   const html = `<!doctype html><html><head><meta charset="utf-8"><style>
-    @page { size: ${widthIn}in ${heightIn}in; margin: 0; }
-    html,body { margin:0; padding:0; width:${widthIn}in; height:${heightIn}in;
-                background:#fff; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
-    img { display:block; width:${widthIn}in; height:${heightIn}in; object-fit:cover; }
-  </style></head><body><img src="${dataUrl}"></body></html>`;
-
-  if (printWin) { try { printWin.destroy(); } catch {} }
-  printWin = new BrowserWindow({ show: false });
-  await printWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
-
-  const opts = {
-    silent,
-    printBackground: true,
-    // A wide sheet must be sent as landscape: without it Windows hands the
-    // DS40 a page wider than its 4x6 paper and the driver drops the job
-    // (Sept 21's landscape:false, meant for the Mac, stopped Windows printing).
-    landscape: widthIn > heightIn,
-    copies: Math.max(1, Math.min(copies, config.printing?.copiesMax || 4)),
-    margins: { marginType: 'none' },
-    pageSize: {
-      // Electron wants microns.
-      width: Math.round(widthIn * 25400),
-      height: Math.round(heightIn * 25400),
-    },
-  };
-  // "browser": no custom size — print on the printer's own default paper
-  // (DNP's driver only accepts its own forms), turned to suit the sheet.
-  if (method === 'browser') delete opts.pageSize;
-  if (printerName) opts.deviceName = printerName;
-
-  console.log('[print] windows webContents.print options:', JSON.stringify(opts));
-
-  return new Promise(resolve => {
-    printWin.webContents.print(opts, (ok, reason) => {
-      try { printWin.destroy(); } catch {}
-      printWin = null;
-      console.log(`[print] windows result: ok=${ok}${reason ? `, reason=${reason}` : ''}`);
-      // What happened to the job after Chromium handed it to Windows.
-      setTimeout(async () => {
-        const { diagnose, summarize } = require('./winprint');
-        const queue = summarize(await diagnose(), printerName);
-        console.log(`[print] after print:\n${queue}`);
-        resolve({ ok, reason: reason || null, paper: `method=${method} printer="${printerName}" landscape=${opts.landscape}\n${queue}` });
-      }, 3000);
-    });
-  });
+  @page { size: ${landscape ? `${ph}in ${pw}in` : `${pw}in ${ph}in`}; margin: 0 }
+  html, body { margin: 0; padding: 0 }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #fff;
+               -webkit-print-color-adjust: exact; print-color-adjust: exact }
+  img { width: 100%; height: 100%; display: block; object-fit: cover }
+</style></head><body><img id="page" src="${pathToFileURL(file).href}"></body></html>`;
+  const htmlPath = file.replace(/\.png$/i, '.print.html');
+  fs.writeFileSync(htmlPath, html);
+  const printWin = new BrowserWindow({ show: false, webPreferences: { backgroundThrottling: false } });
+  try {
+    await printWin.loadFile(htmlPath);
+    // Wait for the image's load event before printing.
+    const size = await printWin.webContents.executeJavaScript(`new Promise(r => {
+      const i = document.getElementById('page');
+      const done = () => r(i.naturalWidth ? [i.naturalWidth, i.naturalHeight] : null);
+      if (i.complete) done(); else { i.onload = done; i.onerror = () => r(null); }
+    })`);
+    if (!size) return { ok: false, reason: `The print page couldn't load ${file}` };
+    if (size[0] !== width || size[1] !== height) return { ok: false, reason: `The print page loaded ${size[0]}x${size[1]}, expected ${width}x${height}` };
+    const opts = {
+      silent: true,
+      printBackground: true,
+      deviceName,
+      margins: { marginType: 'none' },
+      landscape,
+      scaleFactor: 100,
+      copies,
+      // Electron wants microns: 4 x 6 in = 101600 x 152400.
+      pageSize: { width: Math.round(pw * 25400), height: Math.round(ph * 25400) },
+    };
+    console.log('[print] webContents.print', JSON.stringify(opts));
+    return await new Promise(resolve => printWin.webContents.print(opts, (success, failureReason) =>
+      resolve({ ok: success, reason: success ? null : (failureReason || 'print failed'), paper: `landscape=${landscape} copies=${copies}` })));
+  } finally {
+    setTimeout(() => { try { printWin.destroy(); } catch {} fs.rm(htmlPath, { force: true }, () => {}); }, 1000);
+  }
 }
 
 /* ----------------------------------------------------------------- IPC */
@@ -302,26 +339,35 @@ ipcMain.handle('config:reload', () => (config = loadConfig()));
 
 ipcMain.handle('printers:list', async () => {
   try {
+    const pc = printerCfg();
     const list = await win.webContents.getPrintersAsync();
-    if (process.platform !== 'win32') return list;
-    // Mark the one a card would actually go to, for the operator panel.
+    // Mark where each kind of print goes, for the operator panel.
     const { choosePrinter } = require('./printers');
-    const cards = choosePrinter(list, config.printing?.cardPrinterName || null);
-    const strips = choosePrinter(list, config.printing?.stripPrinterName || config.printing?.cardPrinterName || null);
-    return list.map(p => ({ ...p, willUse: p.name === cards.name, willUseStrips: p.name === strips.name }));
+    const four = choosePrinter(list, pc.queue4x6 || null);
+    const strips = choosePrinter(list, pc.queueStrip || pc.queue4x6 || null);
+    return list.map(p => ({ ...p, willUse: p.name === four.name, willUseStrips: p.name === strips.name }));
   } catch { return []; }
 });
 
 ipcMain.handle('print:image', (_e, args) => printImage(args));
 
-// The chosen printer's own paper sizes, for the operator panel (and for
-// working out which one is the DS40's 2-inch-cut size).
+// The 4x6 queue's own paper sizes, for the operator panel (Windows).
 ipcMain.handle('printers:papers', async () => {
   if (process.platform !== 'win32') return { ok: false, error: 'Windows only' };
   const list = await win.webContents.getPrintersAsync().catch(() => []);
-  const choice = require('./printers').choosePrinter(list, config.printing?.cardPrinterName || null);
+  const choice = require('./printers').choosePrinter(list, printerCfg().queue4x6 || null);
   if (choice.error) return { ok: false, error: choice.error };
   return { ok: true, printer: choice.name, sizes: await require('./winprint').paperSizes(choice.name) };
+});
+
+// Camera roles: the matched deviceId + label, saved on this PC only
+// (deviceIds are per machine), so the next start opens the same camera.
+ipcMain.handle('cameras:remember', (_e, role, { deviceId, label } = {}) => {
+  if (!['standard', 'wide'].includes(role) || typeof deviceId !== 'string' || typeof label !== 'string') return { ok: false };
+  writeLocalPatch(LOCAL_CONFIG_PATH, { cameras: { [role]: { deviceId, deviceLabel: label } } });
+  config = loadConfig();
+  console.log(`[camera] ${role} = "${label}"`);
+  return { ok: true };
 });
 
 // Operator panel: open the folder with every session's photos (today's, if any).
@@ -358,25 +404,23 @@ ipcMain.handle('printers:diagnose', async () => {
 
 // Print method switch in the operator panel: this PC only.
 ipcMain.handle('printers:method', (_e, method) => {
-  if (!['xps', 'classic', 'driver', 'browser'].includes(method)) return { ok: false, error: `Unknown method ${method}` };
-  require('./local-config').writeLocalPatch(LOCAL_CONFIG_PATH, { printing: { windowsMethod: method } });
+  if (!['chromium', 'xps'].includes(method)) return { ok: false, error: `Unknown method ${method}` };
+  writeLocalPatch(LOCAL_CONFIG_PATH, { printing: { windowsMethod: method } });
   config = loadConfig();
   console.log(`[print] operator chose print method "${method}"`);
   return { ok: true, config };
 });
 
-// "Use this printer" in the operator panel. Saved to this PC's
-// booth.config.local.json, never the committed config; the renderer can
-// set only these two keys through here.
-ipcMain.handle('printers:use', async (_e, name, role = 'both') => {
+// "4x6" / "Strips" in the operator panel's printer list: which queue each
+// kind of print goes to. Saved to this PC's booth.config.local.json, never
+// the committed config; the renderer can set only these two keys here.
+ipcMain.handle('printers:use', async (_e, name, role = 'cards') => {
   const list = await win.webContents.getPrintersAsync().catch(() => []);
   if (!list.some(p => p.name === name)) return { ok: false, error: `No printer named "${name}"` };
-  const printing = role === 'cards' ? { cardPrinterName: name }
-    : role === 'strips' ? { stripPrinterName: name }
-    : { cardPrinterName: name, stripPrinterName: name };
-  require('./local-config').writeLocalPatch(LOCAL_CONFIG_PATH, { printing });
+  const printer = role === 'strips' ? { queueStrip: name } : { queue4x6: name };
+  writeLocalPatch(LOCAL_CONFIG_PATH, { printer });
   config = loadConfig();
-  console.log(`[print] operator chose "${name}" for ${role}`);
+  console.log(`[print] operator chose "${name}" for ${role === 'strips' ? 'strips' : '4x6'}`);
   return { ok: true, config };
 });
 

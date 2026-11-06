@@ -14,7 +14,7 @@ const label = p => `${p.name}${p.displayName && p.displayName !== p.name ? ` (${
 
 /**
  * @param {Array<{name:string, displayName?:string, isDefault?:boolean}>} printers
- * @param {string|null} requested  printing.cardPrinterName / stripPrinterName
+ * @param {string|null} requested  printer.queue4x6 / printer.queueStrip
  * @returns {{ name: string|null, why: string } | { error: string }}
  */
 function choosePrinter(printers, requested) {
