@@ -20,7 +20,10 @@ Add-Type -AssemblyName System.Drawing
 $doc = New-Object System.Drawing.Printing.PrintDocument
 $doc.PrinterSettings.PrinterName = $Printer
 if (-not $doc.PrinterSettings.IsValid) { Write-Output "ERR Printer not found: $Printer"; exit 2 }
-foreach ($s in @($doc.PrinterSettings.PaperSizes)) { Write-Output ("SIZE {0}|{1}|{2}" -f $s.PaperName, $s.Width, $s.Height) }
+foreach ($s in @($doc.PrinterSettings.PaperSizes)) { Write-Output ("SIZE {0}|{1}|{2}|{3}" -f $s.PaperName, $s.Width, $s.Height, $s.RawKind) }
+# The paper and orientation chosen in this queue's Printing Preferences.
+$d = $doc.PrinterSettings.DefaultPageSettings
+Write-Output ("DEFAULT {0}|{1}|{2}|{3}|{4}" -f $d.PaperSize.PaperName, $d.PaperSize.Width, $d.PaperSize.Height, $d.PaperSize.RawKind, $d.Landscape)
 `;
 
 let scriptPath = null;
@@ -43,13 +46,56 @@ function runPs(args, timeout = 90000) {
   });
 }
 
+/**
+ * The printer's own paper sizes, and the paper + orientation chosen in the
+ * queue's Printing Preferences. Sizes as the driver defines them (Windows:
+ * width x length, hundredths of an inch).
+ * @returns {{ sizes: {name, widthIn, heightIn, kind}[], current: {name, widthIn, heightIn, kind, landscape}|null, error?: string }}
+ */
+async function queuePaper(printer) {
+  const { out, stderr, err } = await runPs(['-Printer', printer], 30000);
+  return parsePaper(out, stderr || err?.message);
+}
+
+/** The script's output → { sizes, current, error }. */
+function parsePaper(out, fallbackError = '') {
+  const lines = String(out || '').split(/\r?\n/);
+  const sizes = lines.filter(l => l.startsWith('SIZE ')).map(l => {
+    const [name, w, h, kind] = l.slice(5).split('|');
+    return { name, widthIn: +w / 100, heightIn: +h / 100, kind: +kind };
+  });
+  const d = lines.find(l => l.startsWith('DEFAULT '));
+  let current = null;
+  if (d) {
+    const [name, w, h, kind, landscape] = d.slice(8).split('|');
+    current = { name, widthIn: +w / 100, heightIn: +h / 100, kind: +kind, landscape: /true/i.test(landscape) };
+  }
+  const error = current ? undefined : (lines.find(l => l.startsWith('ERR ')) || fallbackError || 'no answer').slice(0, 300);
+  return { sizes, current, error };
+}
+
+/**
+ * How a page is handed to the Windows driver, from the queue's paper
+ * (parsePaper().current): that paper, at its exact size, and the page of
+ * the same shape (the sheet if it's defined wide, the portrait frame if it's
+ * defined tall). Always a portrait job.
+ */
+function handoffFor(current, printerName = '', error = '') {
+  const c = current;
+  const lo = c && Math.min(c.widthIn, c.heightIn), hi = c && Math.max(c.widthIn, c.heightIn);
+  if (!c || !(lo > 3.8 && lo < 4.4 && hi > 5.8 && hi < 6.4)) {
+    return { paper: { w: 4, h: 6 }, shape: 'frame', why: `couldn't read a 6x4 paper from "${printerName}" (${c ? `${c.name} ${c.widthIn} x ${c.heightIn} in` : error || 'no answer'}); sending the portrait frame on a 4 x 6 in page` };
+  }
+  const shape = c.widthIn > c.heightIn ? 'sheet' : 'frame';
+  return {
+    paper: { w: c.widthIn, h: c.heightIn }, shape, name: c.name,
+    why: `queue paper "${c.name}" ${c.widthIn} x ${c.heightIn} in, defined ${shape === 'sheet' ? 'wide: the sheet is sent as is' : 'tall: the portrait frame is sent'}${c.landscape ? '; the queue says Landscape, but every job is sent portrait' : ''}`,
+  };
+}
+
 /** The printer's own paper sizes: [{ name, widthIn, heightIn }]. */
 async function paperSizes(printer) {
-  const { out } = await runPs(['-Printer', printer], 30000);
-  return out.split(/\r?\n/).filter(l => l.startsWith('SIZE ')).map(l => {
-    const [name, w, h] = l.slice(5).split('|');
-    return { name, widthIn: +w / 100, heightIn: +h / 100 };
-  });
+  return (await queuePaper(printer)).sizes;
 }
 
 const DIAG = `
@@ -116,4 +162,4 @@ async function printXps({ file, widthIn = 4, heightIn = 6, printer, copies = 1 }
   return { ok: false, reason: `XPS print: ${msg}` };
 }
 
-module.exports = { printXps, paperSizes, diagnose, summarize, SCRIPT };
+module.exports = { printXps, paperSizes, queuePaper, parsePaper, handoffFor, diagnose, summarize, SCRIPT };

@@ -260,6 +260,27 @@ function savePrintFile(dataUrl, kind, label) {
   return file;
 }
 
+/**
+ * How a page is handed to the Windows driver. Electron's webContents.print
+ * always names a paper size (with no pageSize it sends A4), and the DS40
+ * driver printed custom sizes that aren't its own papers wrongly. So read
+ * the paper chosen in the queue's Printing Preferences (its exact size, as
+ * the driver defines it) and hand over the page in THAT paper's shape, at
+ * exactly that size, as a portrait job:
+ *   paper defined wide (6 x 4)  → the native sheet, as is
+ *   paper defined tall (4 x 6)  → the portrait driver frame (toDriverFrame)
+ * The driver is never asked to turn anything. Read once per queue.
+ */
+const paperCache = new Map();
+async function windowsHandoff(printerName) {
+  let p = paperCache.get(printerName);
+  if (!p) {
+    p = await require('./winprint').queuePaper(printerName).catch(e => ({ current: null, error: e.message }));
+    if (p.current) paperCache.set(printerName, p);
+  }
+  return require('./winprint').handoffFor(p.current, printerName, p.error);
+}
+
 /** printer.dryRun: on unless the config says false. */
 function isDryRun(pc = printerCfg()) {
   return pc.dryRun !== false;
@@ -338,16 +359,19 @@ async function printImage({ dataUrl, frameUrl = null, frameTurn = null, kind = '
   console.log(`[print] printing to "${choice.name}" (${choice.why})`);
   const wp = require('./winprint');
   const method = config.printing?.windowsMethod === 'xps' ? 'xps' : 'chromium';
-  console.log(`[print] Windows gets the ${DRIVER.W}x${DRIVER.H} portrait driver frame (native page turned ${frame.turn}°) — ${frameFile}`);
+  const h = await windowsHandoff(choice.name);
+  const sheet = h.shape === 'sheet';
+  const sendFile = sheet ? file : frameFile;
+  console.log(`[print] Windows: ${h.why} — ${sheet ? `the ${NATIVE.W}x${NATIVE.H} sheet` : `the ${DRIVER.W}x${DRIVER.H} frame (sheet turned ${frame.turn}°)`} on ${h.paper.w} x ${h.paper.h} in — ${sendFile}`);
   const r = method === 'xps'
-    ? await wp.printXps({ file: frameFile, widthIn: 4, heightIn: 6, printer: choice.name, copies: n })
-    : await printChromium({ file: frameFile, width: DRIVER.W, height: DRIVER.H, deviceName: choice.name, copies: n });
+    ? await wp.printXps({ file: sendFile, widthIn: h.paper.w, heightIn: h.paper.h, printer: choice.name, copies: n })
+    : await printChromium({ file: sendFile, width: sheet ? NATIVE.W : DRIVER.W, height: sheet ? NATIVE.H : DRIVER.H, deviceName: choice.name, copies: n, paper: h.paper });
   console.log(`[print] ${method} result: ${JSON.stringify(r)}`);
   // What happened to the job after it was handed to Windows.
   await new Promise(res => setTimeout(res, 3000));
   const queueState = wp.summarize(await wp.diagnose(), choice.name);
   console.log(`[print] after print:\n${queueState}`);
-  return { ...r, file, frameFile, notes, paper: `method=${method} printer="${choice.name}" ${r.paper || ''} (driver frame turned ${frame.turn}°)\n${queueState}` };
+  return { ...r, file, frameFile, handoff: h, notes, paper: `method=${method} printer="${choice.name}" ${r.paper || ''}\n${h.why}${sheet ? '' : ` (frame = sheet turned ${frame.turn}°)`}\n${queueState}` };
 }
 
 /**
@@ -376,7 +400,7 @@ async function previewPage({ dataUrl, frame, img, kind, jobType, label, width, h
     if (!page.ok) throw new Error(page.reason);
     try { fs.writeFileSync(out, await page.win.webContents.printToPDF(previewPdfOptions(size))); } finally { page.close(); }
   };
-  let how, driverPng = null, driverPdf = null;
+  let how, driverPng = null, driverPdf = null, handoff = null;
   try {
     if (os === 'cups') {
       const { printImage: printViaCups } = await import('../pi/print.mjs');
@@ -387,10 +411,17 @@ async function previewPage({ dataUrl, frame, img, kind, jobType, label, width, h
       how = `the PDF lp would get: ${r.command}`;
     } else {
       await toPdf(png, width, height, SHEET, pdf);
+      // What the real print would hand Windows: the queue's own paper decides.
+      const list = await win.webContents.getPrintersAsync().catch(() => []);
+      const choice = require('./printers').choosePrinter(list, queue);
+      handoff = choice.error
+        ? { paper: { w: 4, h: 6 }, shape: 'frame', why: `${choice.error}; previewing the portrait frame on a 4 x 6 in page` }
+        : await windowsHandoff(choice.name);
+      const sheet = handoff.shape === 'sheet';
       driverPng = `${base}-driver.png`; driverPdf = `${base}-driver.pdf`;
-      fs.writeFileSync(driverPng, Buffer.from(frame.dataUrl.split(',')[1], 'base64'));
-      await toPdf(driverPng, DRIVER.W, DRIVER.H, FRAME, driverPdf);
-      how = `sheet: printToPDF at 6x4 in; driver: printToPDF of the exact print page Windows is sent (4x6 in portrait, native page turned ${frame.turn}°)`;
+      fs.writeFileSync(driverPng, Buffer.from((sheet ? String(dataUrl) : frame.dataUrl).split(',')[1], 'base64'));
+      await toPdf(driverPng, sheet ? NATIVE.W : DRIVER.W, sheet ? NATIVE.H : DRIVER.H, handoff.paper, driverPdf);
+      how = `sheet: printToPDF at 6x4 in; driver: printToPDF of the exact print page Windows is sent (${handoff.why})`;
     }
   } catch (e) {
     return { ok: false, dryRun: true, reason: `Preview PDF failed: ${e.message}`, png };
@@ -398,9 +429,9 @@ async function previewPage({ dataUrl, frame, img, kind, jobType, label, width, h
   const openError = process.env.HOLOBOOTH_NO_OPEN ? 'not opened (HOLOBOOTH_NO_OPEN)' : await shell.openPath(pdf);
   console.log(`[print] PREVIEW ONLY (printer.dryRun) ${jobType} → ${png} + ${pdf}${driverPdf ? ` + ${driverPdf}` : ''}; ${how}${openError ? ` — ${openError}` : ''}`);
   return {
-    ok: true, dryRun: true, png, pdf, driverPng, driverPdf, frameTurn: frame?.turn ?? null, jobType, kind, queue: queue || '(auto)', os, how,
+    ok: true, dryRun: true, png, pdf, driverPng, driverPdf, handoff, frameTurn: frame?.turn ?? null, jobType, kind, queue: queue || '(auto)', os, how,
     file: png,
-    paper: `PREVIEW ONLY, nothing sent to the printer (printer.dryRun)\nPNG ${png}\nPDF ${pdf}${driverPdf ? `\nWindows gets ${driverPdf}` : ''}`,
+    paper: `PREVIEW ONLY, nothing sent to the printer (printer.dryRun)\nPNG ${png}\nPDF ${pdf}${driverPdf ? `\nWindows gets ${driverPdf}\n${handoff.why}` : ''}`,
     notes: openError && !process.env.HOLOBOOTH_NO_OPEN ? [`couldn't open the PDF: ${openError}`] : [],
   };
 }
@@ -464,12 +495,13 @@ async function openPrintPage({ file, width, height, size = SHEET }) {
  *   4x6 paper, LANDSCAPE job, a 6x4 page        → turned it a quarter turn
  *                                                into the wrong shape: the
  *                                                picture sideways, a black third
- * So it is always the first: the 4x6 paper (4 in wide, 6 in long, as Windows
- * defines it), a portrait job, and the 1240 x 1844 frame filling it. The app
- * made that frame (toDriverFrame); the driver turns nothing.
+ * Electron always names a paper (pageSize, default A4), so the paper is the
+ * queue's own, at its exact size (windowsHandoff), and the page is the one
+ * of the same shape: the sheet or the frame. Always a portrait job; the
+ * driver turns nothing.
  */
-async function printChromium({ file, width, height, deviceName, copies }) {
-  const page = await openPrintPage({ file, width, height, size: FRAME });
+async function printChromium({ file, width, height, deviceName, copies, paper = FRAME }) {
+  const page = await openPrintPage({ file, width, height, size: paper });
   if (!page.ok) return { ok: false, reason: page.reason };
   try {
     const opts = {
@@ -479,12 +511,13 @@ async function printChromium({ file, width, height, deviceName, copies }) {
       margins: { marginType: 'none' },
       scaleFactor: 100,
       copies,
-      pageSize: { width: 101600, height: 152400 },   // microns: 4 in wide, 6 in long
+      // The queue's own paper, exactly, as the driver defines it (microns).
+      pageSize: { width: Math.round(paper.w * 25400), height: Math.round(paper.h * 25400) },
       landscape: false,                               // a portrait job: the driver turns nothing
     };
     console.log('[print] webContents.print', JSON.stringify(opts));
     return await new Promise(resolve => page.win.webContents.print(opts, (success, failureReason) =>
-      resolve({ ok: success, reason: success ? null : (failureReason || 'print failed'), paper: `4x6in portrait frame copies=${copies}` })));
+      resolve({ ok: success, reason: success ? null : (failureReason || 'print failed'), paper: `${paper.w} x ${paper.h} in portrait job, copies=${copies}` })));
   } finally {
     page.close();
   }
@@ -514,9 +547,16 @@ ipcMain.handle('print:image', (_e, args) => printImage(args));
 ipcMain.handle('printers:papers', async () => {
   if (process.platform !== 'win32') return { ok: false, error: 'Windows only' };
   const list = await win.webContents.getPrintersAsync().catch(() => []);
-  const choice = require('./printers').choosePrinter(list, printerCfg().queue4x6 || null);
-  if (choice.error) return { ok: false, error: choice.error };
-  return { ok: true, printer: choice.name, sizes: await require('./winprint').paperSizes(choice.name) };
+  const pc = printerCfg();
+  const queues = [];
+  for (const [role, q] of [['4x6 / cards', pc.queue4x6 || null], ['strips', pc.queueStrip || pc.queue4x6 || null]]) {
+    const choice = require('./printers').choosePrinter(list, q);
+    if (choice.error) { queues.push({ role, error: choice.error }); continue; }
+    paperCache.delete(choice.name);
+    const p = await require('./winprint').queuePaper(choice.name);
+    queues.push({ role, printer: choice.name, sizes: p.sizes, current: p.current, error: p.error, handoff: await windowsHandoff(choice.name) });
+  }
+  return { ok: queues.some(q => q.current), queues };
 });
 
 // Camera roles: the matched deviceId + label, saved on this PC only
@@ -596,6 +636,7 @@ ipcMain.handle('printers:use', async (_e, name, role = 'cards') => {
   const list = await win.webContents.getPrintersAsync().catch(() => []);
   if (!list.some(p => p.name === name)) return { ok: false, error: `No printer named "${name}"` };
   const printer = role === 'strips' ? { queueStrip: name } : { queue4x6: name };
+  paperCache.clear();
   writeLocalPatch(LOCAL_CONFIG_PATH, { printer });
   config = loadConfig();
   console.log(`[print] operator chose "${name}" for ${role === 'strips' ? 'strips' : '4x6'}`);

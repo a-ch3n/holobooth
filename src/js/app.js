@@ -2071,10 +2071,15 @@ function showPrintPreview({ dataUrl, frameUrl = null, frameTurn = null, job, lab
           <img src="${dataUrl}" alt="print preview" style="display:block;width:100%;height:100%">
           ${cut ? '<svg viewBox="0 0 1844 1240" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none"><line x1="0" y1="620" x2="1844" y2="620" stroke="#ff2d55" stroke-width="4" stroke-dasharray="26 16"/></svg>' : ''}
         </div>
-        ${frameUrl ? `<div style="width:min(15vw,220px);color:#bbb;font-size:12px">
+        ${frameUrl ? (r.handoff?.shape === 'sheet'
+          ? `<div style="width:min(15vw,220px);color:#bbb;font-size:12px">
+          <img src="${dataUrl}" alt="sent as is" style="display:block;width:100%;aspect-ratio:1844/1240;background:#fff;outline:1px solid #777">
+          <div style="margin-top:6px">What Windows is sent: this sheet as is, as a portrait job. ${escapeHtml(r.handoff.why)}</div>
+        </div>`
+          : `<div style="width:min(15vw,220px);color:#bbb;font-size:12px">
           <img src="${frameUrl}" alt="driver frame" style="display:block;width:100%;aspect-ratio:1240/1844;background:#fff;outline:1px solid #777">
-          <div style="margin-top:6px">What Windows is sent: the driver's 4 × 6 portrait frame, the sheet turned ${escapeHtml(frameTurn)}° (printer.windowsTurn). The DS40 prints it as the sheet on the left.</div>
-        </div>` : ''}
+          <div style="margin-top:6px">What Windows is sent: the portrait frame, the sheet turned ${escapeHtml(frameTurn)}° (printer.windowsTurn), as a portrait job. ${escapeHtml(r.handoff?.why || '')}</div>
+        </div>`) : ''}
       </div>
       <div style="color:#aaa;font-size:12px;white-space:pre-wrap;max-width:94vw;word-break:break-all">${escapeHtml(`stamp: ${stamp}\n${r.png ? `PNG ${r.png}\n` : ''}${r.pdf ? `PDF ${r.pdf}` : ''}${r.driverPdf ? `\nWindows gets ${r.driverPdf}` : ''}`)}</div>
       <div style="display:flex;gap:12px;flex-wrap:wrap;justify-content:center">
@@ -2423,6 +2428,18 @@ function renderPreviewToggle() {
     ${window.booth.printers.windowsTurn ? `<span style="flex-basis:100%;height:0"></span>
     <b>Windows print direction (printer.windowsTurn):</b> <span>${turn}°</span>
     <button class="btn btn-ghost" id="diag-wturn" style="padding:6px 14px">Flip to ${turn === 270 ? 90 : 270}° (if prints come out upside down)</button>` : ''}`;
+  if (window.booth.printers.papers && window.booth.printers.windowsTurn) {
+    const info = document.createElement('div');
+    info.id = 'diag-paper';
+    info.style.cssText = 'flex-basis:100%;font-size:13px;color:var(--ink-dim);white-space:pre-wrap';
+    info.textContent = 'Reading the DS40 queues\' paper…';
+    box.append(info);
+    window.booth.printers.papers().then(p => {
+      info.textContent = (p.queues || []).map(q => q.error && !q.current
+        ? `${q.role}: ${q.printer ? `"${q.printer}" ` : ''}${q.error}`
+        : `${q.role}: "${q.printer}" paper ${q.current.name} ${q.current.widthIn} x ${q.current.heightIn} in${q.current.landscape ? ', Landscape' : ', Portrait'} in Printing Preferences → ${q.handoff.shape === 'sheet' ? 'the app sends the sheet as is' : `the app sends the portrait frame (turned ${turn}°)`}, as a portrait job`).join('\n') || (p.error || 'no answer');
+    }).catch(e => { info.textContent = `Couldn't read the paper: ${e.message}`; });
+  }
   const flip = $('#diag-wturn');
   if (flip) flip.onclick = async () => {
     const r = await window.booth.printers.windowsTurn(turn === 270 ? 90 : 270).catch(e => ({ ok: false, error: e.message }));

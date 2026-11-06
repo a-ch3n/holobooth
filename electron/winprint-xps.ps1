@@ -8,10 +8,12 @@
   HoloBooth calls it with -Image. Run it by hand to test a printer:
     powershell -STA -ExecutionPolicy Bypass -File .\electron\winprint-xps.ps1 -Printer "DS40 (Copy 1)"
   With no -Image it prints a colour test sheet with TOP on it.
-  The image must already be the DS40 driver's portrait 4x6 frame, 1240 x
-  1844 (HoloBooth's toDriverFrame: the native 6x4 page turned once). The
-  job is always Portrait, whatever the queue says: the DS40 driver turned
-  landscape jobs into the wrong shape. This script never rotates anything.
+  -W / -H are the queue's own paper as the driver defines it (HoloBooth
+  reads it from Printing Preferences), and the image must already have that
+  shape: the native 6x4 sheet if the paper is defined wide, the portrait
+  frame (toDriverFrame) if it's defined tall. The job is always Portrait,
+  whatever the queue says: the DS40 driver turned landscape jobs into the
+  wrong shape. This script never rotates anything.
 #>
 param(
   [Parameter(Mandatory = $true)][string]$Printer,
@@ -46,11 +48,11 @@ try {
     $bmp.Dispose()
   }
 
-  # The driver's portrait 4x6 frame only: anything else is refused, never turned.
+  # The image must already have the paper's shape: anything else is refused, never turned.
   $probe = [System.Drawing.Image]::FromFile($Image)
-  $isFrame = $probe.Height -gt $probe.Width
+  $imgWide = $probe.Width -gt $probe.Height
   $probe.Dispose()
-  if (-not $isFrame -or $W -ge $H) { Write-Output 'ERR Only the driver frame (portrait 4x6, toDriverFrame) is printed'; exit 4 }
+  if ($imgWide -ne ($W -gt $H)) { Write-Output ('ERR The page ({0}) does not have the paper''s shape ({1} x {2} in); nothing is turned here' -f ($(if ($imgWide) { 'wide' } else { 'tall' })), $W, $H); exit 4 }
 
   $server = New-Object System.Printing.LocalPrintServer
   $queue = $server.GetPrintQueue($Printer)
@@ -83,7 +85,7 @@ try {
   $ticket.CopyCount = [math]::Max(1, $Copies)
   $ticket = $queue.MergeAndValidatePrintTicket($base, $ticket).ValidatedPrintTicket
 
-  # One fixed page the size of the frame (4 wide x 6 tall), image filling it.
+  # One fixed page the size of the paper, image filling it.
   $size = New-Object System.Windows.Size($ww, $hh)
   $src = New-Object System.Windows.Media.Imaging.BitmapImage
   $src.BeginInit()
