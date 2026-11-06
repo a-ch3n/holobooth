@@ -68,7 +68,7 @@ is a card you refund.
 src/js/app.js         the state machine: attract → pick → pay → shoot → reveal
 src/js/bridge.js      one window.booth API, three backends (see below)
 src/js/camera.js      HDMI capture card detection, capture, burst
-src/js/payments.js    stripe-terminal | stripe-qr | mock, one interface
+src/js/payments.js    stripe-smart-reader | stripe-terminal | stripe-qr | mock, one interface
 src/js/gif.js         GIF89a encoder (median-cut + LZW), no dependencies
 src/js/frames/
   energy.mjs          the 14 types: colours, glyphs, pips, weakness chart
@@ -134,20 +134,89 @@ stay in the catalogue and come back by adding their id (`party`, `cutie`,
 ## Photo strips
 
 Strips are a style you pick, not a by-product of buying a card: 2×6, four
-frames, six themes, and they take the same name and stickers as the cards. A
-sticker can straddle two frames the way it does on a real strip, because the
-whole photo column is one window.
+frames, and they take the same name and stickers as the cards. A sticker can
+straddle two frames the way it does on a real strip, because the whole photo
+column is one window.
 
 Because a strip is 2:6 and a card is 2.5:3.5, **nothing may assume the card
 aspect** — `frameAspect()` and `frameBox()` in `packs.mjs` are the only place
 that decides, and the picker tiles, decorate preview, swatch row, reveal
 carousel and print master all size themselves from it.
 
+### The Photo Strip Collection
+
+![The twelve strip concepts](docs/images/strip-collection.jpg)
+
+Two picker groups on top of the classic strips (`src/js/frames/strips.mjs`):
+
+- **Strip Collection:** twelve designer 2×6 strips in 30 colourways. Each
+  prints as two identical strips on one DS40 sheet, cut apart by the printer.
+
+  | Code | Design | Direction | Colourways |
+  |---|---|---|---|
+  | HB-S01 | Atelier | Minimalist luxury | Ivory, Noir, Blanc |
+  | HB-S02 | Darkroom 400 | Retro film | Gold 400, Sepia, Booth 1972 |
+  | HB-S03 | Cyber Babe | Y2K | Bubblegum, Cyber Blue |
+  | HB-S04 | Four Cut | Korean photo booth | Milk, Peach, Sky |
+  | HB-S05 | Cover Story | Editorial magazine | White, Black, Sand |
+  | HB-S06 | Instant | Polaroid collection | Classic, Vintage |
+  | HB-S07 | Liquid Metal | Chrome / futuristic | Silver, Holo Night |
+  | HB-S08 | Cut & Paste | Scrapbook | Kraft, Notebook |
+  | HB-S09 | Love Letter | Date night / couples | Rouge, Blush, Midnight |
+  | HB-S10 | Party Pop | Birthday | Confetti Pop, Pastel Party |
+  | HB-S11 | Keepsake | Event / wedding | Ivory & Sage, Black Tie, Blush & Gold |
+  | HB-S12 | Off Grid | Streetwear / urban | Blackout, Silver |
+
+- **Jumbo Strips:** a whole 4×6 sheet, portrait (1240 × 1844 px), twice the
+  width of a classic strip, printed uncut on `printer.queue4x6`. HB-J01 Grand
+  Gallery (3 uncropped 16:9 photos), HB-J02 Contact Sheet (an oversized film
+  strip of 4), HB-J03 The Issue (a magazine cover: hero + 3 squares). Sold as
+  the **Jumbo Photo Strip** products (`prints.jumbo` in `pricing.products`).
+
+  ![A classic strip beside a Jumbo, to scale](docs/images/jumbo-vs-classic.jpg)
+
+**Event text.** `strips.event` in `config/booth.config.json` fills every
+design for the whole event: `title` (e.g. "Sarah & James"), `date`
+(`YYYY-MM-DD`, each design formats it its own way), `message`, `age` (the
+birthday badge) and `logo` (a PNG that replaces the title). A name the
+customer types wins over `title`. The couples, birthday, wedding and Korean
+designs open the name screen (with an `&` key for couples; the age pad only
+for birthdays).
+
+**Print-ready files and mockups:** `npm run strips` renders every design at
+native size with blank photo boxes (`out/strip-collection/print/`), the
+two-up DS40 pages (`pages/`), front-facing mockups of the prints
+(`mockups/`) and small previews. Photo boxes use real camera shapes (16:9,
+4:3, 3:2, 1:1), and `npm test` checks every design keeps photos and text
+20 px inside the cut and the edges.
+
+**Typefaces** are bundled in `src/fonts` (SIL Open Font License), so prints
+look the same offline on any booth PC: Playfair Display, Cormorant Garamond,
+Great Vibes, Caveat, Orbitron, Anton, Permanent Marker, Courier Prime,
+Quicksand, Fredoka, Inter, and a Hangul subset of NanumSquareRound renamed
+"HoloBooth Hangul".
+
+**A new design:** write a draw function with the kit in `strips.mjs` (photo
+boxes, fitted and tracked text, the brand mark, tape, torn paper, sprockets,
+confetti, hearts, sparks), add it to `STYLES` (or `JUMBO_STYLES`) with its
+colourways, and it appears in the picker, the tests and `npm run strips`.
+
 ## The session flow
 
 ```
-attract → pick a style → [personalise] → pay → shoot → DECORATE → reveal → print
+attract → pick a style → [personalise] → pay → [angle] → shoot → [filter] → DECORATE → reveal → print
 ```
+
+`[angle]` and `[filter]` are both optional and skipped automatically unless
+configured: `[angle]` only appears with both cameras set up in `cameras`,
+`[filter]` only with `filters.enabled` and a real `filters.list` in
+`config/booth.config.json`. `[filter]` runs on the actual photo just taken,
+not a live camera feed — tap through the looks (Vintage Film, a punchier
+point-and-shoot look, a neutral "Professional" look, "Original" to go back
+to unfiltered, by default) and hit Next once you're happy. Nothing is baked
+in until then: the raw shots are kept untouched the whole session, so picking
+a filter is never a one-way trip. Whatever's chosen is what actually prints
+and gets delivered — not a screen-only effect.
 
 `DECORATE` is where the session actually becomes theirs, and it has three tabs:
 
@@ -335,48 +404,196 @@ The simulation and the film stack fine together.
 
 | Part | What to get | Notes |
 |---|---|---|
-| Camera | Any body with **clean HDMI out** | A Fujifilm X-E5 works well — set HDMI output to clean/no-info so overlays don't print |
-| Capture card | Elgato Cam Link 4K, or a generic UVC HDMI dongle | This is what makes the camera look like a webcam. Generic dongles are often 1080p30 MJPEG — fine for stills |
-| Lens | 16–23mm equivalent | Two people at four feet in a booth |
-| Printer | DNP DS620A / Citizen CX-02 dye-sub, or Canon SELPHY on a budget | Dye-sub prints are dry and handleable instantly, which matters when there's a line |
-| Payment | Stripe **M2** + a phone running the companion app (`companion-app/`), or Tap to Pay on a spare iPhone | Card-present rates beat online rates. The M2 is Bluetooth-only — see the companion app's README for why a phone is in the loop |
+| Standard camera | **Logitech Brio** (USB webcam) | Plugs straight into USB, no capture card. Set its widest field of view (90°) |
+| 0.5 / High Angle camera | **Canon M50** + an ultra-wide lens | Over USB with Canon **EOS Webcam Utility**, or HDMI into a capture card |
+| Capture card (M50 over HDMI only) | Elgato Cam Link 4K, or a generic UVC HDMI dongle | Makes the M50's HDMI look like a webcam. Generic dongles are often 1080p30 MJPEG — fine for stills |
+| Printer | **DNP DS40** dye-sub, 6×4 media | Dye-sub prints are dry and handleable instantly, which matters when there's a line. See [Printing](#printing) |
+| Payment | Stripe **WisePOS E**, or **M2** + a phone running the companion app (`companion-app/`) | Card-present rates beat online rates. See [Payments](#payments) |
 | Display | 1080×1920 portrait touchscreen | CSS is built for portrait but reflows |
-| Lighting | Constant LED panel, not flash | Flash and rolling-shutter HDMI capture do not get along |
+| Lighting | Constant LED panel, not flash | Flash and rolling-shutter video capture do not get along |
 
-### The HDMI camera path, specifically
+### Cameras: Logitech Brio (Standard) and Canon M50 (High Angle / 0.5)
 
-Camera HDMI → capture card → USB. The card enumerates as a UVC webcam, so
-`getUserMedia` sees it and there's no vendor SDK to fight. Then:
+The two buttons on the angle screen keep their names: **Standard** uses the
+Brio, **High Angle** (the 0.5 shot) uses the M50. Both are set up in
+`cameras` in `config/booth.config.json`:
 
-1. Put a distinctive part of the device's name in `camera.preferredLabels`
-   (`"Cam Link"`, `"USB Video"`, whatever your dongle calls itself). The
-   operator panel lists every device it sees with its exact label.
-2. Keep `excludeLabels` populated — otherwise on a laptop the built-in webcam is
-   device #0 and the booth films the operator.
-3. Turn off the camera's auto-power-off. A camera that sleeps mid-event drops
-   the HDMI signal; `camera.js` catches the dead track and surfaces it, but it
-   can't wake your camera for you.
-4. `warmupMs` exists because capture cards output black for a beat while they
-   lock onto the signal. Don't set it to 0.
+- `cameras.standard`: the Brio. `labelMatch: ["Logitech BRIO", "BRIO"]`.
+- `cameras.wide`: the M50, with `mode` set to one of:
+  - `"usb"`: Canon **EOS Webcam Utility** over the M50's USB cable
+    (Windows/macOS). Its device is called "EOS Webcam Utility".
+  - `"hdmi"`: M50 HDMI out → USB capture card. Matched by "Cam Link",
+    "USB Video", "USB3.0 Video" or "Capture" (`labelMatch.hdmi`).
 
-Cameras with a **micro** HDMI port need a locking or right-angle cable. This is
-the single most common failure at an event: someone brushes the cable, the
-signal drops, and the next customer gets a black card.
+How a camera is found, every time:
+1. Permission to use the camera is asked first: device names are blank
+   until it's granted. Then the devices are listed.
+2. The deviceId saved for that role on this PC (in
+   `config/booth.config.local.json`, written automatically the first time
+   it matches), then the saved name, then the first `labelMatch` entry
+   contained in a device's name. **Never** the device's position in the
+   list, and never "whatever camera there is".
+3. Not there: the screen says **"Standard camera (Brio) not found"** or
+   **"0.5 camera (Canon M50) not found"**, and that button is greyed out.
+
+**One camera stream at a time.** The angle screen doesn't stream either
+camera; it only checks that each is plugged in. The shoot opens just the
+one picked, after stopping every track of the other. The Brio and a capture
+card streaming together fight over USB bandwidth (black frames, "Hardware
+MFT ... lack of hardware resources" on Windows, worse on a Raspberry Pi).
+
+- Asked for **1920×1080 @ 30** (ideal). The Brio gives that. EOS Webcam
+  Utility often gives less, and that's used as it comes. The size each
+  camera really sends is in the camera log and the diagnostics screen.
+- A photo is only taken once the preview is playing, plus 300 ms
+  (`camera.settleMs`), so the first frame isn't black.
+- The **Brio's preview is mirrored** (selfie feel). The M50's isn't.
+  Saved and printed photos are never mirrored.
+- Photos are taken at the camera's full resolution, not the screen size,
+  and centre-cropped to the frame's photo window. The shoot screen dims
+  everything outside that window, using the same crop maths as the print,
+  so what people see is what prints.
+- If a camera drops out (M50 auto power-off, a bumped cable), the screen
+  shows **"Camera disconnected - reconnecting"** and it's retried every 2 s.
+
+**Camera diagnostics** (operator panel → Cameras → Camera diagnostics, or
+**Ctrl+Shift+D**): every video device's name and deviceId, which one each
+role matched and how, and the resolution each camera really streams at
+(they're opened one after the other, never together).
+
+**Camera log:** the operator panel (tap the bottom-left corner 5 times)
+has a **Camera log** of everything the cameras did: devices seen, what was
+opened at what size, drops and reconnects. **Copy camera log** puts it on
+the clipboard to send to whoever is helping.
+
+**Hardware setup, by hand:**
+- **Brio:** set the widest field of view (**90°**) in **Logi Tune** or
+  **Logitech G HUB**, so six people fit. It's saved in the camera.
+- **M50:**
+  - Turn off **auto power off** (menu → Eco mode off, Power saving → disable).
+  - Power it from a **DR-E12 DC coupler** (dummy battery) and its AC adapter
+    (sold together as the ACK-E12 kit), not the battery.
+  - Mode dial on **Movie**.
+  - HDMI: press **INFO** until the screen is clean, or the icons print.
+  - EOS Webcam Utility: quit **Canon EOS Utility** first; they conflict.
+- **Lens:** a real 0.5 look needs an ultra-wide, e.g. the **EF-M 11-22mm at
+  11mm** (or the EF-M 10-18mm at 10mm). The 24mm lens won't look wide.
+- Cameras with a **micro** HDMI port need a locking or right-angle cable.
+  This is the most common failure at an event: someone brushes the cable,
+  the signal drops, and the next customer gets a black card.
+
+### Real photos with flash (Canon M50 and other DSLR/mirrorless bodies)
+
+With `camera.stills.enabled`, HoloBooth works the way Lumabooth does. The
+camera focuses, fires its shutter **and flash**, and the full-resolution
+photo goes on the card and strip instead of a video frame. The same USB
+cable also carries the live view the customer poses to.
+
+**The camera must support USB remote shooting.** The **Canon EOS M50
+does not**: over USB it only gives live view, so it can't fire its shutter
+or flash from a computer, in HoloBooth or anything else. Use the M50 as a
+video camera instead (EOS Webcam Utility or HDMI, above), with constant
+lighting. Canon bodies that do tether well and are common in booths
+include the Rebel T6/T7/T7i and SL2/SL3 (2000D/4000D/800D/200D/250D).
+
+**Windows: digiCamControl** (free, [digicamcontrol.com](https://digicamcontrol.com)).
+It talks to Canon cameras through Canon's own SDK, the same way Lumabooth does.
+
+1. Install digiCamControl, plug the camera in by USB and open the app.
+   Check that it shows the camera and can take a photo.
+2. **File → Settings → Webserver:** turn on "Use web server", port 5513,
+   then restart digiCamControl. Leave it running (minimised is fine).
+3. Start HoloBooth. Open the operator panel (tap the bottom-left corner 5
+   times) and press **Take a test photo**. It shows the photo, its size and
+   how long it took.
+
+**Mac, Linux or Raspberry Pi: gphoto2** (`brew install gphoto2` or
+`sudo apt install gphoto2`). Nothing else to set up. On a Mac, HoloBooth
+closes macOS's own camera daemon first, because it grabs the camera on plug-in.
+
+**Camera settings (M50):**
+- **Mode:** the dial on **M** or **Av**, not movie mode. Image quality
+  **JPEG** (L / Fine), not RAW only.
+- **Focus:** AF on, **One-Shot**, **Face + Tracking**. If focus can't
+  lock (too dark, nothing in frame), the camera refuses to shoot. HoloBooth
+  then uses the live view frame for that shot and keeps going.
+- **Flash:** pop up the built-in flash and set it to fire. Better: a
+  speedlight on the hot shoe, or a radio trigger (Godox X2T-C) to
+  off-camera strobes. Keep the shutter at **1/200 s or slower**, the M50's
+  flash sync limit. Lights also help autofocus.
+- **Wi-Fi/Bluetooth off**, because the M50 disables USB control while
+  they're on.
+- **Auto power off disabled.** Use a dummy battery (ACK-E12) for power.
+- **Only one program can hold the camera.** Quit Lumabooth, Canon EOS
+  Utility and EOS Webcam Utility.
+
+**What to expect:**
+- **Timing:** each photo takes about 1–3 s to focus, shoot and transfer,
+  with 📸 on screen meanwhile. Live view pauses during that.
+- **Live view** from digiCamControl runs at ~10–15 fps. From gphoto2 it's
+  only a few fps. For a smooth preview, set `camera.stills.preview` to
+  `"video"` and feed an HDMI capture card, while photos still go over USB.
+- **The GIF** is built from live view frames, so it's lower resolution
+  than the prints.
+- **Originals** are kept at full size: digiCamControl and gphoto2 save
+  them under the app's data folder in `stills/<date>/`. The kiosk uses a
+  copy scaled to `maxDimension` (3000 px), which is plenty for 300 dpi.
+- **Fallback:** if the camera can't be reached at the start of a session,
+  the booth falls back to the same role's video camera (`cameras`) and shows
+  why. A paid customer still gets a shoot.
+- **Camera angles:** with several angles, only `camera.stills.angle`
+  (default `standard`) uses the tethered camera. The others stay video.
+
+Set `camera.stills.enabled` to `false` to go back to video frames (EOS
+Webcam Utility or a capture card, see above).
 
 ---
 
 ## Payments
 
-Three providers behind one interface, chosen by `payments.provider`:
+> **Running events?** See **[docs/EVENT-GUIDE.md](docs/EVENT-GUIDE.md)**: free vs paid event modes,
+> how guests get their digital photos, and an event-day checklist.
+
+**Test vs real, without editing anything:**
+
+| Command | Payments | Window |
+|---|---|---|
+| `npm run dev` | mock (TEST MODE badge) | windowed + DevTools |
+| `npm run start:test` | mock (TEST MODE badge) | full-screen kiosk (rehearsal) |
+| `npm run dev:live` | real | windowed + DevTools |
+| `npm start` | real (`payments.provider`) | full-screen kiosk (the event) |
+
+On the mock reader, every sale approves after ~2 s. Press **D** on the pay
+screen to simulate a decline.
+
+**Card reader and QR together (`payments.offerQr`, on).** With a WisePOS E,
+S700 or M2, the pay screen also shows a QR code. The customer taps their
+card, or scans and pays on their phone (Apple Pay, Google Pay or card).
+The first payment to complete is the sale. The other is stopped: the
+reader is cleared, and the QR link is expired so it can't be paid later. A
+payment that lands at the same instant, or as the customer presses
+Cancel, is refunded automatically, so nobody is charged twice. After a
+declined card, a fresh sale goes back on the reader (up to 3 tries) while
+the QR stays up. If the reader is offline, the screen falls back to QR
+only. After paying by QR, the phone shows a confirmation page from the
+server. That page only loads when the server is public (the cloud server
+with `PUBLIC_URL`), but the payment goes through either way.
+
+Four providers behind one interface, chosen by `payments.provider`:
 
 - **`mock`** — approves after a beat. Develop against this.
-- **`stripe-terminal`** — the real thing, for a Stripe **M2** reader. The M2 is
-  Bluetooth-only, so the kiosk can't drive it directly: the server creates a
-  PaymentIntent and hands it off, a **phone running `companion-app/`** pairs
-  with the M2 over Bluetooth and actually collects the tap, and the kiosk
-  polls the server until that session flips to paid. Capture happens as soon
-  as the tap is approved, same as before — see `companion-app/README.md` for
-  the full flow and `server/index.js`'s `/sessions` endpoints.
+- **`stripe-smart-reader`** — a **WisePOS E** or **S700**. These have their own
+  Wi-Fi/Ethernet, so `server/index.js` drives the reader directly over the
+  internet: the kiosk creates a sale, the server pushes it to the reader's
+  screen (`process_payment_intent`), the customer taps there, and the kiosk
+  polls until it's paid. **Just this PC and the reader — no phone, no
+  companion app.** Declines and walk-aways are read off the reader's own
+  action status, so it works without webhooks configured.
+- **`stripe-terminal`** — for a Stripe **M2** reader. The M2 is Bluetooth-only,
+  so the kiosk can't drive it directly: the server creates a PaymentIntent
+  and hands it off, a **phone running `companion-app/`** pairs with the M2
+  over Bluetooth and actually collects the tap, and the kiosk polls the
+  server until that session flips to paid — see `companion-app/README.md`.
 - **`stripe-qr`** — customer pays on their phone from an on-screen QR. No
   hardware, slower line.
 
@@ -386,9 +603,27 @@ The secret key lives only in `server/index.js`:
 STRIPE_SECRET_KEY=sk_test_... npm run server
 ```
 
-Set `payments.stripe.locationId`, register the reader in the Stripe dashboard,
-and the app finds it on boot. Leave `stripe.simulated: true` to test the whole
-flow against Stripe's simulated reader before hardware arrives.
+### Smart reader setup (once per reader)
+
+1. Create a Location in the Stripe Dashboard (Terminal → Locations) and put
+   its `tml_...` id in `payments.stripe.locationId`.
+2. On the reader: **Settings → Generate pairing code** (three words).
+3. Register it:
+   ```bash
+   STRIPE_SECRET_KEY=sk_live_... npm run reader:register -- sepia-cerulean-aqua
+   ```
+   It prints a `tmr_...` reader id. (Run it with no code to list readers
+   already registered at the location.)
+4. In `booth.config.json` set `"provider": "stripe-smart-reader"` and
+   `"reader": { "id": "tmr_..." }`, then restart the server. Its startup log
+   shows which reader it's driving.
+
+**No hardware yet?** Set `payments.stripe.simulated: true` and start the
+server with an `sk_test_` key — it finds or creates a test Location and a
+simulated WisePOS E by itself on boot, no registration step. On the kiosk's
+pay screen, press **T** to tap a working card or **D** for a decline
+(Stripe's `4000000000000002` test card). Refuses to run with a live key,
+and never creates anything in your live account.
 
 ### Product catalog
 
@@ -405,7 +640,60 @@ receipts show the product by name) instead of an inline, unnamed line item.
 Re-run it any time a price or product name changes in the config — it
 updates in place rather than creating duplicates, archiving the old Price
 if the amount changed. Both payment endpoints look the amount up server-side
-from `productId`; the kiosk's own `amount` is never trusted.
+from `productId`; the kiosk's own `amount` is never trusted. The kiosk does
+send the price it showed, and the server refuses the sale (409, "Price
+mismatch") if the two copies of the config disagree, so update the server
+whenever you change a price.
+
+### Cloud server (download links that work on any phone)
+
+Run locally, the download QR points at `127.0.0.1`, which is the customer's
+own phone, so it can't work. It also dies when the booth PC is packed away.
+Put `server/index.js` on a ~$5/month VPS instead (DigitalOcean, Hetzner,
+Vultr, Lightsail: Ubuntu 24.04, 1 GB RAM). One script sets up Node, HTTPS
+(Caddy + Let's Encrypt), a systemd service and the keys:
+
+```bash
+ssh root@YOUR.SERVER.IP
+curl -fsSL https://raw.githubusercontent.com/a-ch3n/holobooth/main/deploy/setup-vps.sh -o setup-vps.sh
+sudo bash setup-vps.sh
+```
+
+With no domain it uses `https://<ip-with-dashes>.sslip.io`. With a domain,
+point an A record at the server and run `sudo DOMAIN=photos.example.com bash
+setup-vps.sh`. It asks for the Stripe secret key, which is stored in
+`/etc/holobooth.env` on the server and nowhere else. At the end it prints
+two lines for the booth PC. Put them in **`config/booth.config.local.json`**,
+which is gitignored:
+
+```json
+{ "server": { "url": "https://203-0-113-5.sslip.io", "kioskKey": "…" } }
+```
+
+`server.url` points payments, AI names and photo uploads at the VPS, so the
+booth PC no longer runs `npm run server` at all. With a smart reader, the
+reader and the kiosk both just need internet.
+
+- **The kiosk key.** Everything that takes money, refunds, uploads or spends
+  API quota requires the `x-kiosk-key` header once `PUBLIC_URL` is set, and
+  the server won't start without one. Download pages, `/qr` and `/health`
+  stay open. The key never goes in `booth.config.json`, because this repo is
+  public.
+- **Download links** are 128-bit random ids, so they can't be guessed, and
+  expire after `delivery.retentionDays`. Each sale is roughly 5–10 MB, so a
+  25 GB disk holds a few thousand sales.
+- **Going live on the server:** put `sk_live_…` in `/etc/holobooth.env`, and
+  put the reader id and `"stripe": { "simulated": false }` in the server's
+  own `/opt/holobooth/config/booth.config.local.json`, e.g.
+  `{ "payments": { "stripe": { "simulated": false }, "reader": { "id": "tmr_…" } } }`,
+  then `systemctl restart holobooth`.
+- **Webhooks** are optional. Without `STRIPE_WEBHOOK_SECRET` the server
+  checks every webhook against Stripe before believing it.
+- **Update:** re-run `sudo bash setup-vps.sh`. It pulls, reinstalls and
+  restarts, and keeps the keys and photos. Logs: `journalctl -u holobooth -f`.
+- **Trade-off:** the upload now crosses the venue's internet before the
+  download QR appears. On weak Wi-Fi, that's a few seconds on the reveal
+  screen.
 
 ---
 
@@ -438,37 +726,200 @@ the default one is ever retired.
 
 ## Printing
 
-Dye-subs are unforgiving about page geometry — if the page size doesn't match the
-media exactly, the driver silently scales and your 2.5×3.5″ card comes out at
-2.42×3.39″ and no longer fits a card sleeve. Both platforms solve it, differently:
+Printer: **DNP DS40**, 300 dpi, 6×4 media. Settings are under `printer` in
+`config/booth.config.json`:
 
-- **Desktop:** `electron/main.js` builds a page whose `@page size` matches the
-  media in inches with `margin: 0`, and passes the size to Electron in microns.
-- **Pi:** `pi/print.mjs` wraps the browser's JPEG in a one-page PDF whose
-  MediaBox is exactly 180×252 pt and prints it with `-o print-scaling=none`.
-  A PNG carries no physical size so `lp` has to guess; a PDF MediaBox is
-  unambiguous. No ImageMagick, no Ghostscript — PDF carries a JPEG bitstream
-  verbatim via `/DCTDecode`.
+| Key | What |
+|---|---|
+| `os` | `auto` (Windows printing on Windows, CUPS `lp` on Linux / Raspberry Pi / macOS), or force `windows` / `cups` |
+| `queue4x6` | Printer name for 4×6 pages and trading cards (the queue with NO cut). `null` = the photo printer found by name |
+| `queueStrip` | Printer name for strip pages (the 2-inch-cut queue on Windows) |
+| `finish` | `glossy` or `matte` |
+| `copies` | Copies of every page on top of what the order needs (1 = just the order) |
+| `rotation.portrait4x6` | `90` (default) or `270`: how a portrait 4×6 page (a Jumbo strip) is turned, clockwise, into the native page |
+| `rotation.strip` | `90` (default) or `270`: how each 620 × 1844 strip is turned, clockwise, into an 1844 × 620 half |
 
-Don't "fix" either one by letting the driver fit-to-page.
+### One printer-native page for everything
 
-Most dye-subs (a DNP DS40 included) only load 4×6 media, so neither a lone
-2.5×3.5″ card nor a lone 2×6″ strip can go to the printer as its own page —
-there's no media that size loaded. `buildGangSheet()` in `app.js` tiles
-copies of whichever one you're printing onto a sheet-sized canvas with
-hairline cut marks, and that composed sheet is what actually gets sent as
-the print job:
+The DS40 prints on 6-inch-wide media. Its native page is **6×4 LANDSCAPE:
+1844 × 1240 px** at 300 dpi, and its 2-inch cut is a **horizontal line at
+y = 620** (top half / bottom half). Every job becomes exactly that page in
+one function, `toPrinterNative()` in `src/js/layout.mjs`. It and, on
+Windows only, `toDriverFrame()` (one fixed turn into the Windows driver's
+portrait frame, see *What Windows is sent* below) are the only places in
+the print path that rotate anything:
 
-- **Cards** (`printing.sheet`, enabled by default): two 2.5×3.5″ cards side
-  by side on a 6×4″ sheet.
-- **Strips** (`printing.stripSheet`, enabled by default): two 2×6″ copies of
-  the same strip side by side on a 4×6″ sheet — the same layout DNP calls
-  "2×6 (4×6 divided)" media, where the printer's own cutter splits the sheet
-  into two strips. If a purchase only calls for one strip, the second slot
-  just prints blank; nothing extra is charged or given away.
+| Job | Designed as | On the native page |
+|---|---|---|
+| 4×6 landscape | 1844 × 1240 | used as is |
+| 4×6 portrait (Jumbo strip) | 1240 × 1844 | turned 90° by `rotation.portrait4x6` |
+| Photo strips | one 620 × 1844 strip | turned by `rotation.strip` to 1844 × 620; copy 1 at y = 0, copy 2 at y = 620. The cut separates them. Content stays 20 px from every edge and the cut |
+| Trading cards | 750 × 1050 (2.5 × 3.5 in) | **not turned**: two upright cards side by side, centred, with cut marks, cut by hand |
 
-Set either `enabled: false` if your printer actually takes that media size
-directly, and it'll fall back to sending a single page at that exact size.
+A 2.5 × 3.5 in card is taller than a 2-inch half, so card sheets always
+cross y = 620: **cards must print on the uncut 4×6 queue, never the strip
+queue**, or the printer cuts every card in half.
+
+If strips or Jumbos come out upside down, change that `rotation` value from
+90 to 270. Nothing else needs to change.
+
+Every page is **saved as a PNG before it's printed**, exactly as sent:
+`media/<date>/prints/` under the app's data folder (operator panel → Open
+photos folder), and test prints in `media/test-prints/`.
+
+**One print path.** Every print, customer cards, strips, Jumbos and the
+test prints alike, goes through `sendToPrinter()` in `src/js/app.js`:
+`toPrinterNative()`, then the build stamp, then the main process
+(`print:image` → `printImage()` in `electron/main.js`; on a Raspberry Pi
+`printers.print` in `pi/kiosk-server.mjs`; in a plain browser tab the
+system print dialog). Nothing else in the app prints.
+
+**Build stamp** (`printer.buildStamp`, on): every print and preview carries
+a small grey line in the bottom-right corner, inside the 20 px margin: the
+code's git commit, the job type and its rotation, e.g.
+`a1b2c3d · strip · rotation.strip 90`. If a print doesn't have it, or shows
+an old commit, the booth is running old code (see below). The operator
+panel → Printers shows the same commit under **Running code**, with where
+the app runs from.
+
+**Is the booth running the new code?** `npm start` runs straight from this
+folder's `src/` and `electron/`; there's no build step and no cache, so a
+`git pull` and a restart (close the app, `npm start` again) is enough. An
+installed copy (`npm run dist` → `dist/HoloBooth Setup *.exe`, installed
+under `%LOCALAPPDATA%\Programs`) does NOT update itself: rebuild with
+`npm run dist`, run the new installer, and start it again. The stamp and
+**Running code** say which one you're looking at (`packaged app` = the
+installed copy).
+
+**Test prints** (operator panel → Printers): **Test print 4x6**, **Test
+print strips** and **Test print cards**. Each is drawn in its design
+orientation (a portrait Jumbo-shaped 4×6, one strip, one card) and goes
+through `toPrinterNative()` like a real job. Each shows:
+- a big **TOP ↑** at the top of the design, **LEFT** and **RIGHT** on the sides
+- a 1 px black line on the very edge pixels, and a red line 20 px inside it
+- ruler ticks every 10 px (long ones every 50 px) along all four edges
+- for strips and cards, where the cut falls, as a dashed blue line
+- the job type and its rotation value
+
+Reading it: a missing black line on a side means the printer crops there,
+and the ticks say by how much. If a red line is cut off, content would be
+lost. A strip test should come out as two strips with TOP ↑ at the same end
+of each; a card test as two upright cards.
+
+### Windows: two DS40 queues
+
+Windows doesn't install DNP's driver by itself. Download the **DS40 Windows
+driver** from DNP's support site (dnpphoto.com → Support → Drivers), turn
+the printer on, plug it in by USB and run the installer. Check **Settings →
+Bluetooth & devices → Printers & scanners** lists it.
+
+Electron can't set the DS40's cut per job on Windows, so the same printer
+is added **twice**: one queue that never cuts (4×6 and cards), one that
+always cuts (strips). Both get the same orientation and paper.
+
+**What Windows is sent.** Two things went wrong on Windows before: asked
+for a landscape job, the DS40 driver turned the page itself into the wrong
+shape (sideways, a black third); and Electron's `webContents.print` always
+names a paper size (with none given it sends A4), so the driver was always
+handed a custom 4×6 or 6×4 in size instead of its own "(6x4)" paper. Now,
+before printing, the app reads the paper chosen in the queue's **Printing
+Preferences** (its name, exact size and which way the driver defines it;
+operator panel → Camera diagnostics shows it) and hands that paper the page
+of the same shape, at exactly that size, as a **portrait job**:
+
+| The queue's paper is defined | The app sends |
+|---|---|
+| wide (e.g. 6.15 × 4.13 in) | the 6×4 sheet as is |
+| tall (e.g. 4.13 × 6.15 in) | the sheet turned once into that frame, by `printer.windowsTurn` (90 or 270, default 270): `toDriverFrame()` in `src/js/layout.mjs`. The cut line y = 620 lands on x = 620 either way |
+
+The driver is never asked to turn anything. If the paper can't be read, it
+falls back to the tall frame on a 4 × 6 in page and says so. Each print's
+page Windows gets is saved next to its PNG as `…-driver.png`. If
+tall-paper prints come out turned half round, flip
+`windowsTurn`: Camera diagnostics → **Flip**.
+
+1. **4×6 / card queue (no cut).** On the DS40 entry the installer made (e.g.
+   "DS40"): **Printing preferences → Orientation: Portrait, Paper Size:
+   (6x4), 2inch cut: Disable**. Set Glossy or Matte here too.
+2. **Add the second queue** on the same port. In PowerShell as
+   administrator (use your entry's exact name):
+   ```powershell
+   $p = Get-Printer -Name "DS40"
+   Add-Printer -Name "DS40 Strips" -DriverName $p.DriverName -PortName $p.PortName
+   ```
+   (Or Settings → Printers & scanners → Add device → "The printer that I
+   want isn't listed" → Add a local printer → *use the DS40's existing USB
+   port* → the DNP DS40 driver → name it "DS40 Strips".)
+3. **Strip queue (cut).** On "DS40 Strips": **Printing preferences →
+   Orientation: Portrait, Paper Size: (6x4), 2inch cut: Enable**, and the
+   same finish. (Every job says Portrait itself; this just keeps the queue
+   from disagreeing.)
+4. **Tell HoloBooth.** Operator panel → Printers: tap **4x6** on "DS40"
+   and **Strips** on "DS40 Strips". Or put them in the config:
+   ```json
+   "printer": { "queue4x6": "DS40", "queueStrip": "DS40 Strips" }
+   ```
+   (Saved on this PC, in `config/booth.config.local.json`.)
+5. **Test print strips** should come out as two pieces, cut between the
+   two copies. **Test print 4x6** and **Test print cards** come out uncut.
+
+With `queueStrip` unset, strips go to the 4×6 queue and come out uncut;
+the operator panel shows that in red.
+
+**Print method** (operator panel, or `printing.windowsMethod`):
+- `chromium` (default): a hidden print window holding only the page
+  Windows gets (above), printed silently: `@page` at the queue paper's exact
+  size, margin 0, the image exactly filling it (no cropping), and
+  `webContents.print` with `silent`, `printBackground`, the queue as
+  `deviceName`, `marginType: 'none'`, `scaleFactor: 100`, the copies,
+  `pageSize` = the queue's paper in microns and `landscape: false`. Chromium hands Windows the orientation from
+  `landscape` and `pageSize` as the paper. What the DS40 driver did with
+  each: 4×6 paper + portrait job → printed as sent; a 6×4 custom paper →
+  printed nothing; 4×6 paper + landscape job → sideways with a black third.
+  It waits for the image's load event, and a failure's reason is shown on
+  screen. The preview's `…-driver.pdf` is `printToPDF` of this exact print
+  page (4 × 6 in portrait).
+- `xps`: Windows' XPS print path (what Ctrl+P photo printing uses),
+  starting from the queue's Printing Preferences, with the orientation set
+  to Portrait on every job. Test by hand:
+  `powershell -STA -ExecutionPolicy Bypass -File .\electron\winprint-xps.ps1 -Printer "DS40"`.
+  It prints the same page as the Chromium method, on the queue's own paper,
+  and never rotates.
+
+Glossy/matte on Windows is set in each queue's Printing Preferences.
+Chromium can't pass it per job.
+
+### Linux / Raspberry Pi (CUPS + Gutenprint)
+
+```bash
+sudo apt install cups printer-driver-gutenprint
+sudo lpadmin -p DS40 -E -v "$(lpinfo -v | grep -i dnp | awk '{print $2}')" -m gutenprint.5.3://dnp-ds40/expert
+lpoptions -p DS40 -l      # the option names HoloBooth will use
+```
+
+HoloBooth prints with `lp`, never the Chromium dialog. It reads the
+printer's own options from `lpoptions -p <printer> -l` at print time and
+picks from what's there. Nothing is hardcoded. With Gutenprint's DS40
+driver (checked against `gutenprint.5.3://dnp-ds40/expert`) that gives:
+
+| Page | Options sent |
+|---|---|
+| 4×6 and cards | `PageSize=w288h432` `StpLaminate=Glossy` (or `Matte`) `StpiShrinkOutput=Crop` `orientation-requested=4` `print-scaling=none` |
+| strips | `PageSize=w288h432-div2` (the driver's "2x6*2": 4×6 cut in two), the same finish and other options |
+
+The native page goes to CUPS as a one-page PDF exactly 1844 × 1240 px at
+300 dpi (442.56 × 297.6 pt), no fit-to-page. **Gutenprint's DS40 driver
+only has portrait paper sizes**: its 4×6 is a 1240 × 1844 raster, with the
+2-inch cut running down it at x = 620. So the job says the page is
+landscape (`orientation-requested=4`), and CUPS lays it onto that frame
+turned 90°. Checked through the DS40's CUPS filters: the whole page
+arrives, and the native cut line y = 620 lands on x = 620 of the driver's
+frame. Without it (`orientation-requested=3`, or auto-rotate switched off)
+the landscape page is cropped onto the portrait frame and loses two corners.
+If a CUPS print comes out upside down, add `"orientation-requested=5"` to
+`printer.lpOptions`. DNP's own macOS driver names things differently (e.g.
+`PageSize=dnp6x4` plus `Cutter=2Inch`); the same matching finds those.
+Extra options for every job: `printer.lpOptions`.
 
 ---
 
@@ -511,7 +962,8 @@ Honest list of what needs real work before an event:
 
 - **Collector dex identity.** `collection.identifyBy` is set to `phone` but the
   kiosk never asks for one — cards record `collectorId: null`. The server
-  endpoint (`GET /dex?id=`) works; the phone-entry screen doesn't exist.
+  endpoint (`GET /dex?id=`, kiosk key required) works; the phone-entry
+  screen doesn't exist.
 - **Fonts.** The card faces fall back to system fonts until you drop real files
   into `src/assets/fonts/` and add `@font-face` rules. The layouts hold either
   way, but a rounded display face is a big part of the genre's feel.

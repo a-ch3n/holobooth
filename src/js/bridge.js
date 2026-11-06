@@ -68,6 +68,9 @@ function makeRpcBridge(apiBase) {
       list: () => call('printers.list'),
       print: args => call('printers.print', args),
     },
+    cameras: {
+      remember: (role, device) => call('cameras.remember', { role, ...device }),
+    },
     cards: {
       nextMint: args => call('cards.nextMint', args),
       record: card => call('cards.record', card),
@@ -78,6 +81,11 @@ function makeRpcBridge(apiBase) {
       summary: () => call('sales.summary'),
     },
     media: { save: args => call('media.save', args) },
+    stills: {
+      status: () => call('stills.status'),
+      liveview: () => call('stills.liveview'),
+      capture: () => call('stills.capture'),
+    },
     app: {
       info: () => call('app.info'),
       quit: () => call('app.quit'),
@@ -105,14 +113,16 @@ function makeRpcBridge(apiBase) {
 
 function makeMemoryBridge() {
   const mem = { cards: [], sales: [] };
-  const cfg = fetch('../config/booth.config.json').then(r => r.json());
+  // Browser preview is always a test: mock payments.
+  const cfg = fetch('../config/booth.config.json').then(r => r.json())
+    .then(c => ({ ...c, payments: { ...c.payments, realProvider: c.payments?.provider, provider: 'mock', testMode: true } }));
   return {
     config: { get: () => cfg, save: async () => true, reload: async () => cfg },
     printers: {
       list: async () => [],
       print: async args => {
-        const { printing } = await cfg;
-        if (printing?.enabled === false) {
+        const c = await cfg;
+        if (c.printing?.enabled === false) {
           return { ok: false, reason: 'Printing is disabled in booth.config.json' };
         }
         return printInBrowser(args);
@@ -147,38 +157,41 @@ function makeMemoryBridge() {
   };
 }
 
-function printInBrowser({ dataUrl, widthIn, heightIn, copies = 1 } = {}) {
-  if (!dataUrl || !widthIn || !heightIn) {
-    return Promise.reject(new Error('Print requires an image and physical dimensions'));
-  }
-
+/** Plain browser preview: the system print dialog, the same 6in x 4in native page as the Electron print page. */
+function printInBrowser({ dataUrl, copies = 1 } = {}) {
+  if (!dataUrl) return Promise.reject(new Error('Print requires an image'));
   return new Promise((resolve, reject) => {
-    const frame = document.createElement('iframe');
-    frame.style.position = 'fixed';
-    frame.style.width = '1px';
-    frame.style.height = '1px';
-    frame.style.opacity = '0';
-    frame.style.border = '0';
-    frame.onload = () => {
-      try {
-        frame.contentWindow.focus();
-        frame.contentWindow.print();
-        setTimeout(() => frame.remove(), 1000);
-        resolve({ ok: true, browser: true, copies });
-      } catch (error) {
-        frame.remove();
-        reject(error);
+    const probe = new Image();
+    probe.onerror = () => reject(new Error('Print image failed to load'));
+    probe.onload = () => {
+      // Only the printer-native page (toPrinterNative): 1844 x 1240, never turned here.
+      if (probe.naturalWidth !== 1844 || probe.naturalHeight !== 1240) {
+        reject(new Error(`Print page is ${probe.naturalWidth}x${probe.naturalHeight}, expected the native 1844x1240`));
+        return;
       }
+      const frame = document.createElement('iframe');
+      Object.assign(frame.style, { position: 'fixed', width: '1px', height: '1px', opacity: '0', border: '0' });
+      frame.onload = () => {
+        try {
+          frame.contentWindow.focus();
+          frame.contentWindow.print();
+          setTimeout(() => frame.remove(), 1000);
+          resolve({ ok: true, browser: true, copies });
+        } catch (error) {
+          frame.remove();
+          reject(error);
+        }
+      };
+      const pages = Array.from({ length: Math.max(1, copies) }, () =>
+        `<img src="${dataUrl}">`).join('');
+      frame.srcdoc = `<!doctype html><html><head><style>
+        @page { size: 6in 4in; margin: 0 }
+        html, body { margin: 0; padding: 0 }
+        img { display: block; width: 6in; height: 4in }
+      </style></head><body>${pages}</body></html>`;
+      document.body.append(frame);
     };
-
-    const pages = Array.from({ length: Math.max(1, copies) }, () =>
-      `<img src="${dataUrl}" style="display:block;width:${widthIn}in;height:${heightIn}in;object-fit:cover">`
-    ).join('');
-    frame.srcdoc = `<!doctype html><html><head><style>
-      @page { size: ${widthIn}in ${heightIn}in${widthIn > heightIn ? ' landscape' : ''}; margin: 0; }
-      html, body { margin: 0; padding: 0; }
-    </style></head><body>${pages}</body></html>`;
-    document.body.append(frame);
+    probe.src = dataUrl;
   });
 }
 

@@ -11,14 +11,17 @@
  *     every failure path still hands them their digital copy.
  */
 
-import { pickerGroups, allFrames, frameById, frameAspect, frameBox, RARITIES, RARITY_ORDER, SET, energy } from './frames/packs.mjs';
+import { pickerGroups, allFrames, frameById, frameAspect, frameBox, RARITIES, RARITY_ORDER, SET, energy, themeFor } from './frames/packs.mjs';
 import { rarityOdds } from './frames/rarity.mjs';
 import { COMPANIONS, companionById, companionCanvas } from './frames/companions.mjs';
 import { loadPack, packFrames } from './frames/assetpack.mjs';
 import { stickerCatalog, stickerCanvas, newPlacement, stickerAt, DECOS } from './frames/stickers.mjs';
 import { renderCard, renderStrip, mintCard, printSize } from './frames/render.mjs';
-import { Camera } from './camera.js';
-import { createPaymentProvider } from './payments.js';
+import { Camera, StillsCamera, applyPhotoFilter, cameraLog, clog, cameraRoles, matchRoles, stopActiveCamera } from './camera.js';
+import { loadFonts } from './frames/fonts.mjs';
+import { setStripEvent } from './frames/strips.mjs';
+import { toPrinterNative, printRotations, NATIVE, CALIBRATION_DESIGN, coverCrop, coverPlacement, cardSheetLayout, drawCalibration, buildStampText, drawBuildStamp, toDriverFrame, windowsTurn } from './layout.mjs';
+import { createPaymentProvider, kioskHeaders } from './payments.js';
 import { encodeGif } from './gif.js';
 
 import { installBridge, PLATFORMS } from './bridge.js';
@@ -31,8 +34,10 @@ const S = {
   frameId: null,
   product: null,
   payment: null,
-  shots: [],          // full-res captured canvases
+  shots: [],          // full-res captured canvases, always the untouched originals
+  filteredShots: [],  // shots with S.filterId applied — what actually gets rendered/printed
   burst: [],
+  filteredBurst: [],
   heroIndex: 0,
   card: null,
   cardCanvas: null,
@@ -42,7 +47,7 @@ const S = {
   retakes: 0,
   camera: null,
   cameraAngle: null,
-  angleCameras: [],
+  filterId: null,
   pay: null,
   idleTimer: null,
   adminTaps: 0,
@@ -57,6 +62,7 @@ const S = {
   previewCard: null,
   pokemonImages: {},
   stripFrameId: null,
+  stripCustomColor: null, // hex, set instead of stripFrameId when "Custom" is picked
 };
 
 const $ = sel => document.querySelector(sel);
@@ -123,7 +129,7 @@ async function aiCharacterName(theme) {
     const timer = setTimeout(() => ac.abort(), ai.timeoutMs || 6000);
     const res = await fetch(`${ai.serverUrl}/ai/name`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: kioskHeaders(S.cfg.server?.kioskKey),
       body: JSON.stringify({ theme: theme || '' }),
       signal: ac.signal,
     });
@@ -184,6 +190,9 @@ function renderNameSuggestions(host, query, onPick) {
 /* ---------------------------------------------------------- navigation */
 
 function go(name) {
+  // Free event: no pay screen at all — straight from the product to the shoot.
+  if (name === 'pay' && S.cfg?.payments?.provider === 'free') return startFreeSession();
+  if (name !== S.screen) clog(`screen: ${S.screen || '-'} → ${name}`);
   S.screen = name;
   $$('.screen').forEach(el => (el.hidden = el.dataset.screen !== name));
   resetIdle();
@@ -193,15 +202,14 @@ function go(name) {
 function resetIdle() {
   clearTimeout(S.idleTimer);
   const ms = S.screen === 'attract' ? null
-    : ['capture', 'pay'].includes(S.screen) ? S.cfg.booth.sessionTimeoutMs
+    : ['capture', 'pay', 'angle'].includes(S.screen) ? S.cfg.booth.sessionTimeoutMs
     : S.cfg.booth.idleAttractAfterMs;
   if (ms) S.idleTimer = setTimeout(() => { abandon(); }, ms);
 }
 
 function abandon() {
-  S.camera?.stop();
-  S.angleCameras.forEach(({ camera }) => camera.stop());
-  S.angleCameras = [];
+  S.camera?.stop('session ended');
+  stopActiveCamera();
   S.pay?.cancel();
   go('attract');
 }
@@ -221,6 +229,16 @@ async function boot() {
   S.platform = await installBridge();
   document.body.dataset.platform = S.platform;
   S.cfg = await window.booth.config.get();
+  // Never let a test session look like a real one (or the other way round).
+  if (S.cfg.payments?.provider === 'mock') {
+    const badge = document.createElement('div');
+    badge.className = 'test-mode-badge';
+    badge.textContent = 'TEST MODE · payments simulated';
+    document.body.appendChild(badge);
+  }
+  clog(`boot: ${navigator.userAgent.match(/(Chrome|Electron)\/[\d.]+/g)?.join(' ') || navigator.userAgent}, ` +
+    `windowsCaptureApi=${S.cfg.camera?.windowsCaptureApi || 'mediafoundation'}, hwMjpeg=${!!S.cfg.camera?.windowsHardwareMjpeg}, ` +
+    `cameras=${cameraRoles(S.cfg).map(r => `${r.id}${r.mode ? `/${r.mode}` : ''}:${JSON.stringify(r.match)}${r.deviceLabel ? ` saved "${r.deviceLabel}"` : ''}`).join(' ')}`);
 
   // Physical buttons (Pi only): an arcade shutter button drives the same flow
   // as a screen tap, so the booth works with the lid closed.
@@ -239,8 +257,8 @@ async function boot() {
   $('#to-product').addEventListener('click', () => {
     // Party cards need a name before they mean anything; everything else can
     // go straight to the till.
-    const tpl = lookupFrame(S.frameId)?.template;
-    go(['party', 'kawaii', 'assetPack'].includes(tpl) ? 'personalize' : 'product');
+    const tpl = currentFrame()?.template;
+    go(['party', 'kawaii', 'assetPack'].includes(tpl) || currentFrame()?.personalize ? 'personalize' : 'product');
   });
   $('#pz-done').addEventListener('click', () => go('product'));
   $('#pay-cancel').addEventListener('click', () => { S.pay?.cancel(); go('product'); });
@@ -257,10 +275,18 @@ async function boot() {
   // Dev conveniences, harmless in production (nobody has a keyboard at a kiosk).
   window.addEventListener('keydown', e => {
     if (e.key === 'd') window.__forceDecline = true;
+    // Simulated smart reader: T taps a working card, D a declining one.
+    if (S.screen === 'pay' && (e.key === 't' || e.key === 'd')) {
+      S.pay?.simulateTap?.(e.key === 'd').catch(err => toast(`Simulated tap failed: ${err.message}`, true));
+    }
     if (e.key === 'Escape') abandon();
+    if (e.ctrlKey && e.shiftKey && (e.key === 'D' || e.key === 'd')) go('diagnostics');
     if (e.key === '`') document.body.classList.toggle('debug');
   });
 
+  // The strip collection's typefaces (src/fonts) and the event's own text/logo.
+  clog(`fonts: ${await loadFonts('fonts/').catch(() => 0)} loaded`);
+  await setupStripEvent();
   await loadAssetPacks();
   await loadPokemonCharacters();
   buildPicker();
@@ -286,7 +312,7 @@ function pokemonCharacter(frame) {
 const ON_ENTER = {};
 
 ON_ENTER.attract = async () => {
-  S.shots = []; S.burst = []; S.card = null; S.retakes = 0;
+  S.shots = []; S.filteredShots = []; S.burst = []; S.filteredBurst = []; S.card = null; S.retakes = 0;
   S.gifBlob = null; S.downloadUrl = null; S.payment = null;
   S.personal = { name: '', age: '', companionId: null };
   S.companionImg = null;
@@ -294,9 +320,10 @@ ON_ENTER.attract = async () => {
   S.artWindow = null;
   S.previewCard = null;
   S.stripFrameId = null;
+  S.stripCustomColor = null;
   S.cameraAngle = null;
-  S.angleCameras = [];
-  S.camera?.stop();
+  S.filterId = S.cfg.filters?.default || null;
+  S.camera?.stop('new session');
 
   const live = pickerGroups();
   const count = live.reduce((n, g) => n + g.frames.length, 0);
@@ -409,15 +436,43 @@ function boxFor(frame, width) {
   return frameBox(frame, width);
 }
 
+/** Strips (2x6) and Jumbo strips (4x6) both use every shot. */
 function isStrip(frame) {
-  return frame?.template === 'strip';
+  return frame?.template === 'strip' || frame?.template === 'jumbo';
+}
+
+function isJumbo(frame) {
+  return frame?.template === 'jumbo';
+}
+
+/** printSize() kind for a frame: 'card' 750x1050, 'strip' 620x1844, 'jumbo' 1240x1844. */
+function sizeKind(frame) {
+  return isJumbo(frame) ? 'jumbo' : isStrip(frame) ? 'strip' : 'card';
+}
+
+/**
+ * strips.event in booth.config.json: the host's event title, date, message
+ * and logo, shown by the Photo Strip Collection designs.
+ */
+async function setupStripEvent() {
+  const ev = S.cfg.strips?.event || {};
+  let logo = null;
+  if (ev.logo) {
+    logo = await new Promise(resolve => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => { clog(`warn: strips.event.logo "${ev.logo}" didn't load`); resolve(null); };
+      img.src = /^(https?:|data:|\/)/.test(ev.logo) ? ev.logo : `../${ev.logo}`;
+    });
+  }
+  setStripEvent(ev, logo);
 }
 
 /** Strips need every shot; cards need the chosen one. */
 function photoArgs(frame) {
   return isStrip(frame)
-    ? { photos: S.shots.length ? S.shots : [placeholderPhoto()], photo: null }
-    : { photo: S.shots[S.heroIndex] || placeholderPhoto(), photos: [] };
+    ? { photos: S.filteredShots.length ? S.filteredShots : [placeholderPhoto()], photo: null }
+    : { photo: S.filteredShots[S.heroIndex] || placeholderPhoto(), photos: [] };
 }
 
 /* -------------------------------------------------------------- picker */
@@ -456,7 +511,7 @@ function renderGrid(packId) {
 
   for (const f of group.frames) {
     const tile = document.createElement('div');
-    tile.className = 'frame-tile' + (isStrip(f) ? ' tall' : '');
+    tile.className = 'frame-tile' + (isStrip(f) && !isJumbo(f) ? ' tall' : '') + (isJumbo(f) ? ' jumbo' : '');
     tile.dataset.frame = f.id;
     const cv = document.createElement('canvas');
     const box = boxFor(f, 360);
@@ -464,12 +519,12 @@ function renderGrid(packId) {
     tile.append(cv);
     const e = energy(f.energyType);
     tile.insertAdjacentHTML('beforeend', `
-      <div class="nm"><i class="type-dot" style="background:${e.base}"></i>${f.name}</div>
+      <div class="nm"><i class="type-dot" style="background:${f.swatch || e.base}"></i>${f.name}</div>
       <div class="mt">
         <span class="num">${f.collectorNumber}</span>
         ${f.availability?.mintLimit
           ? `<span class="badge-limited">${f.availability.mintLimit} only</span>`
-          : `<span>${e.name} · ${f.hp} HP</span>`}
+          : f.family ? `<span>${f.family}</span>` : `<span>${e.name} · ${f.hp} HP</span>`}
       </div>`);
     grid.append(tile);
 
@@ -485,17 +540,60 @@ function renderGrid(packId) {
       stock: S.cfg.cards?.stock || null,
       // The picker preview uses the actual Pokémon name; customers can change
       // it later in the decorate screen before printing.
-      personalization: { name: f.name, age: 7 },
+      // (Collection strips show their own default text, not the frame's name.)
+      personalization: f.style ? {} : { name: f.name, age: 7 },
       foil: true,
     });
 
     tile.addEventListener('click', () => {
       $$('.frame-tile').forEach(x => x.classList.toggle('on', x === tile));
       S.frameId = f.id;
+      S.stripCustomColor = null;
       if (isStrip(f)) S.stripFrameId = f.id;
       $('#picked-label').textContent = isStrip(f)
         ? `${f.name} — photo strip`
         : `${f.name} — ${f.collectorNumber} · ${energy(f.energyType).name}`;
+      $('#to-product').disabled = false;
+    });
+  }
+
+  // A "Custom" tile alongside the strip presets — picking a color here
+  // works exactly like tapping a preset tile (same S.frameId, so mint/dex
+  // still treat it as that base strip), just with S.stripCustomColor set so
+  // currentFrame() swaps in a custom theme everywhere it renders or prints.
+  if (group.id === 'strips' && stripChoices().length) {
+    const base = stripChoices()[0];
+    const tile = document.createElement('div');
+    tile.className = 'frame-tile tall frame-tile-custom';
+    const cv = document.createElement('canvas');
+    const box = boxFor(base, 360);
+    cv.width = box.W; cv.height = box.H;
+    tile.append(cv);
+    tile.insertAdjacentHTML('beforeend', `
+      <div class="nm"><i class="type-dot rainbow"></i>Custom color</div>
+      <div class="mt"><span>Pick any color</span></div>
+      <input type="color" id="frame-strip-custom-color" value="${S.stripCustomColor || DEFAULT_STRIP_CUSTOM_COLOR}">`);
+    grid.append(tile);
+
+    const drawPreview = hex => renderCard(cv.getContext('2d'), {
+      frame: stripFrameWithColor(hex, base), frameId: base.id, W: box.W, H: box.H,
+      photo: null, photos: [placeholderPhoto(), placeholderPhoto(), placeholderPhoto(), placeholderPhoto()],
+      card: mintCard({ frame: base, frameId: base.id, seasonId: S.cfg.collection.seasonId, mint: 1, forcedRarity: base.rarityFloor || 'rare' }),
+      stock: S.cfg.cards?.stock || null,
+      personalization: { name: base.name, age: 7 },
+      foil: true,
+    });
+    drawPreview(S.stripCustomColor || DEFAULT_STRIP_CUSTOM_COLOR);
+    tile.classList.toggle('on', !!S.stripCustomColor);
+
+    const colorInput = $('#frame-strip-custom-color');
+    colorInput.addEventListener('input', () => drawPreview(colorInput.value));
+    colorInput.addEventListener('change', () => {
+      $$('.frame-tile').forEach(x => x.classList.toggle('on', x === tile));
+      S.frameId = base.id;
+      S.stripFrameId = base.id;
+      S.stripCustomColor = colorInput.value;
+      $('#picked-label').textContent = `${base.name} — photo strip, custom color`;
       $('#to-product').disabled = false;
     });
   }
@@ -555,15 +653,24 @@ function placeholderCharacter() {
 
 /* --------------------------------------------------------- personalize */
 
-const KB_ROWS = ['QWERTYUIOP', 'ASDFGHJKL', 'ZXCVBNM'];
+const KB_ROWS = ['QWERTYUIOP', 'ASDFGHJKL', 'ZXCVBNM&'];
 let pzBuilt = false;
 
 ON_ENTER.personalize = () => {
   if (!pzBuilt) buildPersonalizeUI();
+  // Collection strips: names (and an age for birthdays), no buddy.
+  const pf = currentFrame();
+  const strip = !!pf?.style;
+  $('#buddies').closest('.fld').hidden = strip;
+  $('#fld-age').closest('.fld').hidden = strip && pf.style !== 'partypop';
+  $('#pad').hidden = strip && pf.style !== 'partypop';
+  $('#fld-name').closest('.fld').querySelector('span').textContent = strip
+    ? (['loveletter', 'keepsake'].includes(pf.style) ? 'Your names (e.g. SARAH & JAMES)' : 'Name on the strip')
+    : 'Name on the card';
   // Default the buddy to one matching the chosen card's colour, so the card
   // already looks finished before they touch anything.
   if (!S.personal.companionId) {
-    const type = lookupFrame(S.frameId)?.energyType;
+    const type = currentFrame()?.energyType;
     S.personal.companionId = (COMPANIONS.find(c => c.type === type) || COMPANIONS[0]).id;
     syncBuddySelection();
   }
@@ -574,14 +681,14 @@ function buildPersonalizeUI() {
   pzBuilt = true;
 
   buildKeyboard($('#kb'), {
-    max: 14,
+    max: 18,
     get: () => S.personal.name,
     set: v => { S.personal.name = v; },
     onChange: refreshPersonalize,
   });
 
   $('#pz-gen-name').addEventListener('click', async e => {
-    const theme = energy(lookupFrame(S.frameId)?.energyType)?.name;
+    const theme = energy(currentFrame()?.energyType)?.name;
     S.personal.name = await surpriseName(e.currentTarget, theme);
     refreshPersonalize();
   });
@@ -650,7 +757,7 @@ function refreshPersonalize() {
   const ready = S.personal.name.trim().length >= 1;
   $('#pz-done').disabled = !ready;
   $('#pz-summary').textContent = ready
-    ? `${S.personal.name.trim()}${S.personal.age ? `, ${S.personal.age}` : ''} · ${companionById(S.personal.companionId)?.name || ''}`
+    ? `${S.personal.name.trim()}${S.personal.age ? `, ${S.personal.age}` : ''}${currentFrame()?.style ? '' : ` · ${companionById(S.personal.companionId)?.name || ''}`}`
     : 'Type a name to start';
 
   // Live preview, debounced — every keypress would otherwise redraw a card.
@@ -660,10 +767,14 @@ function refreshPersonalize() {
 
 async function drawPersonalizePreview() {
   const cv = $('#pz-canvas');
-  const pf = lookupFrame(S.frameId);
+  const pf = currentFrame();
+  // Shaped like the frame: a card, a 2x6 strip or a 4x6 Jumbo.
+  const b = boxFor(pf, 1000);
+  cv.height = 700; cv.width = Math.round(700 * b.W / b.H);
   renderCard(cv.getContext('2d'), {
     frame: pf, frameId: S.frameId, W: cv.width, H: cv.height,
     photo: placeholderPhoto(),
+    photos: isStrip(pf) ? [0, 1, 2, 3].map(() => placeholderPhoto()) : [],
     companion: await companionImage(),
     card: mintCard({
       frame: pf, frameId: S.frameId, seasonId: S.cfg.collection.seasonId, mint: 1, forcedRarity: 'rare',
@@ -676,8 +787,9 @@ async function drawPersonalizePreview() {
 /** What the renderer needs, from what the customer typed. */
 function personalizationPayload() {
   const typedName = S.personal.name.trim();
+  // Collection strips show their own title when nothing's typed, never the frame's name.
   return {
-    name: typedName || lookupFrame(S.frameId)?.name || '',
+    name: typedName || (currentFrame()?.style ? '' : currentFrame()?.name || ''),
     age: S.personal.age === '' ? null : Number(S.personal.age),
     companionId: S.personal.companionId,
   };
@@ -689,20 +801,61 @@ function stripChoices() {
   return allFrames().filter(f => f.template === 'strip');
 }
 
+/** A strip frame with its color swapped to a customer-picked hex. Keeps the
+ *  base's own id/collectorNumber/packId/etc — mint records and dex progress
+ *  read those, and a custom color is a cosmetic override, not a new card to
+ *  collect — only `theme` changes. */
+function stripFrameWithColor(hex, base = stripChoices()[0]) {
+  return { ...base, theme: themeFor(hex, 'strip') };
+}
+
+/** The bonus strip's frame on a card+strip combo (its own separate theme
+ *  choice from showStripThemePicker(), independent of the main frame). */
+function currentStripFrame() {
+  if (S.stripCustomColor) return stripFrameWithColor(S.stripCustomColor, lookupFrame(S.stripFrameId) || stripChoices()[0]);
+  return lookupFrame(S.stripFrameId) || stripChoices()[0];
+}
+
+/** The main chosen frame, with a customer-picked custom strip color applied
+ *  when active — use this instead of a raw catalog lookup everywhere a frame
+ *  feeds a preview, print, or record, so a custom color is always reflected
+ *  consistently. */
+function currentFrame() {
+  const f = lookupFrame(S.frameId);
+  return (f && isStrip(f) && S.stripCustomColor) ? stripFrameWithColor(S.stripCustomColor, f) : f;
+}
+
+const DEFAULT_STRIP_CUSTOM_COLOR = '#e889b5';
+
 function showStripThemePicker() {
   const picker = $('#strip-theme-picker');
   const grid = $('#strip-theme-grid');
   const choices = stripChoices();
   picker.hidden = false;
   grid.innerHTML = choices.map(f => `
-    <button class="strip-theme ${f.id === S.stripFrameId ? 'on' : ''}" data-strip-theme="${f.id}" type="button">
-      <span class="strip-theme-swatch" style="--strip-color:${energy(f.energyType).base}"></span>${f.name}
-    </button>`).join('');
+    <button class="strip-theme ${!S.stripCustomColor && f.id === S.stripFrameId ? 'on' : ''}" data-strip-theme="${f.id}" type="button" aria-label="${f.name}">
+      <span class="strip-theme-swatch" style="--strip-color:${f.swatch || energy(f.energyType).base}"></span>
+    </button>`).join('') + `
+    <label class="strip-theme strip-theme-custom${S.stripCustomColor ? ' on' : ''}">
+      <span class="strip-theme-swatch${S.stripCustomColor ? '' : ' rainbow'}" style="--strip-color:${S.stripCustomColor || 'transparent'}"></span>
+      Custom
+      <input type="color" id="strip-custom-color" value="${S.stripCustomColor || DEFAULT_STRIP_CUSTOM_COLOR}">
+    </label>`;
+
   grid.querySelectorAll('[data-strip-theme]').forEach(button => button.addEventListener('click', () => {
     S.stripFrameId = button.dataset.stripTheme;
+    S.stripCustomColor = null;
     grid.querySelectorAll('.strip-theme').forEach(b => b.classList.toggle('on', b === button));
     go('pay');
   }));
+
+  // 'change' (not 'input') so it only advances once the color wheel actually
+  // closes with a choice made, not on every drag update while it's open.
+  $('#strip-custom-color').addEventListener('change', e => {
+    S.stripCustomColor = e.target.value;
+    S.stripFrameId = null;
+    go('pay');
+  });
 }
 
 function showCardThemePicker() {
@@ -712,7 +865,7 @@ function showCardThemePicker() {
   picker.hidden = false;
   grid.innerHTML = choices.map(f => `
     <button class="strip-theme ${f.id === S.frameId ? 'on' : ''}" data-card-theme="${f.id}" type="button">
-      <span class="strip-theme-swatch" style="--strip-color:${energy(f.energyType).base}"></span>${f.name}
+      <span class="strip-theme-swatch" style="--strip-color:${f.swatch || energy(f.energyType).base}"></span>${f.name}
     </button>`).join('');
   grid.querySelectorAll('[data-card-theme]').forEach(button => button.addEventListener('click', () => {
     S.frameId = button.dataset.cardTheme;
@@ -722,14 +875,16 @@ function showCardThemePicker() {
 }
 
 ON_ENTER.product = () => {
-  const frame = lookupFrame(S.frameId);
+  const frame = currentFrame();
   const selectedStrip = isStrip(frame);
   const visibleProducts = S.cfg.pricing.products.filter(p => {
     const cardCount = p.prints?.card || 0;
     const stripCount = p.prints?.strip || 0;
+    const jumboCount = p.prints?.jumbo || 0;
     // Keep checkout offers focused on the format the customer selected.
-    if (selectedStrip) return stripCount > 0 || p.id === 'digital_strip';
-    return cardCount > 0 || p.id === 'digital_card';
+    if (isJumbo(frame)) return jumboCount > 0 || p.id === 'digital_strip';
+    if (selectedStrip) return (stripCount > 0 && !jumboCount) || p.id === 'digital_strip';
+    return (cardCount > 0 && !jumboCount) || p.id === 'digital_card';
   });
 
   $('#products').innerHTML = visibleProducts.map(p => {
@@ -738,7 +893,7 @@ ON_ENTER.product = () => {
       ${p.featured ? '<span class="tag">MOST POPULAR</span>' : ''}
       <h3>${p.name}</h3>
       <div class="blurb">${p.blurb}</div>
-      <div class="price">${money(p.amount)}</div>
+      <div class="price">${S.cfg.payments?.provider === 'free' ? (S.cfg.payments?.freeLabel || 'Free') : money(p.amount)}</div>
     </div>`;
   }).join('');
 
@@ -765,6 +920,16 @@ ON_ENTER.product = () => {
 
 /* ----------------------------------------------------------------- pay */
 
+/** Free event mode: record the session (amount 0) and go to the shoot. */
+async function startFreeSession() {
+  S.payment = { ok: true, method: 'free', paymentId: 'free_' + Date.now().toString(36), amount: 0 };
+  await window.booth.sales.record({
+    at: new Date().toISOString(), amount: 0, productId: S.product.id,
+    frameId: S.frameId, paymentId: S.payment.paymentId, method: 'free', boothId: S.cfg.booth.id,
+  }).catch(() => {});
+  go(cameraAngles().length >= 2 ? 'angle' : 'capture');
+}
+
 ON_ENTER.pay = async () => {
   $('#pay-amount').textContent = money(S.product.amount);
   $('#pay-product').textContent = S.product.name;
@@ -773,7 +938,7 @@ ON_ENTER.pay = async () => {
   status.classList.remove('err');
 
   S.pay = createPaymentProvider(
-    { ...S.cfg.payments, currency: S.cfg.booth.currency, boothId: S.cfg.booth.id },
+    { ...S.cfg.payments, currency: S.cfg.booth.currency, boothId: S.cfg.booth.id, kioskKey: S.cfg.server?.kioskKey },
     {
       onStatus: s => {
         status.textContent = s.message || '';
@@ -793,9 +958,14 @@ ON_ENTER.pay = async () => {
     return;
   }
 
-  const res = await S.pay.collect(S.product, {
-    frameId: S.frameId, boothId: S.cfg.booth.id, season: S.cfg.collection.seasonId,
-  });
+  let res;
+  try {
+    res = await S.pay.collect(S.product, {
+      frameId: S.frameId, boothId: S.cfg.booth.id, season: S.cfg.collection.seasonId,
+    });
+  } catch (e) {
+    res = { ok: false, error: e.message };
+  }
 
   if (!res.ok) {
     if (res.error === 'cancelled') return;
@@ -818,88 +988,319 @@ ON_ENTER.pay = async () => {
   go(cameraAngles().length >= 2 ? 'angle' : 'capture');
 };
 
-/** Configured camera angles, or [] if only the single default camera is set up. */
+/** The cameras turned on in config.cameras (standard = Brio, wide = Canon M50). 2 = the angle picker is shown. */
 function cameraAngles() {
-  return S.cfg.camera?.angles?.list || [];
+  return cameraRoles(S.cfg);
+}
+
+/**
+ * camera.stills: the main camera takes real photos over USB (focus, flash,
+ * full resolution) instead of grabbing video frames. With several angles it
+ * applies to stills.angle (default: the first one); the others stay video.
+ */
+function usesStills(angleId) {
+  const st = S.cfg.camera?.stills;
+  if (!st?.enabled || !window.booth?.stills) return false;
+  const angles = cameraAngles();
+  if (angles.length < 2) return true;
+  return (angleId || angles[0].id) === (st.angle || angles[0].id);
+}
+const defaultRole = () => cameraAngles()[0]?.id || 'standard';
+const makeCamera = role => (usesStills(role) ? new StillsCamera(S.cfg, role) : new Camera(S.cfg, role));
+
+/** A tethered camera that won't start shouldn't cost a paid customer their shoot: fall back to video. */
+function stillsFallback(error) {
+  console.error(`[stills] ${error.message} — falling back to the video feed. Check that digiCamControl ` +
+    '(Windows) is running with its web server on, or that gphoto2 sees the camera (Mac/Pi), and that ' +
+    'nothing else (Lumabooth, EOS Webcam Utility, Canon EOS Utility) has the camera.');
+  toast(`Photo camera unavailable (${error.message}) — using the video feed`, true);
+}
+
+/** Configured camera-look filters, or [] if the picker is off/unconfigured. */
+function filterChoices() {
+  return S.cfg.filters?.list || [];
+}
+function filtersEnabled() {
+  return !!S.cfg.filters?.enabled && filterChoices().length > 0;
+}
+function lookupFilter(id) {
+  return filterChoices().find(f => f.id === id) || null;
+}
+/** Bakes the currently-chosen filter onto the untouched originals once, so
+ *  everything downstream (card/strip render, gif, shot-picker thumbnails)
+ *  draws from S.filteredShots without redoing the canvas work per frame.
+ *  S.shots itself is never touched — picking "Original" just re-derives from
+ *  it with a no-op filter, which is how "remove it" gets you the original. */
+function finalizeFilterSelection() {
+  const filter = lookupFilter(S.filterId);
+  S.filteredShots = S.shots.map(s => applyPhotoFilter(s, filter));
+  S.filteredBurst = S.burst.map(s => applyPhotoFilter(s, filter));
+  go('decorate');
 }
 
 /* --------------------------------------------------------- camera angle */
 
-ON_ENTER.angle = () => {
+ON_ENTER.angle = async () => {
   const host = $('#angle-options');
-  host.innerHTML = cameraAngles().map(a => `
+  const video = $('#angle-preview');
+  // A live preview of the chosen camera. One stream at a time (camera.js):
+  // pressing the other button stops this camera before opening that one.
+  S.camera?.stop('camera page opened');
+  stopActiveCamera('camera page opened');
+  video.srcObject = null;
+  $('#angle-start').disabled = true;
+  setAnglePreview('Checking cameras…');
+  const roles = cameraAngles();
+  host.innerHTML = roles.map(a => `
     <div class="angle-option${a.id === S.cameraAngle ? ' on' : ''}" data-angle="${a.id}">
-      <video class="angle-preview" data-angle-video="${a.id}" autoplay muted playsinline></video>
       <div class="ic">${a.icon || '📷'}</div>
-      <div class="lbl">${a.label}</div>
-      ${a.sub ? `<div class="sub">${a.sub}</div>` : ''}
-      <div class="angle-status" data-angle-status="${a.id}">Connecting preview…</div>
+      <div class="lbl">${escapeHtml(a.label)}</div>
+      ${a.sub ? `<div class="sub">${escapeHtml(a.sub)}</div>` : ''}
+      <div class="angle-status" data-angle-status="${a.id}">Checking…</div>
     </div>`).join('');
-  S.angleCameras = cameraAngles().map(a => ({ id: a.id, camera: new Camera(S.cfg.camera), ready: null }));
-  S.angleCameras.forEach(entry => {
-    const { id, camera } = entry;
-    const angle = cameraAngles().find(a => a.id === id);
-    camera.cfg.preferredLabels = angle?.preferredLabels || S.cfg.camera.preferredLabels;
-    camera.cfg.excludeLabels = angle?.excludeLabels || S.cfg.camera.excludeLabels;
-    camera.cfg.constraints = angle?.constraints || S.cfg.camera.constraints;
-    camera.onStatus = status => {
-      const el = host.querySelector(`[data-angle-status="${id}"]`);
-      if (el) el.textContent = status.message || '';
-    };
-    entry.ready = camera.start(host.querySelector(`[data-angle-video="${id}"]`)).catch(error => {
-      const el = host.querySelector(`[data-angle-status="${id}"]`);
-      if (el) el.textContent = `Preview unavailable: ${error.message}`;
-    });
-  });
-  host.onclick = async e => {
+  const token = S.angleToken = {};
+  let matches = {};
+  try { ({ matches } = await matchRoles(S.cfg)); } catch (e) { clog(`angle picker: ${e.message}`); }
+  if (S.angleToken !== token || S.screen !== 'angle') return;
+  for (const a of roles) {
+    const m = matches[a.id];
+    host.querySelector(`[data-angle="${a.id}"]`)?.classList.toggle('missing', !m);
+    const el = host.querySelector(`[data-angle-status="${a.id}"]`);
+    if (el) {
+      el.textContent = m ? 'Ready' : `${a.name} not found`;
+      el.classList.toggle('bad', !m);
+    }
+  }
+  host.onclick = e => {
     const id = e.target.closest('.angle-option')?.dataset.angle;
     if (!id) return;
-    S.cameraAngle = id;
-    S.angleCameras.forEach(({ id: cameraId }) => {
-      host.querySelector(`[data-angle="${cameraId}"]`)?.classList.toggle('on', cameraId === id);
-    });
-    await Promise.allSettled(S.angleCameras.map(({ ready }) => ready));
-    go('capture');
+    const a = roles.find(r => r.id === id);
+    if (!matches[id]) {
+      toast(`${a.name} not found — check it's plugged in and switched on.`, true);
+      return;
+    }
+    previewAngle(id);
   };
+  $('#angle-start').onclick = () => {
+    if (S.cameraAngle && matches[S.cameraAngle]) go('capture');
+  };
+  // Start on the last camera used (a retake), else the first one plugged in.
+  const first = S.cameraAngle && matches[S.cameraAngle] ? S.cameraAngle : roles.find(r => matches[r.id])?.id;
+  if (first) previewAngle(first);
+  else setAnglePreview(roles.length ? `${roles.map(r => r.name).join(' and ')} not found` : 'No cameras set up in booth.config.json', true);
+};
+
+/** The camera page's preview message: a status, or a visible error (bad). */
+function setAnglePreview(text, bad = false) {
+  const el = $('#angle-live-status');
+  el.textContent = text || '';
+  el.hidden = !text;
+  el.classList.toggle('bad', bad);
+}
+
+/** Shows the chosen camera live on the camera page. */
+async function previewAngle(id) {
+  S.cameraAngle = id;
+  $$('#angle-options .angle-option').forEach(t => t.classList.toggle('on', t.dataset.angle === id));
+  const token = S.previewToken = {};
+  const current = () => S.previewToken === token && S.screen === 'angle';
+  const video = $('#angle-preview');
+  const start = $('#angle-start');
+  start.disabled = true;
+  if (S.camera && (S.camera.role !== id || !!S.camera.stills !== usesStills(id))) { S.camera.stop('other camera chosen'); S.camera = null; }
+  const cam = (S.camera ||= makeCamera(id));
+  cam.onStatus = st => { if (current() && st.level !== 'ok') setAnglePreview(st.message, true); };
+  setAnglePreview(`Starting ${cam.rc?.name || 'camera'}…`);
+  try {
+    if (cam.isLive) await cam.attach(video);
+    else await cam.start(video);
+    if (!current()) return;
+    await cam.verifyLive(1000);
+    if (!current()) return;
+    setAnglePreview('');
+    start.disabled = false;
+  } catch (e) {
+    if (e.code === 'CAMERA_STOPPED' || !current()) return; // another button was pressed meanwhile
+    clog(`camera page: ${e.message}`);
+    setAnglePreview(e.message, true);
+  }
+}
+
+/* -------------------------------------------------------- camera filter */
+
+/**
+ * Shown right after the shoot, on the actual photo just taken — not a live
+ * camera preview. Tapping a tile only previews that look (so the customer can
+ * flip through all of them on their real photo before deciding); nothing is
+ * final, including the current choice, until Next is tapped. "Original" is
+ * just another tile, so backing out of a filter they don't like is the same
+ * one tap as picking one in the first place.
+ */
+ON_ENTER.filter = () => {
+  if (!lookupFilter(S.filterId)) S.filterId = filterChoices()[0]?.id || null;
+  // Every photo from the shoot, each rendered through the real filter
+  // (grain and vignette included), so the preview is exactly what prints.
+  // Scaled-down copies keep re-rendering on each tap instant.
+  const grid = $('#filter-grid');
+  const PREVIEW_W = 720;
+  const smalls = S.shots.map(shot => {
+    const k = Math.min(1, PREVIEW_W / shot.width);
+    const c = document.createElement('canvas');
+    c.width = Math.round(shot.width * k); c.height = Math.round(shot.height * k);
+    c.getContext('2d').drawImage(shot, 0, 0, c.width, c.height);
+    return c;
+  });
+  grid.classList.toggle('single', smalls.length === 1);
+  grid.innerHTML = smalls.map((_, i) => `<canvas data-shot="${i}" data-w="${S.shots[i].width}" data-h="${S.shots[i].height}"></canvas>`).join('');
+  const renderPreviews = () => {
+    const filter = lookupFilter(S.filterId);
+    smalls.forEach((small, i) => {
+      const out = applyPhotoFilter(small, filter);
+      const c = grid.children[i];
+      c.width = out.width; c.height = out.height;
+      c.getContext('2d').drawImage(out, 0, 0);
+    });
+  };
+
+  const host = $('#filter-options');
+  const renderTiles = () => {
+    host.innerHTML = filterChoices().map(f => `
+      <div class="filter-option${f.id === S.filterId ? ' on' : ''}" data-filter="${f.id}">
+        <div class="ic">${f.icon || '🎨'}</div>
+        <div class="lbl">${f.label}</div>
+        ${f.sub ? `<div class="sub">${f.sub}</div>` : ''}
+      </div>`).join('');
+  };
+  renderTiles();
+  renderPreviews();
+
+  host.onclick = e => {
+    const id = e.target.closest('.filter-option')?.dataset.filter;
+    if (!id) return;
+    S.filterId = id;
+    renderPreviews();
+    renderTiles();
+  };
+
+  $('#filter-next').onclick = () => finalizeFilterSelection();
 };
 
 /* ------------------------------------------------------------- capture */
 
 ON_ENTER.capture = async () => {
-  S.angleCameras.forEach(({ camera }) => camera.stop());
-  S.angleCameras = [];
-  const cam = (S.camera ||= new Camera(S.cfg.camera));
-  cam.onStatus = s => {
-    $('#cam-status').textContent = s.message;
-    if (s.level === 'error') toast(s.message, true);
+  const role = S.cameraAngle || defaultRole();
+  // The other camera's stream (if any) closes before this one opens: one at a time.
+  if (S.camera && (S.camera.role !== role || !!S.camera.stills !== usesStills(role))) { S.camera.stop('other camera chosen'); S.camera = null; }
+  const status = $('#cam-status');
+  status.classList.remove('bad');
+  const onStatus = s => {
+    status.textContent = s.message;
+    status.classList.toggle('bad', s.level !== 'ok');
   };
-
-  // The chosen angle's own preferredLabels/excludeLabels/constraints (if any)
-  // point pickDevice() at that physical camera instead of the default one;
-  // anything the angle doesn't override just falls back to booth.config.json.
-  const angle = cameraAngles().find(a => a.id === S.cameraAngle);
-  const base = S.cfg.camera;
-  cam.cfg.preferredLabels = angle?.preferredLabels || base.preferredLabels;
-  cam.cfg.excludeLabels = angle?.excludeLabels || base.excludeLabels;
-  cam.cfg.constraints = angle?.constraints || base.constraints;
-  // A different physical camera has its own device list; re-enumerate rather
-  // than trust whatever was cached from the last angle picked this session.
-  cam.devices = [];
+  let cam = (S.camera ||= makeCamera(role));
+  cam.onStatus = onStatus;
+  showCropGuide(null);
 
   try {
-    await cam.start($('#preview'));
+    try {
+      // The camera page already has this camera open: show that stream here
+      // rather than closing and reopening it.
+      if (cam.isLive) {
+        await cam.attach($('#preview'));
+        const st = cam.settings;
+        onStatus({ level: 'ok', message: `${cam.label} — ${st?.width}x${st?.height} @ ${Math.round(st?.frameRate || 0)}fps` });
+      } else await cam.start($('#preview'));
+      $('#angle-preview').srcObject = null;
+      showCropGuide(cam);
+      await cam.verifyLive(1000);
+    } catch (error) {
+      if (!cam.stills) throw error;
+      stillsFallback(error);
+      cam.stop('tethered camera failed');
+      cam = S.camera = new Camera(S.cfg, role);
+      cam.onStatus = onStatus;
+      await cam.start($('#preview'));
+      await cam.verifyLive(1000);
+    }
   } catch (e) {
-    toast(`Camera problem: ${e.message}`, true);
+    S.camera?.stop('preview failed');
+    S.camera = null;
+    // Say exactly which camera, on screen, and never swap in another one.
+    status.textContent = e.message;
+    status.classList.add('bad');
+    $('#countdown').textContent = '';
+    toast(e.message, true);
+    clog(`capture: ${e.message}`);
+    await sleep(4000);
+    if (S.screen !== 'capture') return;
+    // Two cameras: back to the choice, where the missing one is greyed out.
+    if (cameraAngles().length >= 2 && e.code === 'CAMERA_NOT_FOUND') { go('angle'); return; }
     // Paid but can't shoot — do not strand them. Refund path is in the
     // operator panel; get them off the screen with an explanation.
-    await sleep(2500);
     go('thanks');
-    $('#thanks-sub').textContent = 'Sorry — the camera dropped out. Find the operator for a refund.';
+    $('#thanks-sub').textContent = `Sorry — ${e.message}. Find the operator for a refund.`;
     return;
   }
 
+  showCropGuide(cam);
   await runShootSequence();
 };
+
+/**
+ * Dims everything outside the part of the picture that will be printed:
+ * the chosen frame's photo window, centre-cropped with the same coverCrop()
+ * the renderer uses (frames/draw.mjs), mapped onto the on-screen preview
+ * (object-fit: cover). What the customer sees inside it is what prints.
+ */
+function showCropGuide(cam) {
+  const guide = $('#crop-guide');
+  if (!guide) return;
+  const v = $('#preview');
+  const aspect = photoWindowAspect();
+  if (!cam || !aspect || !v.videoWidth) { guide.hidden = true; return; }
+  const place = () => {
+    const box = v.getBoundingClientRect();
+    const vw = v.videoWidth, vh = v.videoHeight;
+    if (!vw || !box.width) return;
+    const shown = coverPlacement(vw, vh, box.width, box.height);
+    const crop = coverCrop(vw, vh, aspect, 1);
+    // The preview may be mirrored; the crop is centred, so it lands the same either way.
+    let x = shown.x + crop.sx * shown.scale, y = shown.y + crop.sy * shown.scale;
+    let w = crop.sw * shown.scale, h = crop.sh * shown.scale;
+    // Clamp to what's visible (a very wide window on a narrow screen).
+    const x0 = Math.max(0, x), y0 = Math.max(0, y);
+    w = Math.min(box.width, x + w) - x0; h = Math.min(box.height, y + h) - y0; x = x0; y = y0;
+    Object.assign(guide.style, { left: `${x}px`, top: `${y}px`, width: `${w}px`, height: `${h}px` });
+    guide.hidden = false;
+  };
+  place();
+  clearInterval(showCropGuide._t);
+  showCropGuide._t = setInterval(() => (S.screen === 'capture' ? place() : clearInterval(showCropGuide._t)), 500);
+}
+
+/** The photo window's width/height for the chosen frame (a strip: one cell). */
+function photoWindowAspect() {
+  const frame = currentFrame();
+  if (!frame) return null;
+  const key = `${frame.id}|${frame.template}`;
+  if (S._aspectKey === key) return S._aspect;
+  const strip = isStrip(frame);
+  const { W, H } = printSize(sizeKind(frame), 300);
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  let aspect = null;
+  try {
+    const meta = renderCard(c.getContext('2d'), {
+      frame, frameId: frame.id, W, H,
+      photo: placeholderPhoto(), photos: strip ? [0, 1, 2, 3].map(() => placeholderPhoto()) : [],
+      card: mintCard({ frame, frameId: frame.id, seasonId: S.cfg.collection.seasonId, mint: 1 }),
+    });
+    const win = meta?.cell || meta?.artWindow;
+    if (win?.w && win?.h) aspect = win.w / win.h;
+  } catch (e) { clog(`crop guide: ${e.message}`); }
+  S._aspectKey = key; S._aspect = aspect;
+  return aspect;
+}
 
 async function runShootSequence() {
   const c = S.cfg.capture;
@@ -911,7 +1312,7 @@ async function runShootSequence() {
     await countdown(c.countdownSeconds, i === 0 ? 'GET READY' : null);
     if (c.flashScreen) { $('#flash').classList.add('go'); setTimeout(() => $('#flash').classList.remove('go'), 350); }
 
-    S.shots.push(S.camera.grab({ mirror: false }));
+    S.shots.push(await takeShot(i));
     $$('#shot-pips i')[i]?.classList.add('on');
 
     // Burst on the last shot only — keeps the session short.
@@ -923,8 +1324,39 @@ async function runShootSequence() {
   }
 
   $('#countdown').textContent = '';
-  S.camera.stop();
-  go('decorate');
+  S.camera.stop('shoot finished');
+  // The filter picker works on the actual shot just taken, so it only makes
+  // sense after this point; skip straight to finalizing (with S.filterId
+  // untouched, i.e. "Original") when it's off/unconfigured.
+  if (filtersEnabled()) go('filter'); else finalizeFilterSelection();
+}
+
+/**
+ * A real photo from the tethered camera (focus, shutter, flash), or a frame
+ * off the video feed. If the camera fails a shot — usually AF not locking —
+ * the live view frame stands in, so the session still finishes.
+ */
+async function takeShot(i) {
+  if (!S.camera.shoot) {
+    // Only once the video is playing (+300 ms), so the first frame isn't
+    // black; a camera that dropped out mid-countdown is retried every 2 s.
+    if (!(S.camera.isLive && S.camera.ready)) {
+      $('#countdown').textContent = '…';
+      await S.camera.waitReady(15000);
+      $('#countdown').textContent = '';
+    }
+    return S.camera.grab();
+  }
+  $('#countdown').textContent = '📸';
+  try {
+    return await S.camera.shoot();
+  } catch (e) {
+    console.error(`[stills] shot ${i + 1}: ${e.message}`);
+    toast(`Photo ${i + 1}: ${e.message}`, true);
+    return S.camera.grab();
+  } finally {
+    $('#countdown').textContent = '';
+  }
 }
 
 function countdown(seconds, prefix) {
@@ -965,7 +1397,7 @@ ON_ENTER.decorate = () => {
   // a retake — must not silently reroll a rarity the customer already saw.
   if (!S.previewCard || S.previewCard.frameId !== S.frameId) {
     S.previewCard = mintCard({
-      frame: lookupFrame(S.frameId), frameId: S.frameId,
+      frame: currentFrame(), frameId: S.frameId,
       seasonId: S.cfg.collection.seasonId, mint: 1,
       product: S.product,
     });
@@ -1025,7 +1457,7 @@ function buildDecorateUI() {
   const refreshDecName = () => {
     const el = $('#dec-name');
     const typedName = S.personal.name.trim();
-    const defaultName = lookupFrame(S.frameId)?.name || '';
+    const defaultName = currentFrame()?.name || '';
     el.textContent = typedName || defaultName;
     el.classList.toggle('is-empty', !typedName && !defaultName);
     renderNameSuggestions($('#dec-name-suggest'), S.personal.name, name => {
@@ -1044,7 +1476,7 @@ function buildDecorateUI() {
   });
 
   $('#dec-gen-name').addEventListener('click', async e => {
-    const theme = energy(lookupFrame(S.frameId)?.energyType)?.name;
+    const theme = energy(currentFrame()?.energyType)?.name;
     S.personal.name = await surpriseName(e.currentTarget, theme);
     refreshDecName();
   });
@@ -1071,8 +1503,9 @@ function buildKeyboard(host, { max = 14, get, set, onChange }) {
     if (k === 'DEL') v = v.slice(0, -1);
     else if (k === 'SPACE') { if (v.length < max) v += ' '; }
     else if (v.length < max) {
-      // Title case as they type — nobody wants CAPS on a keepsake.
-      v += (v.length === 0 || v.endsWith(' ')) ? k : k.toLowerCase();
+      // Keys are always uppercase (KB_ROWS) — type it as pressed, don't
+      // force every letter but the first of a word to lowercase.
+      v += k;
     }
     set(v);
     onChange();
@@ -1087,7 +1520,7 @@ function buildShotGrid() {
     `<div class="shot ${i === S.heroIndex ? 'on' : ''}" data-shot="${i}"><i>${i + 1}</i><canvas width="220" height="124"></canvas></div>`).join('');
   S.shots.forEach((shot, i) => {
     const cv = grid.querySelector(`[data-shot="${i}"] canvas`);
-    cv.getContext('2d').drawImage(shot, 0, 0, cv.width, cv.height);
+    cv.getContext('2d').drawImage(S.filteredShots[i] || shot, 0, 0, cv.width, cv.height);
   });
   grid.onclick = e => {
     const idx = e.target.closest('.shot')?.dataset.shot;
@@ -1129,7 +1562,7 @@ function buildSwatches() {
     S.frameId = pick;
     $$('#frame-swatches .swatch').forEach(el => el.classList.toggle('on', el.dataset.swatch === pick));
     S.previewCard = mintCard({
-      frame: lookupFrame(S.frameId), frameId: S.frameId,
+      frame: currentFrame(), frameId: S.frameId,
       seasonId: S.cfg.collection.seasonId, mint: 1, product: S.product,
     });
     drawDecorate();
@@ -1164,7 +1597,7 @@ function syncTray() {
 
 function drawDecorate() {
   const cv = $('#dec-canvas');
-  const f = lookupFrame(S.frameId);
+  const f = currentFrame();
   const box = boxFor(f, 500);
   if (cv.width !== box.W || cv.height !== box.H) { cv.width = box.W; cv.height = box.H; }
   const meta = renderCard(cv.getContext('2d'), {
@@ -1356,7 +1789,7 @@ async function buildOutputs() {
   const seasonId = S.cfg.collection.seasonId;
   const mint = await window.booth.cards.nextMint({ seasonId, frameId: S.frameId });
 
-  const frameDef = lookupFrame(S.frameId);
+  const frameDef = currentFrame();
   S.card = mintCard({
     frame: frameDef, frameId: S.frameId, seasonId, mint,
     boothId: S.cfg.booth.id, boothName: S.cfg.booth.displayName,
@@ -1368,19 +1801,19 @@ async function buildOutputs() {
 
   const dpi = S.cfg.printing.dpi || 300;
   const stripStyle = isStrip(frameDef);
-  const { W, H } = printSize(stripStyle ? 'strip' : 'card', dpi);
+  const { W, H } = printSize(sizeKind(frameDef), dpi);
 
   // Do NOT pre-crop here. Cropping the camera frame to the CARD's portrait
   // aspect and then fitting that into a LANDSCAPE art window crops twice — it
   // throws away most of the frame and pushes the subject off-centre. Hand the
   // renderer the full frame and let drawCover fit whatever window the template
   // actually has.
-  const heroImg = await canvasToImage(S.shots[S.heroIndex] || S.shots[0]);
+  const heroImg = await canvasToImage(S.filteredShots[S.heroIndex] || S.filteredShots[0]);
 
   const usesCompanion = ['party', 'kawaii'].includes(frameDef.template);
   S.cardCanvas = document.createElement('canvas');
   S.cardCanvas.width = W; S.cardCanvas.height = H;
-  const heroImgs = stripStyle ? await Promise.all(S.shots.map(canvasToImage)) : [];
+  const heroImgs = stripStyle ? await Promise.all(S.filteredShots.map(canvasToImage)) : [];
   renderCard(S.cardCanvas.getContext('2d'), {
     frame: frameDef, frameId: S.frameId, W, H,
     photo: stripStyle ? null : heroImg,
@@ -1407,40 +1840,60 @@ async function buildOutputs() {
     const s = printSize('strip', dpi);
     S.stripCanvas = document.createElement('canvas');
     S.stripCanvas.width = s.W; S.stripCanvas.height = s.H;
-    const imgs = await Promise.all(S.shots.map(canvasToImage));
-    const stripFrame = lookupFrame(S.stripFrameId) || stripChoices()[0];
+    const imgs = await Promise.all(S.filteredShots.map(canvasToImage));
+    const stripFrame = currentStripFrame();
     renderStrip(S.stripCanvas.getContext('2d'), {
       W: s.W, H: s.H, photos: imgs, card: S.card, frame: stripFrame,
+      // Not personalizationPayload() — it falls back to S.frameId's name when
+      // nothing's typed, which is the *card's* frame here, not the strip's
+      // own theme (S.stripFrameId). Pass the raw typed name only, so an empty
+      // one correctly falls through to the strip theme's own name instead.
+      personalization: { name: S.personal.name.trim() },
       stickers: S.stickers, stickerImages: stickerImageMap(),
     });
   }
 
-  if (S.product.gif && S.burst.length) {
-    try { S.gifBlob = await encodeGif(S.burst, S.cfg.delivery.gif); }
+  if (S.product.gif && S.filteredBurst.length) {
+    try { S.gifBlob = await encodeGif(S.filteredBurst, S.cfg.delivery.gif); }
     catch (e) { console.warn('gif encode failed', e); }
   }
 
   await window.booth.cards.record(S.card);
+  // Every session is also kept on this PC (operator panel → Open photos folder),
+  // whatever happens with the upload — hosts usually want them all afterwards.
+  if (S.cfg.delivery?.saveLocal !== false) saveLocalCopies().catch(e => console.warn('local save failed', e));
   if (S.product.digital && S.cfg.delivery.uploadEnabled) {
     try { await uploadMedia(); }
     catch (e) { console.warn('upload failed', e); }
   }
 }
 
-async function uploadMedia() {
-  const primaryIsStrip = isStrip(lookupFrame(S.frameId));
+async function sessionFiles() {
+  const primaryIsStrip = isStrip(currentFrame());
   const files = [{
-    name: primaryIsStrip ? 'strip.png' : `card-${S.card.serial.replace(/[^\w]+/g, '_')}.png`,
+    name: isJumbo(currentFrame()) ? 'jumbo-strip.png' : primaryIsStrip ? 'strip.png' : `card-${S.card.serial.replace(/[^\w]+/g, '_')}.png`,
     dataUrl: S.cardCanvas.toDataURL('image/png'),
   }];
   if (S.stripCanvas) files.push({ name: 'strip.png', dataUrl: S.stripCanvas.toDataURL('image/png') });
-  S.shots.forEach((c, i) => files.push({ name: `photo-${i + 1}.jpg`, dataUrl: c.toDataURL('image/jpeg', 0.9) }));
+  S.filteredShots.forEach((c, i) => files.push({ name: `photo-${i + 1}.jpg`, dataUrl: c.toDataURL('image/jpeg', 0.9) }));
   if (S.gifBlob) files.push({ name: 'boomerang.gif', dataUrl: await blobToDataUrl(S.gifBlob) });
+  return files;
+}
+
+/** One file per item, named by time so a day's sessions sort in order. */
+async function saveLocalCopies() {
+  const stamp = new Date().toTimeString().slice(0, 8).replace(/:/g, '');
+  for (const f of await sessionFiles()) await window.booth.media.save({ name: `${stamp}-${f.name}`, dataUrl: f.dataUrl });
+}
+
+async function uploadMedia() {
+  const files = await sessionFiles();
 
   const res = await fetch(S.cfg.delivery.uploadUrl, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
+    method: 'POST', headers: kioskHeaders(S.cfg.server?.kioskKey),
     body: JSON.stringify({ files, card: S.card, collectorId: null }),
   });
+  if (!res.ok) throw new Error(`upload: ${res.status} ${await res.text()}`);
   const { url } = await res.json();
   S.downloadUrl = url;
 
@@ -1457,7 +1910,7 @@ ON_ENTER.reveal = () => {
   el.textContent = r.label;
   el.style.color = r.color;
   $('#rarity-burst').style.setProperty('--burst', r.color);
-  const pfr = lookupFrame(S.frameId);
+  const pfr = currentFrame();
   const named = S.personal.name.trim();
   $('#pull-name').textContent = named ? S.personal.name.trim() : pfr.name;
   $('#pull-serial').textContent = `${pfr.collectorNumber}  ·  ${S.card.serial}`;
@@ -1465,7 +1918,7 @@ ON_ENTER.reveal = () => {
     ? `Limited edition — only ${S.card.mintLimit} of these will ever be printed.`
     : '';
   $('#btn-retake').hidden = !(S.cfg.capture.allowRetake && S.retakes < S.cfg.capture.maxRetakes);
-  $('#btn-print').disabled = !(S.product.prints.card || S.product.prints.strip);
+  $('#btn-print').disabled = !(S.product.prints.card || S.product.prints.strip || S.product.prints.jumbo);
   $('#print-status').textContent = '';
   $('#dl-block').hidden = !S.downloadUrl;
 
@@ -1496,125 +1949,143 @@ ON_ENTER.reveal = () => {
 
 async function retake() {
   S.retakes++;
-  S.shots = []; S.burst = [];
+  S.shots = []; S.filteredShots = []; S.burst = []; S.filteredBurst = [];
   S.stickers = [];
-  go('capture');
+  // Back to the camera choice (their last pick stays highlighted), so a
+  // retake can also be a different angle — not just the same shot again.
+  go(cameraAngles().length >= 2 ? 'angle' : 'capture');
 }
 
 /* --------------------------------------------------------------- print */
 
 /**
- * Most dye-subs (DNP DS40 included) only load 4x6 media, so a lone
- * 2.5x3.5 card — or a lone 2x6 strip — can't be sent as its own page, since
- * the printer has nothing that size loaded. Tile copies of the master onto
- * a sheet-sized page instead, with hairline cut marks at each boundary so
- * the operator (or the printer's own cutter, for a strip on a DS40) trims
- * them apart. Returns one canvas per physical sheet needed (the last one
- * may be partly blank if count doesn't divide evenly).
- *
- * Also how a 2x6 strip becomes printable on a 4x6-only machine at all:
- * two copies side by side exactly fill a 4x6 sheet, which is the same
- * layout DNP's own "2x6 (4x6 divided)" media mode expects — the two
- * copies aren't a bonus, they're what makes the page size valid.
+ * Print jobs. Each one is turned into the DNP DS40's native page, 1844 x 1240
+ * landscape with the 2-inch cut at y = 620, by toPrinterNative()
+ * (src/js/layout.mjs), the only layout rotation in the print path (Windows
+ * then gets that page turned once into its driver's frame, toDriverFrame):
+ *   cards   two upright 750 x 1050 cards per page, cut by hand → printer.queue4x6 (no cut)
+ *   strips  the 620 x 1844 strip turned by rotation.strip, twice → printer.queueStrip (2-inch cut)
+ *   jumbo   the 1240 x 1844 page turned by rotation.portrait4x6 → printer.queue4x6
+ * Identical pages go as one job with that many copies. The main process
+ * saves every page as a PNG before printing it.
  */
-function buildGangSheet(unitCanvas, count, sheet, unit) {
-  const dpi = unitCanvas.width / unit.widthIn;
-  const unitW = unitCanvas.width, unitH = unitCanvas.height;
-  const cols = Math.max(1, Math.floor(sheet.widthIn / unit.widthIn));
-  const rows = Math.max(1, Math.floor(sheet.heightIn / unit.heightIn));
-  const perSheet = cols * rows;
-  const sheetW = Math.round(sheet.widthIn * dpi);
-  const sheetH = Math.round(sheet.heightIn * dpi);
-  const marginX = (sheetW - cols * unitW) / 2;
-  const marginY = (sheetH - rows * unitH) / 2;
-
-  const sheets = [];
-  for (let remaining = count; remaining > 0; remaining -= perSheet) {
-    const canvas = document.createElement('canvas');
-    canvas.width = sheetW; canvas.height = sheetH;
-    const ctx = canvas.getContext('2d');
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(0, 0, sheetW, sheetH);
-    const onThisSheet = Math.min(perSheet, remaining);
-    for (let i = 0; i < onThisSheet; i++) {
-      const x = marginX + (i % cols) * unitW;
-      const y = marginY + Math.floor(i / cols) * unitH;
-      ctx.drawImage(unitCanvas, x, y);
-    }
-    if (sheet.cutMarks) drawSheetCutMarks(ctx, sheetW, sheetH, marginX, marginY, unitW, unitH, cols, rows);
-    sheets.push(canvas);
-  }
-  return sheets;
+function newCanvas({ W, H }) {
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  return c;
 }
 
-/** Tick marks at each card boundary, drawn out to the sheet's own edges — a straightedge guide, not a border. */
-function drawSheetCutMarks(ctx, sheetW, sheetH, marginX, marginY, cardW, cardH, cols, rows) {
-  const tick = Math.round(sheetW * 0.02);
-  ctx.save();
-  ctx.strokeStyle = '#c4c4c4';
-  ctx.lineWidth = Math.max(1, Math.round(sheetW / 1000));
-  ctx.beginPath();
-  for (let c = 0; c <= cols; c++) {
-    const x = marginX + c * cardW;
-    ctx.moveTo(x, 0); ctx.lineTo(x, tick);
-    ctx.moveTo(x, sheetH - tick); ctx.lineTo(x, sheetH);
+function cardJobs(card, count) {
+  const per = cardSheetLayout(card.width, card.height).slots.length;
+  const jobs = [];
+  const full = Math.floor(count / per), rest = count % per;
+  if (full) jobs.push({ type: 'cards', canvas: card, count: per, copies: full });
+  if (rest) jobs.push({ type: 'cards', canvas: card, count: rest, copies: 1 });
+  return jobs;
+}
+
+function jumboJobs(jumbo, count) {
+  return [{ type: '4x6', canvas: jumbo, copies: Math.max(1, count) }];
+}
+
+function stripJobs(strip, count) {
+  // Every page carries two strips.
+  return [{ type: 'strip', canvas: strip, copies: Math.max(1, Math.ceil(count / 2)) }];
+}
+
+/**
+ * THE print function. Every print (customer cards, strips, Jumbos and the
+ * operator's test prints) goes through here and nowhere else:
+ *   1. toPrinterNative(job): the native 1844 x 1240 page (the sheet)
+ *   2. the build stamp, bottom right (printer.buildStamp)
+ *   3. Windows only: toDriverFrame(), that page turned once by
+ *      printer.windowsTurn into the driver's portrait 4x6 frame, which is
+ *      what Windows prints, as a portrait job
+ *   4. window.booth.printers.print: the main process (electron/main.js
+ *      printImage), the Pi kiosk server or the browser preview, which
+ *      print it.
+ * Strips go to the strip (cut) queue, everything else to the 4x6 queue.
+ */
+async function sendToPrinter(job, label) {
+  const rot = printRotations(S.cfg.printer);
+  rot.problems.forEach(p => clog(`print warn: ${p}`));
+  const page = toPrinterNative(job, rot, (w, h) => newCanvas({ W: w, H: h }));
+  if (page.width !== NATIVE.W || page.height !== NATIVE.H) throw new Error(`The print page is ${page.width}x${page.height}; it must be ${NATIVE.W}x${NATIVE.H}`);
+  // Windows: the driver is sent its portrait frame, turned by printer.windowsTurn.
+  const target = (await window.booth.app.info().catch(() => ({})))?.printTarget;
+  const wt = target === 'windows' ? windowsTurn(S.cfg.printer) : null;
+  wt?.problems.forEach(p => clog(`print warn: ${p}`));
+  const stamp = buildStampText({ build: await buildInfo(), job, rotation: rot, driverTurn: wt?.turn });
+  let out = page;
+  if (S.cfg.printer?.buildStamp !== false) {
+    // On a copy: toPrinterNative may hand back the job's own canvas (4x6 landscape).
+    if (page === job.canvas) { out = newCanvas({ W: page.width, H: page.height }); out.getContext('2d').drawImage(page, 0, 0); }
+    drawBuildStamp(out.getContext('2d'), stamp);
   }
-  for (let r = 0; r <= rows; r++) {
-    const y = marginY + r * cardH;
-    ctx.moveTo(0, y); ctx.lineTo(tick, y);
-    ctx.moveTo(sheetW - tick, y); ctx.lineTo(sheetW, y);
-  }
-  ctx.stroke();
-  ctx.restore();
+  const frame = wt ? toDriverFrame(out, wt.turn, (w, h) => newCanvas({ W: w, H: h })) : null;
+  return deliver(out, job, label, rot, stamp, frame && { canvas: frame, turn: wt.turn });
+}
+
+let buildInfoCache = null;
+async function buildInfo() {
+  if (!buildInfoCache) buildInfoCache = (await window.booth.app.info().catch(() => ({})))?.build || {};
+  return buildInfoCache;
+}
+
+async function deliver(page, job, label, rot, stamp, frame) {
+  const kind = job.type === 'strip' ? 'strip' : '4x6';
+  const dataUrl = page.toDataURL('image/png');
+  const frameUrl = frame ? frame.canvas.toDataURL('image/png') : null;
+  const r = await window.booth.printers.print({ dataUrl, frameUrl, frameTurn: frame?.turn ?? null, kind, copies: job.copies, label, jobType: job.type })
+    .catch(err => ({ ok: false, reason: err.message }));
+  const how = job.type === 'strip' ? `strip turned ${rot.strip}°, two copies`
+    : job.type === 'cards' ? `${job.count} upright card${job.count > 1 ? 's' : ''}`
+    : job.canvas.width === NATIVE.W ? 'not turned' : `turned ${rot.portrait4x6}°`;
+  clog(`print ${label} (${job.type}, ${job.canvas.width}x${job.canvas.height}, ${how} → ${page.width}x${page.height}, x${job.copies}, stamp "${stamp}"): ${r.ok ? 'ok' : `FAILED ${r.reason || ''}`}${r.file ? ` — saved ${r.file}` : ''}${r.paper ? `\n  ${r.paper}` : ''}`);
+  (r.notes || []).forEach(n => clog(`print warn: ${n}`));
+  if (!r.ok) throw new Error(r.reason || `${label} print was rejected`);
+  return { ...r, how, stamp, notes: [...rot.problems, ...(r.notes || [])] };
 }
 
 async function doPrint() {
   const btn = $('#btn-print');
   btn.disabled = true;
   const st = $('#print-status');
-  const p = S.cfg.printing;
-
-  /** Send one already-composed page. Shared by every print call below so a
-   *  rejection always surfaces the same way regardless of which item it was. */
-  const sendPage = async (dataUrl, widthIn, heightIn, printerName, copies, label) => {
-    const r = await window.booth.printers.print({ dataUrl, widthIn, heightIn, printerName, copies, silent: p.silent });
-    if (!r.ok) throw new Error(r.reason || `${label} print was rejected`);
-  };
-
-  /** Card or strip, ganged onto printing.sheet/stripSheet when enabled, one page per call otherwise. */
-  const printGanged = async (unitCanvas, count, sheet, unit, printerName, label) => {
-    if (sheet?.enabled) {
-      for (const page of buildGangSheet(unitCanvas, count, sheet, unit)) {
-        await sendPage(page.toDataURL('image/jpeg', 0.95), sheet.widthIn, sheet.heightIn, printerName, 1, label);
-      }
-    } else {
-      // JPEG, not PNG: the Pi wraps this straight into a PDF via /DCTDecode to
-      // get exact physical sizing out of CUPS, and dye-sub is continuous tone
-      // anyway so q95 is indistinguishable from lossless on paper.
-      await sendPage(unitCanvas.toDataURL('image/jpeg', 0.95), unit.widthIn, unit.heightIn, printerName, count, label);
-    }
-  };
-
+  st.classList.remove('bad');
   try {
-    if (S.product.prints.card) {
-      st.textContent = `Printing ${S.product.prints.card} card${S.product.prints.card > 1 ? 's' : ''}…`;
-      const cardIsStrip = isStrip(lookupFrame(S.frameId));
-      const geo = cardIsStrip ? p.strip : p.card;
-      const sheet = cardIsStrip ? p.stripSheet : p.sheet;
-      const printerName = cardIsStrip ? (p.stripPrinterName || p.cardPrinterName) : p.cardPrinterName;
-      await printGanged(S.cardCanvas, S.product.prints.card, sheet, geo, printerName, cardIsStrip ? 'Strip' : 'Card');
+    // Normally S.cardCanvas holds a card and its count is prints.card. But when
+    // the customer's chosen frame is itself a strip style (e.g. the "2 Photo
+    // Strips" product), renderCard() draws the strip straight into
+    // S.cardCanvas and prints.card is 0 — the print count to use is
+    // prints.strip instead, since that's what was actually paid for.
+    const cardIsStrip = isStrip(currentFrame());
+    if (isJumbo(currentFrame())) {
+      const n = S.product.prints.jumbo || S.product.prints.strip || 1;
+      st.textContent = `Printing your Jumbo strip${n > 1 ? 's' : ''}…`;
+      for (const job of jumboJobs(S.cardCanvas, n)) await sendToPrinter(job, 'jumbo');
+      st.textContent = 'Sent to the printer.';
+      await sleep(900);
+      go('thanks');
+      return;
     }
-
+    const cardCount = cardIsStrip ? S.product.prints.strip : S.product.prints.card;
+    if (cardCount) {
+      st.textContent = `Printing ${cardCount} ${cardIsStrip ? 'strip' : 'card'}${cardCount > 1 ? 's' : ''}…`;
+      for (const job of cardIsStrip ? stripJobs(S.cardCanvas, cardCount) : cardJobs(S.cardCanvas, cardCount)) {
+        await sendToPrinter(job, cardIsStrip ? 'strip' : 'card');
+      }
+    }
     if (S.product.prints.strip && S.stripCanvas) {
       st.textContent = 'Printing your strip…';
-      await printGanged(S.stripCanvas, S.product.prints.strip, p.stripSheet, p.strip, p.stripPrinterName || p.cardPrinterName, 'Strip');
+      for (const job of stripJobs(S.stripCanvas, S.product.prints.strip)) await sendToPrinter(job, 'strip');
     }
-
     st.textContent = 'Sent to the printer.';
     await sleep(900);
     go('thanks');
   } catch (e) {
+    // On screen, with the printer's own reason, so the operator can act on it.
     st.textContent = `Print failed: ${e.message}`;
+    st.classList.add('bad');
     toast('Print failed — the operator can refund this sale.', true);
     btn.disabled = false;
   }
@@ -1636,7 +2107,8 @@ ON_ENTER.admin = async () => {
     window.booth.cards.stats({ seasonId: S.cfg.collection.seasonId }),
     window.booth.printers.list(),
   ]);
-  const devices = S.camera?.devices || await new Camera(S.cfg.camera).listDevices().catch(() => []);
+  const { devices, matches: camMatches } = await matchRoles(S.cfg).catch(() => ({ devices: [], matches: {} }));
+  const stillsOn = !!(S.cfg.camera?.stills?.enabled && window.booth.stills);
 
   $('#admin-body').innerHTML = `
     <div class="card-panel">
@@ -1654,19 +2126,69 @@ ON_ENTER.admin = async () => {
     </div>
 
     <div class="card-panel">
-      <h3>Camera</h3>
-      ${devices.length
-        ? devices.map(d => `<div class="kv"><span>${d.label || 'unnamed'}</span><b>${d.deviceId === S.camera?.deviceId ? 'IN USE' : ''}</b></div>`).join('')
-        : '<div class="kv"><span>No video devices found</span></div>'}
+      <h3>Cameras</h3>
+      ${cameraAngles().map(r => {
+        const m = camMatches[r.id];
+        return `<div class="kv"><span>${escapeHtml(r.label)} <span style="color:var(--ink-dim)">· ${escapeHtml(r.name)}${r.mode ? ` · ${r.mode}` : ''}</span></span><b style="${m ? '' : 'color:var(--bad)'}">${m ? escapeHtml(m.device.label) : 'not found'}</b></div>`;
+      }).join('')}
+      <div class="kv"><span>Video devices</span><b>${devices.length}</b></div>
+      <div style="display:flex;gap:10px;margin-top:12px">
+        <button class="btn btn-ghost" data-go="diagnostics">Camera diagnostics</button>
+      </div>
       <p style="color:var(--ink-dim);font-size:13px;margin-top:12px">
-        Add part of the capture card's name to <code>camera.preferredLabels</code> in booth.config.json.</p>
+        Cameras are matched by name (<code>cameras.standard.labelMatch</code> / <code>cameras.wide.labelMatch</code> in booth.config.json).</p>
     </div>
+
+    <div class="card-panel" style="grid-column:1/-1">
+      <h3>Camera log</h3>
+      <p style="color:var(--ink-dim);font-size:13px;margin:0 0 8px">Everything the camera did this run. When the preview misbehaves, reproduce it, come back here and copy this.</p>
+      <pre id="cam-log" style="max-height:260px;overflow:auto;font-size:11px;line-height:1.35;white-space:pre-wrap;background:rgba(0,0,0,.25);padding:10px;border-radius:8px;margin:0">${escapeHtml(cameraLog.slice(-120).join('\n') || '(nothing yet — open the camera screen first)')}</pre>
+      <div style="display:flex;gap:10px;margin-top:10px">
+        <button class="btn btn-ghost" id="cam-log-copy">Copy camera log</button>
+      </div>
+    </div>
+
+    ${stillsOn ? `<div class="card-panel">
+      <h3>Photo camera (USB, with flash)</h3>
+      <div class="kv"><span>Status</span><b id="stills-status">checking…</b></div>
+      <div style="display:flex;gap:10px;margin-top:12px">
+        <button class="btn btn-ghost" id="stills-test">Take a test photo</button>
+      </div>
+      <div class="kv" id="stills-result" hidden></div>
+      <img id="stills-img" alt="" hidden style="width:100%;margin-top:10px;border-radius:8px">
+    </div>` : ''}
 
     <div class="card-panel">
       <h3>Printers</h3>
+      <div class="kv"><span>Running code</span><b>${escapeHtml(info.build?.commit ? info.build.commit.slice(0, 7) : 'unknown')}${info.build?.packaged ? ' · packaged app' : ''}</b></div>
+      <div class="kv"><span style="color:var(--ink-dim);font-size:12px;word-break:break-all">${escapeHtml(`${info.build?.source || ''} · ${info.build?.root || ''} · print code changed ${info.build?.time ? new Date(info.build.time).toLocaleString() : '?'}`)}</span></div>
       ${printers.length
-        ? printers.map(p => `<div class="kv"><span>${p.displayName || p.name}</span><b>${p.isDefault ? 'DEFAULT' : ''}</b></div>`).join('')
+        ? printers.map(p => {
+            const tag = [p.willUse && '4x6', p.willUseStrips && 'STRIPS'].filter(Boolean).join(' + ');
+            const btn = (role, label) => `<button class="btn btn-ghost" style="padding:4px 10px;font-size:12px;margin-left:6px" data-use-printer="${escapeHtml(p.name)}" data-role="${role}">${label}</button>`;
+            return `<div class="kv"><span>${escapeHtml(p.displayName || p.name)}${tag ? ` <b style="color:var(--accent)">· ${tag}</b>` : ''}</span><b>${window.booth.printers.use
+              ? `${p.willUse ? '' : btn('cards', '4x6')}${p.willUseStrips ? '' : btn('strips', 'Strips')}`
+              : p.isDefault ? 'DEFAULT' : ''}</b></div>`;
+          }).join('')
         : '<div class="kv"><span>None detected</span></div>'}
+      ${info.platform === 'win32' && printers.some(p => p.willUse) ? `
+        <div class="kv"><span>Paper sizes</span><b id="paper-sizes" style="font-weight:400;font-size:12px;text-align:right">loading…</b></div>
+        <div class="kv"><span>Print method</span><b>${[['chromium', 'Print page (default)'], ['xps', 'Windows XPS']].map(([m, label]) => {
+          const cur = S.cfg.printing?.windowsMethod === 'xps' ? 'xps' : 'chromium';
+          return `<button class="btn ${cur === m ? '' : 'btn-ghost'}" style="padding:4px 10px;font-size:12px;margin-left:6px" data-print-method="${m}">${label}</button>`;
+        }).join('')}</b></div>` : ''}
+      <div style="display:flex;gap:10px;align-items:center;margin-top:12px;flex-wrap:wrap">
+        <button class="btn btn-ghost" id="print-test">Test print 4x6</button>
+        <button class="btn btn-ghost" id="print-test-strip">Test print strips</button>
+        <button class="btn btn-ghost" id="print-test-cards">Test print cards</button>
+        ${window.booth.printers.diagnose ? '<button class="btn btn-ghost" id="print-check">Check printer</button>' : ''}
+        <span id="print-test-result" style="font-size:12px;color:var(--ink-dim)"></span>
+      </div>
+      <div class="kv"><span>4x6 queue</span><b>${escapeHtml(S.cfg.printer?.queue4x6 || '(photo printer, found by name)')}</b></div>
+      <div class="kv"><span>Strip queue (2-inch cut)</span><b style="${S.cfg.printer?.queueStrip || info.platform !== 'win32' ? '' : 'color:var(--bad)'}">${escapeHtml(S.cfg.printer?.queueStrip || (info.platform === 'win32' ? 'not set — strips won\'t be cut' : 'same as 4x6'))}</b></div>
+      <div class="kv"><span>Finish · copies</span><b>${escapeHtml(S.cfg.printer?.finish || 'glossy')} · ${S.cfg.printer?.copies || 1}</b></div>
+      ${printers.length && !printers.some(p => p.willUse) && info.platform === 'win32'
+        ? '<p style="color:var(--bad);font-size:13px;margin-top:10px">No photo printer installed — install the DNP driver (see README → Printing on Windows).</p>' : ''}
     </div>
 
     <div class="card-panel">
@@ -1684,7 +2206,15 @@ ON_ENTER.admin = async () => {
       <h3>System</h3>
       <div class="kv"><span>Booth</span><b>${S.cfg.booth.id}</b></div>
       <div class="kv"><span>Season</span><b>${S.cfg.collection.seasonId}</b></div>
-      <div class="kv"><span>Payments</span><b>${S.cfg.payments.provider}</b></div>
+      ${window.booth.payments?.mode ? `<div class="kv"><span>Event mode</span><b>${[['free', 'Free event'], ['reader', 'Card reader + QR'], ['qr', 'QR only']].map(([m, label]) => {
+        const prov = S.cfg.payments.realProvider || S.cfg.payments.provider;
+        const cur = prov === 'free' ? 'free' : prov === 'stripe-qr' ? 'qr' : 'reader';
+        return `<button class="btn ${cur === m ? '' : 'btn-ghost'}" style="padding:4px 10px;font-size:12px;margin-left:6px" data-event-mode="${m}">${label}</button>`;
+      }).join('')}</b></div>` : ''}
+      ${window.booth.media?.openFolder ? '<div class="kv"><span>Photos</span><b><button class="btn btn-ghost" style="padding:4px 10px;font-size:12px" id="open-photos">Open photos folder</button></b></div>' : ''}
+      <div class="kv"><span>Payments</span><b>${S.cfg.payments.provider === 'mock'
+        ? `TEST (mock)${S.cfg.payments.realProvider ? ` — npm start uses ${S.cfg.payments.realProvider}` : ''}`
+        : S.cfg.payments.provider}</b></div>
       <div class="kv"><span>Version</span><b>${info.version} · ${info.platform}</b></div>
       <div class="kv"><span>Bridge</span><b>${S.platform}</b></div>
       <div style="display:flex;gap:10px;margin-top:16px">
@@ -1693,11 +2223,217 @@ ON_ENTER.admin = async () => {
       </div>
     </div>`;
 
+  if (stillsOn) {
+    // Status and a test shot, so focus and flash can be checked before the doors open.
+    window.booth.stills.status().then(st => {
+      const el = $('#stills-status');
+      if (el) { el.textContent = st.ok ? st.message : st.error; el.style.color = st.ok ? '' : 'var(--bad)'; }
+    });
+    $('#stills-test')?.addEventListener('click', async e => {
+      const btn = e.currentTarget, out = $('#stills-result'), img = $('#stills-img');
+      btn.disabled = true; out.hidden = false; out.textContent = 'Focusing and shooting…';
+      const t0 = performance.now();
+      const r = await window.booth.stills.capture().catch(err => ({ ok: false, error: err.message }));
+      const secs = ((performance.now() - t0) / 1000).toFixed(1);
+      if (r.ok) {
+        img.src = `data:image/jpeg;base64,${r.jpeg}`;
+        img.hidden = false;
+        img.onload = () => { out.textContent = `${img.naturalWidth}×${img.naturalHeight} in ${secs}s — saved to ${r.file}`; };
+      } else {
+        out.textContent = `Failed after ${secs}s: ${r.error}`;
+        out.style.color = 'var(--bad)';
+      }
+      btn.disabled = false;
+    });
+  }
+
+  window.booth.printers.papers?.().then(r => {
+    const el = $('#paper-sizes');
+    if (el) el.textContent = r.ok ? r.sizes.map(s => `${s.name} (${s.widthIn}×${s.heightIn})`).join(' · ') || 'none' : r.error;
+  });
+
+  $$('[data-print-method]').forEach(b => b.addEventListener('click', async () => {
+    const r = await window.booth.printers.method?.(b.dataset.printMethod).catch(e => ({ ok: false, error: e.message }));
+    if (!r?.ok) { toast(r?.error || 'Could not change the print method', true); return; }
+    S.cfg = r.config;
+    ON_ENTER.admin();
+  }));
+
+  // Calibration test prints (layout.mjs drawCalibration): each built in its
+  // design orientation, then through toPrinterNative like a real job.
+  const printTest = async (e, job) => {
+    const btn = e.currentTarget, out = $('#print-test-result');
+    btn.disabled = true; out.textContent = 'Printing…'; out.style.color = '';
+    const d = CALIBRATION_DESIGN[job];
+    const c = newCanvas(d);
+    const rot = printRotations(S.cfg.printer);
+    drawCalibration(c.getContext('2d'), { job, rotation: d.rotationKey ? rot[d.rotationKey] : null, label: new Date().toLocaleString() });
+    try {
+      const r = await sendToPrinter({ type: job, canvas: c, count: 2, copies: 1 }, `test-${job}`);
+      out.style.whiteSpace = 'pre-wrap';
+      out.textContent = `Sent ✓ ${d.W}x${d.H} design, ${r.how} → ${NATIVE.W}x${NATIVE.H} — stamp "${r.stamp}" — saved ${r.file || ''}${(r.notes || []).map(n => `\n⚠ ${n}`).join('')}\n${r.paper || ''}`;
+    } catch (err) {
+      out.textContent = `Failed: ${err.message}`;
+      out.style.color = 'var(--bad)';
+    }
+    btn.disabled = false;
+  };
+  $('#print-check')?.addEventListener('click', async e => {
+    const btn = e.currentTarget, out = $('#print-test-result');
+    btn.disabled = true; out.textContent = 'Asking Windows…';
+    const r = await window.booth.printers.diagnose().catch(err => ({ ok: false, text: err.message }));
+    clog(`printer check:\n${r.text}`);
+    out.style.whiteSpace = 'pre-wrap';
+    out.textContent = r.text;
+    btn.disabled = false;
+  });
+  $('#print-test')?.addEventListener('click', e => printTest(e, '4x6'));
+  $('#print-test-strip')?.addEventListener('click', e => printTest(e, 'strip'));
+  $('#print-test-cards')?.addEventListener('click', e => printTest(e, 'cards'));
+
+  $$('[data-use-printer]').forEach(b => b.addEventListener('click', async () => {
+    b.disabled = true;
+    const r = await window.booth.printers.use(b.dataset.usePrinter, b.dataset.role).catch(e => ({ ok: false, error: e.message }));
+    if (!r.ok) { toast(r.error, true); b.disabled = false; return; }
+    S.cfg = r.config;
+    toast(`${b.dataset.role === 'strips' ? 'Strips' : '4x6 prints'} go to ${b.dataset.usePrinter}`);
+    ON_ENTER.admin();
+  }));
+
+  $('#cam-log-copy')?.addEventListener('click', async e => {
+    const btn = e.currentTarget; // null once the await below returns
+    const text = cameraLog.join('\n');
+    try { await navigator.clipboard.writeText(text); btn.textContent = 'Copied ✓ — paste it to support'; }
+    catch {
+      // Clipboard blocked: select the text so Ctrl+C works.
+      const r = document.createRange(); r.selectNodeContents($('#cam-log'));
+      getSelection().removeAllRanges(); getSelection().addRange(r);
+      btn.textContent = 'Selected — press Ctrl+C';
+    }
+  });
+
+  $$('[data-event-mode]').forEach(b => b.addEventListener('click', async () => {
+    const r = await window.booth.payments.mode(b.dataset.eventMode).catch(e => ({ ok: false, error: e.message }));
+    if (!r.ok) { toast(r.error, true); return; }
+    toast('Event mode saved — restarting the booth screen');
+    setTimeout(() => window.booth.app.reload(), 900);
+  }));
+  $('#open-photos')?.addEventListener('click', async () => {
+    const r = await window.booth.media.openFolder().catch(e => ({ ok: false, error: e.message }));
+    if (!r.ok) toast(r.error || 'Could not open the folder', true);
+  });
+
+  $$('#admin-body [data-go]').forEach(b => b.addEventListener('click', () => go(b.dataset.go)));
   $('#admin-reload')?.addEventListener('click', () => window.booth.app.reload());
   $('#admin-quit')?.addEventListener('click', () => window.booth.app.quit());
 };
 
+/* ---------------------------------------------------------- diagnostics */
+
+/**
+ * Hidden screen (operator panel → Camera diagnostics, or Ctrl+Shift+D):
+ * every video device's label and deviceId, which one each role matched, and
+ * the resolution each camera really streams at. The cameras are opened one
+ * after the other, never together.
+ */
+/**
+ * Windows printing on the diagnostics screen: the paper each DS40 queue uses
+ * and what the app sends it, and the print direction switch
+ * (printer.windowsTurn), saved to this PC's booth.config.local.json.
+ */
+function renderPrintSetup() {
+  if (!window.booth.printers.windowsTurn) return;
+  let box = $('#diag-print-mode');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'diag-print-mode';
+    box.style.cssText = 'display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:10px 14px;margin:0 0 12px;border-radius:10px;background:rgba(255,255,255,.06)';
+    $('#diag-body').before(box);
+  }
+  const turn = windowsTurn(S.cfg.printer).turn;
+  box.innerHTML = `<b>Windows print direction (printer.windowsTurn):</b> <span>${turn}°</span>
+    <button class="btn btn-ghost" id="diag-wturn" style="padding:6px 14px">Flip to ${turn === 270 ? 90 : 270}° (if prints come out upside down)</button>`;
+  if (window.booth.printers.papers) {
+    const info = document.createElement('div');
+    info.id = 'diag-paper';
+    info.style.cssText = 'flex-basis:100%;font-size:13px;color:var(--ink-dim);white-space:pre-wrap';
+    info.textContent = 'Reading the DS40 queues\' paper…';
+    box.append(info);
+    window.booth.printers.papers().then(p => {
+      info.textContent = (p.queues || []).map(q => q.error && !q.current
+        ? `${q.role}: ${q.printer ? `"${q.printer}" ` : ''}${q.error}`
+        : `${q.role}: "${q.printer}" paper ${q.current.name} ${q.current.widthIn} x ${q.current.heightIn} in${q.current.landscape ? ', Landscape' : ', Portrait'} in Printing Preferences → ${q.handoff.shape === 'sheet' ? 'the app sends the sheet as is' : `the app sends the portrait frame (turned ${turn}°)`}, as a portrait job`).join('\n') || (p.error || 'no answer');
+    }).catch(e => { info.textContent = `Couldn't read the paper: ${e.message}`; });
+  }
+  const flip = $('#diag-wturn');
+  if (flip) flip.onclick = async () => {
+    const r = await window.booth.printers.windowsTurn(turn === 270 ? 90 : 270).catch(e => ({ ok: false, error: e.message }));
+    if (r?.config) S.cfg = r.config;
+    renderPrintSetup();
+  };
+}
+
+ON_ENTER.diagnostics = async () => {
+  S.camera?.stop('diagnostics');
+  S.camera = null;
+  stopActiveCamera();
+  const body = $('#diag-body');
+  const video = $('#diag-video');
+  const token = S.diagToken = {};
+  const alive = () => S.diagToken === token && S.screen === 'diagnostics';
+  body.innerHTML = '<p>Listing cameras…</p>';
+  $('#diag-refresh').onclick = () => ON_ENTER.diagnostics();
+  renderPrintSetup();
+  let devices = [], matches = {};
+  try { ({ devices, matches } = await matchRoles(S.cfg)); } catch (e) {
+    body.innerHTML = `<p style="color:var(--bad)">${escapeHtml(e.message)}</p>`;
+    return;
+  }
+  const roles = cameraAngles();
+  const results = {};
+  const roleOf = id => roles.filter(r => matches[r.id]?.device.deviceId === id).map(r => r.label).join(', ');
+  const render = () => {
+    body.innerHTML = `
+      <h3>Video devices (${devices.length})</h3>
+      <table>
+        <tr><th>Label</th><th>deviceId</th><th>Role</th></tr>
+        ${devices.map(d => `<tr><td>${escapeHtml(d.label || '(no label)')}</td><td><code>${escapeHtml(d.deviceId)}</code></td><td>${escapeHtml(roleOf(d.deviceId) || '—')}</td></tr>`).join('') || '<tr><td colspan="3">None</td></tr>'}
+      </table>
+      <h3>Roles</h3>
+      <table>
+        <tr><th>Role</th><th>Looks for (label contains)</th><th>Matched</th><th>Stream</th></tr>
+        ${roles.map(r => {
+          const m = matches[r.id], res = results[r.id];
+          return `<tr>
+            <td><b>${escapeHtml(r.label)}</b><br><span style="color:var(--ink-dim)">${escapeHtml(r.name)}${r.mode ? ` · mode ${escapeHtml(r.mode)}` : ''}</span></td>
+            <td>${r.match.map(escapeHtml).join(', ')}${r.deviceLabel ? `<br><span style="color:var(--ink-dim)">saved: ${escapeHtml(r.deviceLabel)}</span>` : ''}</td>
+            <td>${m ? `${escapeHtml(m.device.label)}<br><span style="color:var(--ink-dim)">${escapeHtml(m.how)}</span>` : '<b style="color:var(--bad)">not found</b>'}</td>
+            <td>${res ? escapeHtml(res) : m ? 'testing…' : '—'}</td></tr>`;
+        }).join('')}
+      </table>`;
+  };
+  render();
+  for (const r of roles) {
+    if (!matches[r.id] || !alive()) continue;
+    const cam = new Camera(S.cfg, r.id);
+    try {
+      const st = await cam.start(video);
+      results[r.id] = `asked ${r.width}x${r.height}@${r.frameRate} → got ${st.width}x${st.height} @ ${Math.round(st.frameRate || 0)} fps · video ${video.videoWidth}x${video.videoHeight}${cam.ready ? '' : ' · NOT playing'}${r.mirrorPreview ? ' · preview mirrored' : ''}`;
+      await sleep(2000); // long enough to see the picture
+    } catch (e) {
+      results[r.id] = `failed: ${e.message}`;
+    } finally {
+      cam.stop('diagnostics: next camera');
+    }
+    clog(`diagnostics: ${r.id}: ${results[r.id]}`);
+    if (alive()) render();
+  }
+  if (alive()) video.srcObject = null;
+};
+
 /* --------------------------------------------------------------- utils */
+
+const escapeHtml = str => String(str).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
 
 function canvasToImage(canvas) {
   return new Promise((resolve, reject) => {

@@ -25,7 +25,10 @@ export const STRIP_ASPECT = 2 / 6;
  */
 export const SIZES = {
   card:  { widthIn: 2.5,  heightIn: 3.5,  dpi: 300 },
-  strip: { widthIn: 2.0,  heightIn: 6.0,  dpi: 300 },
+  // One of the two strips on a DS40 1240x1844 page (see src/js/layout.mjs).
+  strip: { widthIn: 620 / 300, heightIn: 1844 / 300, dpi: 300 },
+  // A Jumbo strip: a whole DS40 4x6 page, portrait, uncut.
+  jumbo: { widthIn: 1240 / 300, heightIn: 1844 / 300, dpi: 300 },
   board: { widthIn: 24,   heightIn: 33.6, dpi: 150 },
 };
 
@@ -191,7 +194,7 @@ export function mintCard({
 export function renderCard(ctx, opts) {
   const {
     frameId, W, H, photo = null, photos = [], character = null,
-    card, foil = true, focal = { x: 0.5, y: 0.45 }, watermark = null,
+    card, foil = true, focal = { x: 0.5, y: 0.5 }, watermark = null,
     personalization = null, companion = null, stock = null,
     stickers = null, stickerImages = null,
   } = opts;
@@ -232,6 +235,9 @@ export function renderCard(ctx, opts) {
     seasonId: card?.seasonId || 'S1',
     boothName: card?.boothName || 'HOLOBOOTH',
     personal,
+    // Photo Strip Collection: strips.event from the config, and its logo image.
+    event: opts.event || null,
+    logo: opts.logo || null,
     approvalMode: !!opts.approvalMode,
     packValues: opts.packValues || null,
   };
@@ -253,7 +259,7 @@ export function renderCard(ctx, opts) {
   // only the frame/background ever carries a rarity effect.
   // Standard cards and strips stay free of foil treatments. They use the
   // energy palette and classic card stock instead of rarity effects.
-  if (foil && card?.rarity && base.packId !== 'basics' && base.packId !== 'strips') {
+  if (foil && card?.rarity && !['basics', 'strips', 'collection', 'jumbo'].includes(base.packId)) {
     applyFoil(ctx, W, H, card.rarity, card.seed, meta.artWindow);
   }
 
@@ -333,7 +339,7 @@ export function renderPropBoard(ctx, opts) {
 /** Renders a strip. photos should be the session's shots in order. */
 export function renderStrip(ctx, {
   W, H, photos, card, frame: sourceFrame = null, theme = null,
-  stickers = null, stickerImages = null,
+  personalization = null, stickers = null, stickerImages = null, event = null, logo = null,
 }) {
   const frame = sourceFrame || {
     template: 'strip',
@@ -343,16 +349,23 @@ export function renderStrip(ctx, {
       fontDisplay: 'Rajdhani, Impact, sans-serif', fontBody: 'Helvetica, Arial, sans-serif',
     },
   };
+  // Same personalisation rule as renderCard(): the strip's own header only
+  // shows a typed name once the customer has actually typed one, otherwise
+  // it falls back to the strip theme's own name — never a blank/placeholder.
+  const personal = buildPersonal(personalization || {});
   const meta = {
     ...card,
-    focal: { x: 0.5, y: 0.4 },
+    personal,
+    focal: { x: 0.5, y: 0.5 },
     dateLabel: new Date(card?.mintedAt || Date.now()).toLocaleDateString('en-US',
       { month: 'short', day: 'numeric', year: 'numeric' }),
     serial: card?.serial || '—',
     boothName: card?.boothName || 'HOLOBOOTH',
+    event,
+    logo,
   };
   ctx.clearRect(0, 0, W, H);
-  TEMPLATES.strip(ctx, { W, H, frame, photos, meta });
+  (TEMPLATES[frame.template] || TEMPLATES.strip)(ctx, { W, H, frame, photos, meta });
   if (stickers?.length && stickerImages && meta.artWindow) {
     drawStickers(ctx, stickers, meta.artWindow, stickerImages);
   }

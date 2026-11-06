@@ -3,3 +3,5 @@ out/
 dist/
 *.log
 .DS_Store
+config/booth.config.local.json
+electron/build-info.json

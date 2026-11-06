@@ -4,23 +4,83 @@
  * Owns the things a browser tab can't: kiosk window, silent printing to the
  * dye-sub, filesystem, the payment bridge, and the local media server.
  */
-const { app, BrowserWindow, ipcMain, session, shell, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, session, shell, screen, nativeImage } = require('electron');
+const { pathToFileURL } = require('node:url');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
 
 const ROOT = path.join(__dirname, '..');
 const CONFIG_PATH = path.join(ROOT, 'config', 'booth.config.json');
+const LOCAL_CONFIG_PATH = path.join(ROOT, 'config', 'booth.config.local.json');
+const { readLocal, applyLocal, stripLocal, writeLocalPatch } = require('./local-config');
 const DATA_DIR = path.join(app.getPath('userData'), 'holobooth');
 const DEV = !!process.env.HOLOBOOTH_DEV;
 
 let win = null;
-let printWin = null;
 let config = loadConfig();
+
+/**
+ * Which code is running, for the build stamp on every print and preview:
+ * the commit of this checkout (read from .git, no git needed), or for a
+ * packaged build the commit `npm run dist` wrote to electron/build-info.json.
+ * time: when the print code on disk last changed (or the build time).
+ */
+function readBuildInfo() {
+  const info = { commit: null, time: null, source: 'unknown', packaged: app.isPackaged, root: ROOT };
+  try {
+    const b = JSON.parse(fs.readFileSync(path.join(__dirname, 'build-info.json'), 'utf8'));
+    Object.assign(info, { commit: b.commit || null, time: b.time || null, source: 'build-info.json (packaged build)' });
+  } catch {}
+  if (!info.commit) {
+    try {
+      const gitDir = path.join(ROOT, '.git');
+      let head = fs.readFileSync(path.join(gitDir, 'HEAD'), 'utf8').trim();
+      if (head.startsWith('ref: ')) {
+        const ref = head.slice(5);
+        const loose = path.join(gitDir, ref);
+        head = fs.existsSync(loose)
+          ? fs.readFileSync(loose, 'utf8').trim()
+          : ((fs.readFileSync(path.join(gitDir, 'packed-refs'), 'utf8').split('\n').find(l => l.endsWith(` ${ref}`)) || '').split(' ')[0]);
+      }
+      if (/^[0-9a-f]{40}$/.test(head)) Object.assign(info, { commit: head, source: 'git checkout' });
+    } catch {}
+  }
+  if (!info.time) {
+    const files = ['src/js/app.js', 'src/js/layout.mjs', 'electron/main.js'].map(f => path.join(ROOT, f));
+    const t = Math.max(...files.map(f => { try { return fs.statSync(f).mtimeMs; } catch { return 0; } }));
+    if (t) info.time = new Date(t).toISOString();
+  }
+  return info;
+}
+const BUILD = readBuildInfo();
+console.log(`[build] commit ${BUILD.commit ? BUILD.commit.slice(0, 7) : 'unknown'} (${BUILD.source}${BUILD.packaged ? ', packaged app' : ''}) at ${BUILD.root}, print code changed ${BUILD.time}`);
+
+/**
+ * Windows camera API. Media Foundation (Chromium's default) is what the
+ * Windows Camera app uses. camera.windowsCaptureApi: "directshow" switches
+ * to the API OBS uses instead: turning the Media Foundation feature off
+ * makes Chromium fall back to its DirectShow capture code (checked present
+ * in Electron 32's Windows build). Must be set before the app is ready.
+ */
+if (process.platform === 'win32' && config.camera?.windowsCaptureApi === 'directshow') {
+  app.commandLine.appendSwitch('disable-features', 'MediaFoundationVideoCapture,MediaFoundationD3D11VideoCapture');
+}
+
+/**
+ * These cards send MJPEG, and Chromium decodes it on the graphics chip
+ * ("Hardware MFT"). On some GPUs that decoder stalls after a few seconds,
+ * freezing the preview, while the Windows Camera app, which doesn't use it,
+ * runs fine. Decoding 1080p30 MJPEG in software is cheap on any booth PC.
+ * camera.windowsHardwareMjpeg: true to use the GPU decoder again.
+ */
+if (process.platform === 'win32' && config.camera?.windowsHardwareMjpeg !== true) {
+  app.commandLine.appendSwitch('disable-accelerated-mjpeg-decode');
+}
 
 /* ------------------------------------------------------------- config */
 
-function loadConfig() {
+function readBaseConfig() {
   try {
     return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
   } catch (e) {
@@ -29,9 +89,60 @@ function loadConfig() {
   }
 }
 
+/** booth.config.json plus this booth's gitignored booth.config.local.json. */
+function loadConfig() {
+  migrateLocal();
+  const local = readLocal(LOCAL_CONFIG_PATH);
+  if (local) console.log(`[config] using booth.config.local.json${local.server?.url ? ` — server ${local.server.url}` : ''}`);
+  return testPayments(applyLocal(readBaseConfig(), local));
+}
+
+/**
+ * Printer names chosen in the operator panel used to be saved as
+ * printing.cardPrinterName / stripPrinterName; they're printer.queue4x6 /
+ * queueStrip now. Moves them once, in this PC's local file.
+ */
+function migrateLocal() {
+  const local = readLocal(LOCAL_CONFIG_PATH);
+  const p = local?.printing;
+  if (!p || !('cardPrinterName' in p || 'stripPrinterName' in p)) return;
+  local.printer = { ...(local.printer || {}) };
+  if (p.cardPrinterName && !local.printer.queue4x6) local.printer.queue4x6 = p.cardPrinterName;
+  if (p.stripPrinterName && !local.printer.queueStrip) local.printer.queueStrip = p.stripPrinterName;
+  delete p.cardPrinterName; delete p.stripPrinterName;
+  if (!Object.keys(p).length) delete local.printing;
+  fs.writeFileSync(LOCAL_CONFIG_PATH, JSON.stringify(local, null, 2));
+  console.log('[config] moved printer names to printer.queue4x6 / queueStrip in booth.config.local.json');
+}
+
+/**
+ * Test vs real payments without editing the config: npm run dev (and
+ * npm run start:test) take every sale through the mock reader, and the kiosk
+ * shows a TEST MODE badge; npm start (and npm run dev:live) use the real
+ * provider. HOLOBOOTH_PAYMENTS=mock|live overrides either way.
+ */
+function testPayments(cfg) {
+  const env = process.env.HOLOBOOTH_PAYMENTS;
+  // A free event takes no payments either way: nothing to simulate.
+  if (cfg.payments?.provider === 'free' && env !== 'mock') return cfg;
+  const mock = env ? env === 'mock' : DEV;
+  if (!mock || !cfg.payments) return cfg;
+  console.log(`[config] TEST MODE — payments are simulated (real provider: ${cfg.payments.provider})`);
+  return { ...cfg, payments: { ...cfg.payments, realProvider: cfg.payments.provider, provider: 'mock', testMode: true } };
+}
+
 function saveConfig(next) {
   config = next;
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(next, null, 2));
+  // Test mode is a launch option, not a setting: never save it.
+  next = structuredClone(next);
+  if (next.payments?.testMode) {
+    next.payments.provider = next.payments.realProvider;
+    delete next.payments.testMode;
+    delete next.payments.realProvider;
+  }
+  // Never write the local file's values (the kiosk key) into the committed config.
+  const clean = stripLocal(next, readBaseConfig(), readLocal(LOCAL_CONFIG_PATH));
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(clean, null, 2));
   return true;
 }
 
@@ -103,74 +214,233 @@ function createWindow() {
 /* ------------------------------------------------------------ printing */
 
 /**
- * Print a data-URL image at an exact physical size.
+ * DNP DS40, 300 dpi, 6x4 media. Every page arrives as the printer's native
+ * page: 1844 x 1240, 6x4 landscape, the 2-inch cut at y = 620. The kiosk
+ * builds it with toPrinterNative() (src/js/layout.mjs). On Windows it also
+ * sends the driver's portrait 4x6 frame, the native page turned once by
+ * toDriverFrame() (printer.windowsTurn), and that frame is what is printed,
+ * as a portrait job. Nothing in this file rotates a page, and the driver is
+ * never asked to.
  *
- * Dye-subs are unforgiving: the page must be the exact media size with zero
- * margins, or the driver silently scales and your 2.5x3.5 card comes out at
- * 2.42x3.39 and no longer fits a card sleeve.
+ *   kind "4x6"   → printer.queue4x6   (DS40 set to 4x6, no cut)
+ *   kind "strip" → printer.queueStrip (Windows: a second DS40 queue set to
+ *                  "2inch cut"; CUPS: same printer, PageSize w288h432-div2)
  *
- * On macOS and Linux, hand this straight to `lp` via the same code the Pi
- * build already uses (pi/print.mjs) instead of Electron's own silent-print
- * API. That's not a style choice — webContents.print({ silent: true }) has
- * a real bug on macOS where the callback reports success while the job
- * never reaches the OS print spooler at all (confirmed against a real DNP
- * DS40: non-silent printing and printing from every other app worked fine,
- * silent printing through Electron vanished every time). `lp` is the same
- * CUPS underneath either OS, so the Pi's exact-geometry PDF approach works
- * unmodified here too.
+ * Every page is saved as a PNG first (media/<date>/prints/), so the file
+ * can be compared with what came out of the printer.
  *
- * Windows has no CUPS, so it keeps the original @page-sized BrowserWindow
- * printed through Electron's API, which doesn't have this bug there.
+ * Windows: printing.windowsMethod "chromium" (default) prints the driver
+ * frame from a dedicated window holding only the image; "xps" goes through Windows'
+ * XPS path instead (winprint-xps.ps1). Linux / Raspberry Pi / macOS: `lp`,
+ * with options read from `lpoptions -p <printer> -l` (pi/print.mjs).
  */
-async function printImage({ dataUrl, widthIn, heightIn, printerName, copies = 1, silent = true }) {
-  console.log(`[print] ${process.platform} request: ${widthIn}x${heightIn}in, printer=${printerName || '(OS default)'}, copies=${copies}, silent=${silent}`);
+const NATIVE = { W: 1844, H: 1240 };
+const DRIVER = { W: 1240, H: 1844 };   // the Windows driver's portrait 4x6 frame (src/js/layout.mjs DRIVER_FRAME)
 
-  if (process.platform !== 'win32') {
-    const { printImage: printViaCups } = await import('../pi/print.mjs');
-    const result = await printViaCups({
-      dataUrl, widthIn, heightIn, printerName, copies,
-      lpOptions: config.printing?.lpOptions || [],
-      dryRun: !!config.printing?.dryRun,
-    });
-    console.log('[print] lp result:', JSON.stringify(result));
-    return result;
+function printerCfg() {
+  return { os: 'auto', queue4x6: null, queueStrip: null, finish: 'glossy', copies: 1, lpOptions: [], ...(config.printer || {}) };
+}
+
+function printOs(pc = printerCfg()) {
+  if (pc.os === 'windows' || pc.os === 'cups') return pc.os;
+  return process.platform === 'win32' ? 'windows' : 'cups';
+}
+
+function savePrintFile(dataUrl, kind, label) {
+  const now = new Date();
+  // Test prints in their own folder, so they're easy to find and compare.
+  const dir = /^test-/.test(String(label))
+    ? path.join(DATA_DIR, 'media', 'test-prints')
+    : path.join(DATA_DIR, 'media', now.toISOString().slice(0, 10), 'prints');
+  fs.mkdirSync(dir, { recursive: true });
+  const stamp = now.toTimeString().slice(0, 8).replace(/:/g, '') + String(now.getMilliseconds()).padStart(3, '0');
+  const safe = String(label || '').replace(/[^\w-]+/g, '_').slice(0, 40);
+  const file = path.join(dir, `${stamp}-${kind}${safe ? `-${safe}` : ''}.png`);
+  fs.writeFileSync(file, Buffer.from(String(dataUrl).split(',')[1] || '', 'base64'));
+  return file;
+}
+
+/**
+ * How a page is handed to the Windows driver. Electron's webContents.print
+ * always names a paper size (with no pageSize it sends A4), and the DS40
+ * driver printed custom sizes that aren't its own papers wrongly. So read
+ * the paper chosen in the queue's Printing Preferences (its exact size, as
+ * the driver defines it) and hand over the page in THAT paper's shape, at
+ * exactly that size, as a portrait job:
+ *   paper defined wide (6 x 4)  → the native sheet, as is
+ *   paper defined tall (4 x 6)  → the portrait driver frame (toDriverFrame)
+ * The driver is never asked to turn anything. Read once per queue.
+ */
+const paperCache = new Map();
+async function windowsHandoff(printerName) {
+  let p = paperCache.get(printerName);
+  if (!p) {
+    p = await require('./winprint').queuePaper(printerName).catch(e => ({ current: null, error: e.message }));
+    if (p.current) paperCache.set(printerName, p);
+  }
+  return require('./winprint').handoffFor(p.current, printerName, p.error);
+}
+
+/**
+ * The back end of the renderer's sendToPrinter() (src/js/app.js), the one
+ * function every print goes through after toPrinterNative(). Nothing else
+ * in the app prints.
+ *
+ * @param {{ dataUrl: string, kind: '4x6'|'strip', copies?: number, label?: string,
+ *           jobType?: '4x6'|'strip'|'cards' }} job
+ *   dataUrl: PNG, the native page: exactly 1844x1240.
+ *   frameUrl: Windows only, the driver frame (toDriverFrame).
+ */
+async function printImage({ dataUrl, frameUrl = null, frameTurn = null, kind = '4x6', copies = 1, label = '', jobType = null } = {}) {
+  const pc = printerCfg();
+  kind = kind === 'strip' ? 'strip' : '4x6';
+  jobType = ['4x6', 'strip', 'cards'].includes(jobType) ? jobType : kind;
+  if (config.printing?.enabled === false) return { ok: false, reason: 'Printing is turned off (printing.enabled in booth.config.json)' };
+  if (!/^data:image\/png;base64,/.test(String(dataUrl))) return { ok: false, reason: 'print: expected a PNG data URL' };
+
+  const img = nativeImage.createFromDataURL(dataUrl);
+  const { width, height } = img.getSize();
+  // Only the printer-native page (toPrinterNative in src/js/layout.mjs).
+  if (width !== NATIVE.W || height !== NATIVE.H) {
+    return { ok: false, reason: `The page is ${width}x${height} px; the printer is only sent its native ${NATIVE.W}x${NATIVE.H} page` };
+  }
+  const os = printOs(pc);
+  const queue = kind === 'strip' ? (pc.queueStrip || pc.queue4x6) : pc.queue4x6;
+
+  // Windows: the driver gets its own portrait 4x6 frame (toDriverFrame in
+  // src/js/layout.mjs), as a portrait job; it is never asked to turn a page.
+  let frame = null;
+  if (os === 'windows') {
+    if (!/^data:image\/png;base64,/.test(String(frameUrl))) return { ok: false, reason: 'print: Windows needs the driver frame (frameUrl) next to the native page' };
+    const fs2 = nativeImage.createFromDataURL(frameUrl).getSize();
+    if (fs2.width !== DRIVER.W || fs2.height !== DRIVER.H) return { ok: false, reason: `The driver frame is ${fs2.width}x${fs2.height} px; it must be ${DRIVER.W}x${DRIVER.H}` };
+    frame = { dataUrl: frameUrl, turn: frameTurn };
   }
 
-  const html = `<!doctype html><html><head><meta charset="utf-8"><style>
-    @page { size: ${widthIn}in ${heightIn}in; margin: 0; }
-    html,body { margin:0; padding:0; width:${widthIn}in; height:${heightIn}in;
-                background:#fff; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
-    img { display:block; width:${widthIn}in; height:${heightIn}in; object-fit:cover; }
-  </style></head><body><img src="${dataUrl}"></body></html>`;
 
-  if (printWin) { try { printWin.destroy(); } catch {} }
-  printWin = new BrowserWindow({ show: false });
-  await printWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+  // Saved before anything is sent, so a failed print still leaves the file.
+  const file = savePrintFile(dataUrl, kind, label);
+  const frameFile = frame ? file.replace(/\.png$/, '-driver.png') : null;
+  if (frame) fs.writeFileSync(frameFile, Buffer.from(frame.dataUrl.split(',')[1], 'base64'));
+  const n = Math.max(1, Math.min(Math.round(copies * (pc.copies || 1)), config.printing?.copiesMax || 10));
+  const notes = [];
+  if (kind === 'strip' && !pc.queueStrip && os === 'windows') {
+    notes.push('printer.queueStrip is not set: strips go to the 4x6 queue and will NOT be cut (README → Two DS40 queues)');
+  }
+  console.log(`[print] ${jobType} ${width}x${height} native x${n} → ${os} queue "${queue || '(auto)'}" — saved ${file}`);
 
-  const opts = {
-    silent,
-    printBackground: true,
-    landscape: widthIn > heightIn,
-    copies: Math.max(1, Math.min(copies, config.printing?.copiesMax || 4)),
-    margins: { marginType: 'none' },
-    pageSize: {
-      // Electron wants microns.
-      width: Math.round(widthIn * 25400),
-      height: Math.round(heightIn * 25400),
-    },
-  };
-  if (printerName) opts.deviceName = printerName;
-
-  console.log('[print] windows webContents.print options:', JSON.stringify(opts));
-
-  return new Promise(resolve => {
-    printWin.webContents.print(opts, (ok, reason) => {
-      try { printWin.destroy(); } catch {}
-      printWin = null;
-      console.log(`[print] windows result: ok=${ok}${reason ? `, reason=${reason}` : ''}`);
-      resolve({ ok, reason: reason || null });
+  if (os === 'cups') {
+    const { printImage: printViaCups, listPrinters } = await import('../pi/print.mjs');
+    // No queue configured: the photo printer by name, not the system default.
+    const auto = queue ? { name: queue } : require('./printers').choosePrinter(await listPrinters(), null);
+    if (auto.error) return { ok: false, reason: auto.error.replace(/ in Windows|Install the DNP.*$/g, ''), file };
+    const r = await printViaCups({
+      jpeg: img.toJPEG(100), kind, printerName: auto.name, copies: n,
+      finish: pc.finish, lpOptions: pc.lpOptions,
     });
-  });
+    console.log('[print] lp:', JSON.stringify(r));
+    return { ...r, file, notes: [...notes, ...(r.problems || [])], paper: `${r.command || ''}${r.options?.length ? ` (${r.options.join(', ')})` : ''}` };
+  }
+
+  // Windows: the configured queue, or else the photo printer found by name.
+  const printers = await win.webContents.getPrintersAsync().catch(() => []);
+  const choice = require('./printers').choosePrinter(printers, queue);
+  if (choice.error) {
+    console.error(`[print] ${choice.error}`);
+    return { ok: false, reason: choice.error, file };
+  }
+  console.log(`[print] printing to "${choice.name}" (${choice.why})`);
+  const wp = require('./winprint');
+  const method = config.printing?.windowsMethod === 'xps' ? 'xps' : 'chromium';
+  const h = await windowsHandoff(choice.name);
+  const sheet = h.shape === 'sheet';
+  const sendFile = sheet ? file : frameFile;
+  console.log(`[print] Windows: ${h.why} — ${sheet ? `the ${NATIVE.W}x${NATIVE.H} sheet` : `the ${DRIVER.W}x${DRIVER.H} frame (sheet turned ${frame.turn}°)`} on ${h.paper.w} x ${h.paper.h} in — ${sendFile}`);
+  const r = method === 'xps'
+    ? await wp.printXps({ file: sendFile, widthIn: h.paper.w, heightIn: h.paper.h, printer: choice.name, copies: n })
+    : await printChromium({ file: sendFile, width: sheet ? NATIVE.W : DRIVER.W, height: sheet ? NATIVE.H : DRIVER.H, deviceName: choice.name, copies: n, paper: h.paper });
+  console.log(`[print] ${method} result: ${JSON.stringify(r)}`);
+  // What happened to the job after it was handed to Windows.
+  await new Promise(res => setTimeout(res, 3000));
+  const queueState = wp.summarize(await wp.diagnose(), choice.name);
+  console.log(`[print] after print:\n${queueState}`);
+  return { ...r, file, frameFile, handoff: h, notes, paper: `method=${method} printer="${choice.name}" ${r.paper || ''}\n${h.why}${sheet ? '' : ` (frame = sheet turned ${frame.turn}°)`}\n${queueState}` };
+}
+
+/** Page sizes (inches) of the two print pages. */
+const SHEET = { w: 6, h: 4 };     // the native page, as the sheet comes out
+const FRAME = { w: 4, h: 6 };     // the Windows driver's portrait frame
+
+/**
+ * A print page: a hidden window holding only the image, at `size` inches.
+ * The image fills the page exactly; no cropping, no rotation. Used by
+ * printChromium().
+ */
+async function openPrintPage({ file, width, height, size = SHEET }) {
+  const html = `<!doctype html><html><head><meta charset="utf-8"><style>
+  @page { size: ${size.w}in ${size.h}in; margin: 0 }
+  html, body { margin: 0; padding: 0; background: #fff;
+               -webkit-print-color-adjust: exact; print-color-adjust: exact }
+  img { display: block; width: ${size.w}in; height: ${size.h}in }
+</style></head><body><img id="page" src="${pathToFileURL(file).href}"></body></html>`;
+  const htmlPath = file.replace(/\.png$/i, '.print.html');
+  fs.writeFileSync(htmlPath, html);
+  const printWin = new BrowserWindow({ show: false, webPreferences: { backgroundThrottling: false } });
+  const close = () => setTimeout(() => { try { printWin.destroy(); } catch {} fs.rm(htmlPath, { force: true }, () => {}); }, 1000);
+  try {
+    await printWin.loadFile(htmlPath);
+    // Wait for the image's load event before printing.
+    const got = await printWin.webContents.executeJavaScript(`new Promise(r => {
+      const i = document.getElementById('page');
+      const done = () => r(i.naturalWidth ? [i.naturalWidth, i.naturalHeight] : null);
+      if (i.complete) done(); else { i.onload = done; i.onerror = () => r(null); }
+    })`);
+    if (!got) { close(); return { ok: false, reason: `The print page couldn't load ${file}` }; }
+    if (got[0] !== width || got[1] !== height) { close(); return { ok: false, reason: `The print page loaded ${got[0]}x${got[1]}, expected ${width}x${height}` }; }
+    return { ok: true, win: printWin, close };
+  } catch (e) {
+    close();
+    return { ok: false, reason: `The print page failed: ${e.message}` };
+  }
+}
+
+/**
+ * Prints the driver frame silently (Windows).
+ *
+ * Chromium writes two things into the driver's DEVMODE
+ * (printing/printing_context_win.cc): dmOrientation from `landscape`, and
+ * pageSize as the paper width x length. What the DS40 driver did with each:
+ *   4x6 paper, PORTRAIT job, a portrait page   → printed the page as sent
+ *   6x4 custom paper (wider than long), portrait → printed nothing
+ *   4x6 paper, LANDSCAPE job, a 6x4 page        → turned it a quarter turn
+ *                                                into the wrong shape: the
+ *                                                picture sideways, a black third
+ * Electron always names a paper (pageSize, default A4), so the paper is the
+ * queue's own, at its exact size (windowsHandoff), and the page is the one
+ * of the same shape: the sheet or the frame. Always a portrait job; the
+ * driver turns nothing.
+ */
+async function printChromium({ file, width, height, deviceName, copies, paper = FRAME }) {
+  const page = await openPrintPage({ file, width, height, size: paper });
+  if (!page.ok) return { ok: false, reason: page.reason };
+  try {
+    const opts = {
+      silent: true,
+      printBackground: true,
+      deviceName,
+      margins: { marginType: 'none' },
+      scaleFactor: 100,
+      copies,
+      // The queue's own paper, exactly, as the driver defines it (microns).
+      pageSize: { width: Math.round(paper.w * 25400), height: Math.round(paper.h * 25400) },
+      landscape: false,                               // a portrait job: the driver turns nothing
+    };
+    console.log('[print] webContents.print', JSON.stringify(opts));
+    return await new Promise(resolve => page.win.webContents.print(opts, (success, failureReason) =>
+      resolve({ ok: success, reason: success ? null : (failureReason || 'print failed'), paper: `${paper.w} x ${paper.h} in portrait job, copies=${copies}` })));
+  } finally {
+    page.close();
+  }
 }
 
 /* ----------------------------------------------------------------- IPC */
@@ -180,10 +450,109 @@ ipcMain.handle('config:save', (_e, next) => saveConfig(next));
 ipcMain.handle('config:reload', () => (config = loadConfig()));
 
 ipcMain.handle('printers:list', async () => {
-  try { return await win.webContents.getPrintersAsync(); } catch { return []; }
+  try {
+    const pc = printerCfg();
+    const list = await win.webContents.getPrintersAsync();
+    // Mark where each kind of print goes, for the operator panel.
+    const { choosePrinter } = require('./printers');
+    const four = choosePrinter(list, pc.queue4x6 || null);
+    const strips = choosePrinter(list, pc.queueStrip || pc.queue4x6 || null);
+    return list.map(p => ({ ...p, willUse: p.name === four.name, willUseStrips: p.name === strips.name }));
+  } catch { return []; }
 });
 
 ipcMain.handle('print:image', (_e, args) => printImage(args));
+
+// The 4x6 queue's own paper sizes, for the operator panel (Windows).
+ipcMain.handle('printers:papers', async () => {
+  if (process.platform !== 'win32') return { ok: false, error: 'Windows only' };
+  const list = await win.webContents.getPrintersAsync().catch(() => []);
+  const pc = printerCfg();
+  const queues = [];
+  for (const [role, q] of [['4x6 / cards', pc.queue4x6 || null], ['strips', pc.queueStrip || pc.queue4x6 || null]]) {
+    const choice = require('./printers').choosePrinter(list, q);
+    if (choice.error) { queues.push({ role, error: choice.error }); continue; }
+    paperCache.delete(choice.name);
+    const p = await require('./winprint').queuePaper(choice.name);
+    queues.push({ role, printer: choice.name, sizes: p.sizes, current: p.current, error: p.error, handoff: await windowsHandoff(choice.name) });
+  }
+  return { ok: queues.some(q => q.current), queues };
+});
+
+// Camera roles: the matched deviceId + label, saved on this PC only
+// (deviceIds are per machine), so the next start opens the same camera.
+ipcMain.handle('cameras:remember', (_e, role, { deviceId, label } = {}) => {
+  if (!['standard', 'wide'].includes(role) || typeof deviceId !== 'string' || typeof label !== 'string') return { ok: false };
+  writeLocalPatch(LOCAL_CONFIG_PATH, { cameras: { [role]: { deviceId, deviceLabel: label } } });
+  config = loadConfig();
+  console.log(`[camera] ${role} = "${label}"`);
+  return { ok: true };
+});
+
+// Operator panel: open the folder with every session's photos (today's, if any).
+ipcMain.handle('media:openFolder', async () => {
+  const root = path.join(DATA_DIR, 'media');
+  const today = path.join(root, new Date().toISOString().slice(0, 10));
+  fs.mkdirSync(root, { recursive: true });
+  const err = await shell.openPath(fs.existsSync(today) ? today : root);
+  return { ok: !err, path: fs.existsSync(today) ? today : root, error: err || null };
+});
+
+// Operator panel "Event mode": how this booth takes payment, saved on this PC only.
+const EVENT_MODES = {
+  free: { provider: 'free' },
+  reader: { provider: 'stripe-smart-reader', offerQr: true },
+  qr: { provider: 'stripe-qr' },
+};
+ipcMain.handle('payments:mode', (_e, mode) => {
+  if (!EVENT_MODES[mode]) return { ok: false, error: `Unknown event mode ${mode}` };
+  require('./local-config').writeLocalPatch(LOCAL_CONFIG_PATH, { payments: EVENT_MODES[mode] });
+  config = loadConfig();
+  console.log(`[config] event mode → ${mode}`);
+  return { ok: true, config };
+});
+
+// "Check printer" in the operator panel: what Windows says about every
+// printer, port and queued job.
+ipcMain.handle('printers:diagnose', async () => {
+  if (process.platform !== 'win32') return { ok: false, error: 'Windows only' };
+  const { diagnose, summarize } = require('./winprint');
+  const d = await diagnose();
+  return { ok: d.ok, text: summarize(d), raw: d };
+});
+
+// Print method switch in the operator panel: this PC only.
+ipcMain.handle('printers:method', (_e, method) => {
+  if (!['chromium', 'xps'].includes(method)) return { ok: false, error: `Unknown method ${method}` };
+  writeLocalPatch(LOCAL_CONFIG_PATH, { printing: { windowsMethod: method } });
+  config = loadConfig();
+  console.log(`[print] operator chose print method "${method}"`);
+  return { ok: true, config };
+});
+
+// Windows print direction (printer.windowsTurn, 90 or 270), on the
+// diagnostics screen: flips the whole sheet half a turn.
+ipcMain.handle('printers:windowsTurn', (_e, turn) => {
+  if (![90, 270].includes(Number(turn))) return { ok: false, error: 'windowsTurn must be 90 or 270' };
+  writeLocalPatch(LOCAL_CONFIG_PATH, { printer: { windowsTurn: Number(turn) } });
+  config = loadConfig();
+  console.log(`[print] Windows print direction (printer.windowsTurn) set to ${turn}`);
+  return { ok: true, config };
+});
+
+// "4x6" / "Strips" in the operator panel's printer list: which queue each
+// kind of print goes to. Saved to this PC's booth.config.local.json, never
+// the committed config; the renderer can set only these two keys here.
+ipcMain.handle('printers:use', async (_e, name, role = 'cards') => {
+  const list = await win.webContents.getPrintersAsync().catch(() => []);
+  if (!list.some(p => p.name === name)) return { ok: false, error: `No printer named "${name}"` };
+  const printer = role === 'strips' ? { queueStrip: name } : { queue4x6: name };
+  paperCache.clear();
+  writeLocalPatch(LOCAL_CONFIG_PATH, { printer });
+  config = loadConfig();
+  console.log(`[print] operator chose "${name}" for ${role === 'strips' ? 'strips' : '4x6'}`);
+  return { ok: true, config };
+});
 
 ipcMain.handle('cards:nextMint', (_e, { seasonId, frameId }) => nextMint(seasonId, frameId));
 
@@ -223,11 +592,34 @@ ipcMain.handle('sales:summary', () => {
 ipcMain.handle('media:save', (_e, { name, dataUrl }) => {
   const dir = path.join(DATA_DIR, 'media', new Date().toISOString().slice(0, 10));
   fs.mkdirSync(dir, { recursive: true });
-  const file = path.join(dir, name);
+  const file = path.join(dir, path.basename(String(name)).replace(/[^\w.-]+/g, '_'));
   const b64 = dataUrl.split(',')[1];
   fs.writeFileSync(file, Buffer.from(b64, 'base64'));
   return file;
 });
+
+/* ------------------------------------------------------------- stills */
+
+// Real photos over USB (focus, shutter, flash) — see electron/stills.js.
+// Rebuilt whenever camera.stills changes, so a config reload takes effect.
+const { createStills } = require('./stills');
+let stills = null, stillsKey = '';
+function getStills() {
+  const cfg = config.camera?.stills || {};
+  const key = JSON.stringify(cfg);
+  if (!stills || key !== stillsKey) {
+    stills = createStills(cfg, { dir: path.join(DATA_DIR, 'stills', new Date().toISOString().slice(0, 10)) });
+    stillsKey = key;
+  }
+  return stills;
+}
+// Plain { ok, … } results: a thrown error loses its message crossing IPC.
+const stillsCall = fn => async () => {
+  try { return { ok: true, ...(await fn(getStills())) }; } catch (e) { return { ok: false, error: e.message }; }
+};
+ipcMain.handle('stills:status', stillsCall(async s => { const st = await s.status(); if (!st.ok) throw new Error(st.message); return st; }));
+ipcMain.handle('stills:liveview', stillsCall(async s => ({ jpeg: await s.liveview() })));
+ipcMain.handle('stills:capture', stillsCall(s => s.capture()));
 
 ipcMain.handle('app:info', () => ({
   version: app.getVersion(),
@@ -236,12 +628,48 @@ ipcMain.handle('app:info', () => ({
   hostname: os.hostname(),
   dataDir: DATA_DIR,
   dev: DEV,
+  build: BUILD,
+  printTarget: printOs(),
 }));
 
 ipcMain.handle('app:quit', () => app.quit());
 ipcMain.handle('app:reload', () => win?.reload());
 
+/**
+ * Which known camera-grabbing programs are running (Windows). A capture card
+ * serves one program at a time, and "camera is busy" is useless without
+ * knowing who has it. Names only — no process is touched.
+ */
+const CAMERA_HOLDERS = [
+  [/^obs(64|32)?\.exe$/i, 'OBS Studio'],
+  [/lumabooth/i, 'Lumabooth'],
+  [/^WindowsCamera\.exe$/i, 'Windows Camera app'],
+  [/^(ms-)?teams\.exe$/i, 'Microsoft Teams'],
+  [/^zoom\.exe$/i, 'Zoom'],
+  [/^discord\.exe$/i, 'Discord'],
+  [/^CameraControl\.exe$/i, 'digiCamControl'],
+  [/EOS.?Webcam/i, 'EOS Webcam Utility'],
+  [/dslrbooth/i, 'dslrBooth'],
+  [/^Skype/i, 'Skype'],
+];
+ipcMain.handle('app:cameraHolders', () => new Promise(resolve => {
+  if (process.platform !== 'win32') return resolve([]);
+  require('node:child_process').execFile('tasklist', ['/FO', 'CSV', '/NH'], { timeout: 5000 }, (err, out) => {
+    if (err) return resolve([]);
+    const names = new Set(String(out).split(/\r?\n/).map(l => l.split('","')[0].replace(/^"/, '')).filter(Boolean));
+    resolve([...new Set([...names].flatMap(n => CAMERA_HOLDERS.filter(([re]) => re.test(n)).map(([, label]) => label)))]);
+  });
+}));
+
 /* ----------------------------------------------------------- lifecycle */
+
+// One HoloBooth at a time: a second copy (an old run still open behind the
+// kiosk window, or npm run dev started twice) would fight over the camera.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
+}
 
 app.whenReady().then(() => {
   createWindow();

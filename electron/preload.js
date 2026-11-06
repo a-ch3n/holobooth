@@ -14,6 +14,15 @@ contextBridge.exposeInMainWorld('booth', {
   printers: {
     list: () => ipcRenderer.invoke('printers:list'),
     print: args => ipcRenderer.invoke('print:image', args),
+    use: (name, role) => ipcRenderer.invoke('printers:use', name, role),
+    papers: () => ipcRenderer.invoke('printers:papers'),
+    method: m => ipcRenderer.invoke('printers:method', m),
+    diagnose: () => ipcRenderer.invoke('printers:diagnose'),
+    windowsTurn: turn => ipcRenderer.invoke('printers:windowsTurn', turn),
+  },
+  // Which device is the Brio / the M50: saved on this PC after the first match.
+  cameras: {
+    remember: (role, device) => ipcRenderer.invoke('cameras:remember', role, device),
   },
   cards: {
     nextMint: args => ipcRenderer.invoke('cards:nextMint', args),
@@ -26,10 +35,21 @@ contextBridge.exposeInMainWorld('booth', {
   },
   media: {
     save: args => ipcRenderer.invoke('media:save', args),
+    openFolder: () => ipcRenderer.invoke('media:openFolder'),
+  },
+  payments: {
+    mode: m => ipcRenderer.invoke('payments:mode', m),
+  },
+  // Tethered camera (camera.stills): live view frames and full-res captures.
+  stills: {
+    status: () => ipcRenderer.invoke('stills:status'),
+    liveview: () => ipcRenderer.invoke('stills:liveview'),
+    capture: () => ipcRenderer.invoke('stills:capture'),
   },
   app: {
     info: () => ipcRenderer.invoke('app:info'),
     quit: () => ipcRenderer.invoke('app:quit'),
     reload: () => ipcRenderer.invoke('app:reload'),
+    cameraHolders: () => ipcRenderer.invoke('app:cameraHolders'),
   },
 });

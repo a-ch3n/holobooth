@@ -10,49 +10,136 @@
     "sessionTimeoutMs": 240000
   },
   "camera": {
-    "//": "HDMI capture cards present themselves as UVC webcams. Put distinctive substrings of your device label here, highest priority first. Run `Settings > Camera` in-app to see the live device list.",
-    "preferredLabels": [
-      "Cam Link",
-      "Elgato",
-      "HDMI",
-      "USB Video",
-      "UVC",
-      "Capture"
-    ],
+    "//": "Settings shared by both cameras. Which device is the Brio and which is the M50: see \"cameras\" below.",
+    "//excludeLabels": "Never used for either role, whatever its name (built-in laptop webcams).",
     "excludeLabels": [
       "FaceTime",
       "Integrated",
       "Built-in"
     ],
-    "constraints": {
+    "//windowsCaptureApi": "Windows only. mediafoundation (default): the same camera API the Windows Camera app uses. directshow: the API OBS uses; try it if a camera works in OBS but not here. Either way the capture card's MJPEG is decoded in software (see windowsHardwareMjpeg).",
+    "windowsCaptureApi": "mediafoundation",
+    "//windowsHardwareMjpeg": "Windows only. false (default): decode the capture card's MJPEG video in software. The GPU decoder froze a USB Video 3.0 card after a few seconds while the Windows Camera app ran fine.",
+    "windowsHardwareMjpeg": false,
+    "//settleMs": "After the preview fires 'playing', wait this long before a photo may be taken, so the first frame isn't black.",
+    "settleMs": 300,
+    "stills": {
+      "//": "Real photos like Lumabooth: the camera autofocuses, fires its shutter and flash, and the full-resolution JPEG is used for the print. Instead of a video frame. Windows: install digiCamControl (digicamcontrol.com), turn on File > Settings > Webserver (port 5513) and leave it running. Mac/Linux/Pi: install gphoto2. Only one program can hold the camera, so close Lumabooth, EOS Webcam Utility and Canon EOS Utility. If the camera can't be reached the booth falls back to the video feed (cameras below) so a paid session still happens. Test it from the operator screen: Take a test photo.",
+      "//enabled": "Off: the Canon M50 only allows live view over USB, not remote shooting, so it can't be tethered. Turn on with a body that supports USB remote shooting (e.g. Canon Rebel T6/T7/T7i/SL2/SL3). The M50 works as a video camera instead via EOS Webcam Utility or HDMI.",
+      "enabled": false,
+      "//backend": "auto = digicamcontrol on Windows, gphoto2 on Mac/Linux/Pi.",
+      "backend": "auto",
+      "//preview": "liveview = the camera's own live view over the same USB cable (no extra hardware). video = show a capture card's HDMI feed instead (smoother), still shooting over USB.",
+      "preview": "liveview",
+      "//angle": "With several camera angles, which one is the tethered camera. The others stay video.",
+      "angle": "standard",
+      "liveviewFps": 12,
+      "//maxDimension": "Long edge the photo is scaled to. 3000px is plenty for 300dpi cards and strips, and keeps memory sane with 24 MP originals (full-size files are kept on disk).",
+      "maxDimension": 3000,
+      "timeoutMs": 15000,
+      "digicamcontrol": {
+        "url": "http://127.0.0.1:5513"
+      },
+      "gphoto2": {
+        "bin": "gphoto2"
+      }
+    }
+  },
+  "cameras": {
+    "//": "The two cameras. Each is found by its device LABEL (labelMatch: any entry contained in the label, first entry preferred), never by its position in the device list. The matched deviceId + label are saved in config/booth.config.local.json (this PC only) and tried first next time. Not found = an on-screen error (\"Standard camera (Brio) not found\"), never a different camera. Only one camera streams at a time. Operator panel → Camera diagnostics shows every device and what each role matched.",
+    "standard": {
+      "//": "Logitech Brio over USB (UVC). The \"Standard\" button. Set its widest field of view (90°) in Logi Tune / G HUB.",
+      "label": "Standard",
+      "sub": "Eye level",
+      "icon": "📷",
+      "name": "Standard camera (Brio)",
+      "labelMatch": [
+        "Logitech BRIO",
+        "BRIO"
+      ],
+      "//deviceId": "Filled in automatically on this PC (local config). null = match by label.",
+      "deviceId": null,
+      "deviceLabel": null,
+      "//size": "Asked for as \"ideal\": the camera may give less, and the actual size is logged.",
       "width": 1920,
       "height": 1080,
-      "frameRate": 60
+      "frameRate": 30,
+      "//mirrorPreview": "Mirror the on-screen preview (selfie feel). Saved and printed photos are never mirrored.",
+      "mirrorPreview": true
     },
-    "mirrorPreview": true,
-    "cropToPortrait": true,
-    "warmupMs": 1200,
-    "angles": {
-      "//": "Optional: two (or more) physical cameras. When 2+ entries are listed here, the customer picks one on a screen shown right after paying, before the shoot starts. Each entry's preferredLabels/excludeLabels/constraints override the defaults above for that angle only — fields left out fall back to the defaults. Leave this as a single entry (or remove it) to skip the picker and keep the single-camera flow exactly as it was.",
-      "list": [
-        {
-          "id": "standard",
-          "label": "Standard",
-          "sub": "Eye level",
-          "icon": "📷",
-          "//": "The main camera, in over HDMI through the capture card.",
-          "preferredLabels": ["Capture Card", "Cam Link", "Elgato", "HDMI", "USB Video", "UVC", "Capture"]
-        },
-        {
-          "id": "high",
-          "label": "High Angle",
-          "sub": "GoPro overhead",
-          "icon": "🔝",
-          "//": "The second camera: a GoPro in USB webcam mode, so it enumerates as its own UVC device with 'GoPro' in the label — no second capture card needed.",
-          "preferredLabels": ["GoPro HERO10", "GoPro HERO 10", "HERO10", "HERO 10", "GoPro Webcam", "GoPro"]
-        }
-      ]
+    "wide": {
+      "//": "Canon M50 for the 0.5 shot: the \"High Angle\" button. Needs an ultra-wide lens for a real 0.5 look (EF-M 11-22mm at 11mm, or the 10-18mm at 10mm).",
+      "label": "High Angle",
+      "sub": "Wide overhead",
+      "icon": "🔝",
+      "name": "0.5 camera (Canon M50)",
+      "//mode": "usb = Canon EOS Webcam Utility over the M50's USB cable (Windows/macOS; quit Canon EOS Utility, they conflict). hdmi = M50 HDMI out into a USB capture card (Cam Link or a generic UVC card).",
+      "mode": "hdmi",
+      "labelMatch": {
+        "usb": [
+          "EOS Webcam Utility"
+        ],
+        "hdmi": [
+          "Cam Link",
+          "USB Video",
+          "USB3.0 Video",
+          "Capture"
+        ]
+      },
+      "deviceId": null,
+      "deviceLabel": null,
+      "//size": "EOS Webcam Utility often gives less than 1080p; whatever it returns is used and logged.",
+      "width": 1920,
+      "height": 1080,
+      "frameRate": 30,
+      "mirrorPreview": false
     }
+  },
+  "filters": {
+    "//": "Optional camera-look picker shown right before the shoot (after the camera angle picker, if any). cssFilter is a plain CSS filter() string (see developer.mozilla.org/en-US/docs/Web/CSS/filter) applied live in the preview and baked into every captured shot — not just a screen effect, it's what prints and gets delivered. vignette/grain are optional 0-1 intensities layered on top (grain needs a real photo behind it to look right; it's subtle at low values). Set enabled:false, or leave list with just one entry, to skip the picker and always shoot at 'none'.",
+    "enabled": true,
+    "default": "none",
+    "list": [
+      {
+        "id": "none",
+        "label": "Original",
+        "sub": "Straight off the sensor",
+        "icon": "📷",
+        "cssFilter": "none"
+      },
+      {
+        "id": "vintage",
+        "label": "Vintage Film",
+        "sub": "Warm, faded, a little grainy",
+        "icon": "🎞️",
+        "cssFilter": "sepia(0.35) saturate(1.3) contrast(0.92) brightness(1.05) hue-rotate(-6deg)",
+        "vignette": 0.35,
+        "grain": 0.12
+      },
+      {
+        "id": "noir",
+        "label": "Noir Film",
+        "sub": "Black & white, high-contrast grain",
+        "icon": "🎥",
+        "cssFilter": "grayscale(1) contrast(1.25) brightness(1.02)",
+        "vignette": 0.3,
+        "grain": 0.16
+      },
+      {
+        "id": "g7x",
+        "label": "Canon G7X Mk II",
+        "sub": "Punchy point-and-shoot color",
+        "icon": "📸",
+        "cssFilter": "saturate(1.35) contrast(1.12) brightness(1.03) hue-rotate(-2deg)"
+      },
+      {
+        "id": "pro",
+        "label": "Professional",
+        "sub": "Neutral, studio-flat",
+        "icon": "🎬",
+        "cssFilter": "contrast(1.08) saturate(1.05) brightness(1.02)"
+      }
+    ]
   },
   "capture": {
     "countdownSeconds": 5,
@@ -66,7 +153,7 @@
     "flashScreen": true,
     "reviewSeconds": 25,
     "allowRetake": true,
-    "maxRetakes": 1,
+    "maxRetakes": 3,
     "chooseBestShot": true
   },
   "pricing": {
@@ -77,7 +164,23 @@
         "name": "1 Pokémon Card",
         "blurb": "One printed Pokémon card + digital copy",
         "amount": 700,
-        "prints": { "card": 1, "strip": 0 },
+        "prints": {
+          "card": 1,
+          "strip": 0
+        },
+        "digital": true,
+        "gif": false,
+        "rarityBoost": 1.0
+      },
+      {
+        "id": "two_cards",
+        "name": "2 Pokémon Cards",
+        "blurb": "Two printed Pokémon cards + digital copies",
+        "amount": 1200,
+        "prints": {
+          "card": 2,
+          "strip": 0
+        },
         "digital": true,
         "gif": false,
         "rarityBoost": 1.0
@@ -87,7 +190,10 @@
         "name": "Digital Pokémon Card",
         "blurb": "Digital card delivered by QR code",
         "amount": 500,
-        "prints": { "card": 0, "strip": 0 },
+        "prints": {
+          "card": 0,
+          "strip": 0
+        },
         "digital": true,
         "gif": false,
         "rarityBoost": 1.0
@@ -97,7 +203,10 @@
         "name": "Digital Photo Strip",
         "blurb": "One digital photo strip delivered by QR code",
         "amount": 500,
-        "prints": { "card": 0, "strip": 1 },
+        "prints": {
+          "card": 0,
+          "strip": 0
+        },
         "digital": true,
         "gif": false,
         "rarityBoost": 1.0
@@ -107,7 +216,10 @@
         "name": "2 Photo Strips",
         "blurb": "Two printed photo strips with your chosen theme",
         "amount": 700,
-        "prints": { "card": 0, "strip": 2 },
+        "prints": {
+          "card": 0,
+          "strip": 2
+        },
         "digital": true,
         "gif": false,
         "rarityBoost": 1.0
@@ -117,7 +229,10 @@
         "name": "1 Pokémon Card + 1 Photo Strip",
         "blurb": "One Pokémon card and one themed photo strip",
         "amount": 1200,
-        "prints": { "card": 1, "strip": 1 },
+        "prints": {
+          "card": 1,
+          "strip": 1
+        },
         "digital": true,
         "gif": false,
         "rarityBoost": 1.0
@@ -127,7 +242,38 @@
         "name": "2 Pokémon Cards + 2 Photo Strips",
         "blurb": "Two printed Pokémon cards and two themed photo strips",
         "amount": 1800,
-        "prints": { "card": 2, "strip": 2 },
+        "prints": {
+          "card": 2,
+          "strip": 2
+        },
+        "digital": true,
+        "gif": false,
+        "rarityBoost": 1.0
+      },
+      {
+        "id": "jumbo_strip",
+        "name": "Jumbo Photo Strip",
+        "blurb": "One oversized 4×6 photo strip + digital copy",
+        "amount": 1000,
+        "prints": {
+          "card": 0,
+          "strip": 0,
+          "jumbo": 1
+        },
+        "digital": true,
+        "gif": false,
+        "rarityBoost": 1.0
+      },
+      {
+        "id": "two_jumbo_strips",
+        "name": "2 Jumbo Photo Strips",
+        "blurb": "Two oversized 4×6 photo strips + digital copies",
+        "amount": 1600,
+        "prints": {
+          "card": 0,
+          "strip": 0,
+          "jumbo": 2
+        },
         "digital": true,
         "gif": false,
         "rarityBoost": 1.0
@@ -136,6 +282,21 @@
     "tipEnabled": false,
     "taxRateBps": 0
   },
+  "strips": {
+    "//": "The Photo Strip Collection (Strip Collection and Jumbo Strips in the picker; npm run strips renders the lookbook). These fill in the designs' title, date and message for the whole event. A name the customer types wins over title. Leave a field null for each design's own default.",
+    "event": {
+      "//title": "e.g. \"Sarah & James\", \"Mia's 25th\", \"Acme Summer Party\". null = the design's own title.",
+      "title": null,
+      "//date": "YYYY-MM-DD (each design formats it its own way), or any text. null = today.",
+      "date": null,
+      "//message": "e.g. \"Thank you for celebrating with us\". null = the design's own line.",
+      "message": null,
+      "//age": "Birthday edition: the age on the badge when the customer doesn't type one.",
+      "age": null,
+      "//logo": "A PNG with transparency, path from the app folder (e.g. \"images/event-logo.png\"). Replaces the title on designs with a title slot.",
+      "logo": null
+    }
+  },
   "ai": {
     "//": "Real AI names for the 'Surprise me' button, via server/index.js (GEMINI_API_KEY — free tier, no credit card, see ai.google.dev/gemini-api/docs/pricing). Set enabled:false to always use the offline generator. If the server has no key configured, or doesn't answer within timeoutMs, the kiosk silently falls back to it anyway.",
     "enabled": true,
@@ -143,14 +304,26 @@
     "timeoutMs": 6000
   },
   "payments": {
-    "//": "provider: 'stripe-terminal' | 'stripe-qr' | 'mock'. Use 'mock' for development with no hardware.",
+    "//": "provider: 'stripe-smart-reader' | 'stripe-terminal' | 'stripe-qr' | 'mock'. Use 'mock' for development with no hardware.",
+    "//stripe-smart-reader": "Reader is a WisePOS E or S700 — has its own Wi-Fi/Ethernet, so server/index.js drives it directly over the internet. No phone, no companion app: just this PC and the reader. Register it once with `npm run reader:register` (see README > Payments), which gives you the reader id to put in reader.id below.",
     "//stripe-terminal": "Reader is an M2, which is Bluetooth-only — the kiosk can't drive it directly. A phone running the companion app (companion-app/) pairs with the M2 and does the actual collecting; the kiosk only creates the sale and polls for it to be paid. See server/index.js's /sessions and /booths/:boothId/pending, and companion-app/README.md for pairing the phone. Set COMPANION_APP_KEY on the server and give the same value to the phone app so random devices can't poll your booth's payments.",
-    "provider": "stripe-terminal",
-    "serverUrl": "http://192.168.1.11:4242",
+    "//testing": "npm run dev always uses mock payments (TEST MODE badge on screen), whatever provider says. npm start uses provider below. npm run dev:live = dev window with real payments; npm run start:test = full-screen kiosk with mock payments (rehearsal).",
+    "//free": "provider 'free' = a free event (the host paid for the booth): no pay screen, products show freeLabel instead of a price. Switch modes from the operator panel → Event mode; see docs/EVENT-GUIDE.md.",
+    "freeLabel": "Free",
+    "provider": "stripe-smart-reader",
+    "//offerQr": "true: the pay screen shows the card reader AND a QR code at the same time. The customer taps the WisePOS E or scans and pays on their phone; the first payment wins, the other is cancelled, and a payment that lands at the same instant is refunded automatically.",
+    "offerQr": true,
+    "//serverUrl": "127.0.0.1 when the server runs on this same PC (smart reader, QR). The M2's phone needs the PC's LAN IP instead, e.g. http://192.168.1.11:4242.",
+    "serverUrl": "http://127.0.0.1:4242",
     "stripe": {
       "publishableKey": "pk_live_51UC0PHGZUT57A45HuaGS9jqtRee5v0TtKo9FDVVpqca7qVkBpRDEFEka9llzsNmsbxchERupMKPVuQcpoolVCo5o00evnae4cG",
       "locationId": "tml_Gqwbw5yrW85LOz",
-      "simulated": false
+      "//simulated": "stripe-smart-reader + a test key (sk_test_...): the server creates a simulated reader by itself at boot, no registration needed. Press T on the pay screen to tap a card, D to decline. Set false for the real reader and a live key.",
+      "simulated": true
+    },
+    "reader": {
+      "//": "stripe-smart-reader only. The tmr_... id `npm run reader:register` prints. STRIPE_READER_ID on the server overrides this.",
+      "id": null
     },
     "qr": {
       "checkoutBaseUrl": "https://pay.yourbooth.com/c",
@@ -163,43 +336,40 @@
       "print": false
     }
   },
+  "printer": {
+    "//": "DNP DS40, 300 dpi, 6x4 media. Every page goes to the printer as its native page, 1844x1240 (6x4 landscape, 2-inch cut at y = 620), and is saved as a PNG before printing (media/<date>/prints/).",
+    "//os": "auto = Windows printing on Windows, CUPS (lp) on Linux / Raspberry Pi / macOS. Or force \"windows\" or \"cups\".",
+    "os": "auto",
+    "//buildStamp": "true: every print and preview carries a small grey stamp, bottom right inside the 20 px margin: the code version (git commit), the job type and its rotation, so you can tell which code made it.",
+    "buildStamp": true,
+    "//queue4x6": "Printer name for 4x6 pages (cards). Windows: the DS40 entry set to 4x6 with NO cut. null = the photo printer found by name. Also settable in the operator panel (Printers → 4x6).",
+    "queue4x6": null,
+    "//queueStrip": "Printer name for strip pages. Windows: a SECOND entry for the same DS40, set to \"2inch cut\" in its Printing Preferences (README → Two DS40 queues). CUPS: null = same printer as queue4x6; strips are sent with the driver's cut paper size (Gutenprint: PageSize=w288h432-div2).",
+    "queueStrip": null,
+    "//finish": "glossy or matte. CUPS: matched to the driver's overcoat option (Gutenprint: StpLaminate=Glossy|Matte). Windows: set Glossy/Matte in each queue's Printing Preferences (Chromium can't pass it).",
+    "finish": "glossy",
+    "//copies": "Copies of every page on top of what the order needs: 1 = just the order.",
+    "copies": 1,
+    "//rotation": "Every print reaches the printer as its native page: 6x4 LANDSCAPE, 1844x1240 px, the 2-inch cut a horizontal line at y = 620. portrait4x6: how a portrait 4x6 page (a Jumbo strip, 1240x1844) is turned to fit it. strip: how each 620x1844 strip is turned to 1844x620 (one copy above the cut, one below). 90 or 270, clockwise. If those prints come out upside down, change that value to 270. Trading cards are never turned: two upright cards per sheet, cut by hand, on the uncut 4x6 queue.",
+    "rotation": {
+      "portrait4x6": 90,
+      "strip": 90
+    },
+    "//windowsTurn": "Windows only. Before printing, the app reads the paper chosen in the DS40 queue's Printing Preferences and sends a portrait job on exactly that paper: the 6x4 sheet as is if the driver defines the paper wide, or the sheet turned once into the paper's portrait frame if it defines it tall. This is that turn: 90 or 270, clockwise. Both keep the cut between the strips and differ only by a half turn of the whole sheet. Flip it on the Camera diagnostics screen, which also shows the paper the app read.",
+    "windowsTurn": 270,
+    "//lpOptions": "CUPS only: extra -o options added after the detected ones, e.g. [\"StpColorCorrection=Accurate\"]. `lpoptions -p <printer> -l` lists them.",
+    "lpOptions": []
+  },
   "printing": {
     "enabled": true,
-    "//": "Leave printerName null to use the OS default. dpi should match your dye-sub (DNP/Citizen = 300, Canon SELPHY = 300).",
-    "cardPrinterName": null,
-    "stripPrinterName": null,
+    "//": "Which printer, finish and copies: see \"printer\" above. dpi is the render resolution of cards and strips (DS40 = 300).",
     "dpi": 300,
-    "card": {
-      "widthIn": 2.5,
-      "heightIn": 3.5,
-      "bleedIn": 0.06
-    },
-    "strip": {
-      "widthIn": 2.0,
-      "heightIn": 6.0,
-      "bleedIn": 0.06
-    },
-    "//sheet": "Most dye-subs print 4x6. 'sheet' gangs card prints onto a 4x6 so you cut/perforate after.",
-    "sheet": {
-      "enabled": true,
-      "widthIn": 6.0,
-      "heightIn": 4.0,
-      "cutMarks": true
-    },
-    "//stripSheet": "A 2x6 strip can't be sent as its own page on a 4x6-only printer either — two copies side by side exactly fill a 4x6 sheet, which is also the layout DNP calls '2x6 (4x6 divided)' media: the driver's own cutter splits it into two strips. Set enabled:false only if your printer takes true 2x6 media directly.",
-    "stripSheet": {
-      "enabled": true,
-      "widthIn": 4.0,
-      "heightIn": 6.0,
-      "cutMarks": true
-    },
-    "silent": true,
-    "copiesMax": 4,
-    "lpOptions": [],
-    "dryRun": false,
-    "//lpOptions": "Extra CUPS -o flags for your driver, e.g. [\"StpQuality=Photo\", \"ColorModel=RGB\"]. Run `lpoptions -p NAME -l` to see what your printer accepts.",
+    "//windowsMethod": "Windows only. chromium (default): a hidden print window holding only the page image, printed silently on a 6 in x 4 in page (the native page, image filling it), no margins, scale 100. xps: Windows' XPS print path (what Ctrl+P photo printing uses), starting from the queue's Printing Preferences. Test by hand: powershell -STA -ExecutionPolicy Bypass -File .\\electron\\winprint-xps.ps1 -Printer \"DS40\". Switchable in the operator panel (Print method).",
+    "windowsMethod": "chromium",
+    "//copiesMax": "Upper limit on copies of one page in one job.",
+    "copiesMax": 10,
     "board": {
-      "//": "Oversized photo-prop board. Not printed by the booth \u2014 exported as a PDF you send to a print shop or run on a wide-format printer.",
+      "//": "Oversized photo-prop board. Not printed by the booth — exported as a PDF you send to a print shop or run on a wide-format printer.",
       "enabled": true,
       "widthIn": 24,
       "heightIn": 33.6,
@@ -209,6 +379,8 @@
   },
   "delivery": {
     "uploadEnabled": true,
+    "//saveLocal": "Also keep every session's card, strip, photos and GIF on this PC (operator panel → Open photos folder).",
+    "saveLocal": true,
     "uploadUrl": "http://127.0.0.1:4242/media",
     "downloadBaseUrl": "http://127.0.0.1:4242/d",
     "qrOnScreenSeconds": 40,
@@ -223,7 +395,7 @@
   "collection": {
     "enabled": true,
     "seasonId": "PPB-2026",
-    "seasonName": "Pocket Creatures \u2014 Base Set",
+    "seasonName": "Pocket Creatures — Base Set",
     "dexUrl": "http://127.0.0.1:4242/dex",
     "identifyBy": "phone",
     "printCollectorIdOnCard": true
@@ -245,7 +417,7 @@
     "dataDir": "/var/lib/holobooth",
     "gpio": {
       "enabled": true,
-      "//": "BCM pin numbers. Wire each button between the pin and GND \u2014 internal pull-ups are used, so no resistors.",
+      "//": "BCM pin numbers. Wire each button between the pin and GND — internal pull-ups are used, so no resistors.",
       "start": 17,
       "shutter": 27,
       "cancel": 22,
@@ -278,9 +450,11 @@
     "defaultScale": 0.26
   },
   "picker": {
-    "//": "Which style groups appear in the picker, and in what order. Remove or reorder freely; anything not listed still exists but is hidden. Group ids: strips, party, cutie, promo, basics, max, fullart, secret, and assetpack:<pack-id>.",
+    "//": "Which style groups appear in the picker, and in what order. Remove or reorder freely; anything not listed still exists but is hidden. Group ids: strips, collection (the Photo Strip Collection), jumbo (Jumbo strips), party, cutie, promo, basics, max, fullart, secret, and assetpack:<pack-id>.",
     "show": [
       "strips",
+      "collection",
+      "jumbo",
       "promo",
       "basics",
       "max",
