@@ -8,19 +8,25 @@
 # the booth PC is packed away.
 #
 #   ssh root@YOUR.SERVER.IP
-#   curl -fsSL https://raw.githubusercontent.com/a-ch3n/holobooth/main/deploy/setup-vps.sh -o setup-vps.sh
-#   sudo bash setup-vps.sh                          # https://<ip-with-dashes>.sslip.io
-#   sudo DOMAIN=photos.example.com bash setup-vps.sh # your own domain (A record → this IP first)
+#   curl -fsSL https://raw.githubusercontent.com/a-ch3n/holobooth/BRANCH/deploy/setup-vps.sh -o setup-vps.sh
+#   sudo BRANCH=BRANCH bash setup-vps.sh                          # https://<ip-with-dashes>.sslip.io
+#   sudo BRANCH=BRANCH DOMAIN=photos.example.com bash setup-vps.sh # your own domain (A record → this IP first)
 #
-# Optional: BRANCH=some-branch (default main), STRIPE_SECRET_KEY=sk_... (else
-# it asks). Safe to run again — that's how you update: it pulls the latest
-# code, reinstalls and restarts, and keeps the existing keys and photos.
+# BRANCH: the branch the booth PC runs, so the server has the same prices
+# (default: the branch already installed, else main). Optional:
+# STRIPE_SECRET_KEY=sk_... (else it asks; not needed for free events).
+# Safe to run again — that's how you update: it pulls the latest code on the
+# same branch, reinstalls and restarts, and keeps the existing keys and photos.
 #
 set -euo pipefail
 
 REPO="${REPO:-https://github.com/a-ch3n/holobooth.git}"
-BRANCH="${BRANCH:-main}"
 APP_DIR=/opt/holobooth
+# An update stays on the branch that's installed unless BRANCH says otherwise.
+if [ -z "${BRANCH:-}" ] && [ -d "$APP_DIR/.git" ]; then
+  BRANCH="$(git -C "$APP_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+fi
+BRANCH="${BRANCH:-main}"
 DATA_DIR=/var/lib/holobooth
 ENV_FILE=/etc/holobooth.env
 PORT=4242
@@ -88,8 +94,9 @@ PUBLIC_URL="https://$DOMAIN"
 if [ ! -f "$ENV_FILE" ]; then
   say "Keys"
   if [ -z "${STRIPE_SECRET_KEY:-}" ] && [ -t 0 ]; then
-    echo "Stripe secret key (sk_test_... to test with the simulated reader, sk_live_... for the event)."
-    read -rsp "Paste it (input hidden), or press Enter to add it later: " STRIPE_SECRET_KEY; echo
+    echo "Stripe secret key, for payments (sk_test_... to test, sk_live_... for real money)."
+    echo "Free events only need the digital copies: just press Enter."
+    read -rsp "Paste it (input hidden), or press Enter to skip: " STRIPE_SECRET_KEY; echo
   fi
   umask 077
   cat > "$ENV_FILE" <<EOF
@@ -172,19 +179,18 @@ else
 fi
 
 KEY="$(sed -n 's/^KIOSK_KEY=//p' "$ENV_FILE")"
-grep -q '^STRIPE_SECRET_KEY=.\+' "$ENV_FILE" || echo -e "\n!! No Stripe key yet: edit $ENV_FILE, then systemctl restart holobooth"
+grep -q '^STRIPE_SECRET_KEY=.\+' "$ENV_FILE" || echo -e "\nNo Stripe key: digital copies work; payments need one. To add it later: nano $ENV_FILE, then systemctl restart holobooth"
 cat <<EOF
 
-Done. On the booth PC, create config/booth.config.local.json with exactly:
+Done. On the booth PC, in the holobooth folder, run this one line:
 
-{
-  "server": {
-    "url": "$PUBLIC_URL",
-    "kioskKey": "$KEY"
-  }
-}
+  npm run connect-server -- $PUBLIC_URL $KEY
 
-Then restart the kiosk (npm run dev). It no longer needs \`npm run server\`.
-Update later: sudo BRANCH=$BRANCH bash setup-vps.sh
+It checks the server and the key, then adds them to the booth PC's
+config/booth.config.local.json, keeping the printer, camera and event
+settings already in it. Then restart the booth (close it, npm start).
+The booth PC no longer needs \`npm run server\`.
+
+Update later: sudo bash setup-vps.sh   (stays on $BRANCH)
 Logs:         journalctl -u holobooth -f
 EOF

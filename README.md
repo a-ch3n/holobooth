@@ -647,28 +647,37 @@ whenever you change a price.
 
 ### Cloud server (download links that work on any phone)
 
-Run locally, the download QR points at `127.0.0.1`, which is the customer's
-own phone, so it can't work. It also dies when the booth PC is packed away.
+Run locally, the download QR points at the booth PC, which only phones on
+the same Wi-Fi can reach, and it dies when the booth PC is packed away.
 Put `server/index.js` on a ~$5/month VPS instead (DigitalOcean, Hetzner,
 Vultr, Lightsail: Ubuntu 24.04, 1 GB RAM). One script sets up Node, HTTPS
-(Caddy + Let's Encrypt), a systemd service and the keys:
+(Caddy + Let's Encrypt), a systemd service and the keys. Use the branch
+the booth PC runs (`git branch --show-current` on the booth PC), so the
+server has the same prices:
 
 ```bash
 ssh root@YOUR.SERVER.IP
-curl -fsSL https://raw.githubusercontent.com/a-ch3n/holobooth/main/deploy/setup-vps.sh -o setup-vps.sh
-sudo bash setup-vps.sh
+B=claude/serene-pascal-e0365q    # the booth PC's branch
+curl -fsSL https://raw.githubusercontent.com/a-ch3n/holobooth/$B/deploy/setup-vps.sh -o setup-vps.sh
+sudo BRANCH=$B bash setup-vps.sh
 ```
 
 With no domain it uses `https://<ip-with-dashes>.sslip.io`. With a domain,
-point an A record at the server and run `sudo DOMAIN=photos.example.com bash
-setup-vps.sh`. It asks for the Stripe secret key, which is stored in
+point an A record at the server and add `DOMAIN=photos.example.com` before
+`bash`. It asks for the Stripe secret key (press Enter to skip it for free
+events: the digital copies don't need it), which is stored in
 `/etc/holobooth.env` on the server and nowhere else. At the end it prints
-two lines for the booth PC. Put them in **`config/booth.config.local.json`**,
-which is gitignored:
+one line to run on the booth PC, in the holobooth folder:
 
-```json
-{ "server": { "url": "https://203-0-113-5.sslip.io", "kioskKey": "…" } }
+```powershell
+npm run connect-server -- https://203-0-113-5.sslip.io <kiosk key>
 ```
+
+It checks the server answers and accepts the key, then adds
+`{ "server": { "url": …, "kioskKey": … } }` to the booth PC's gitignored
+`config/booth.config.local.json`, keeping the printer, camera and event
+settings already in it. Restart the booth afterwards.
+`npm run connect-server -- off` goes back to the server on the booth PC.
 
 `server.url` points payments, AI names and photo uploads at the VPS, so the
 booth PC no longer runs `npm run server` at all. With a smart reader, the
@@ -689,8 +698,9 @@ reader and the kiosk both just need internet.
   then `systemctl restart holobooth`.
 - **Webhooks** are optional. Without `STRIPE_WEBHOOK_SECRET` the server
   checks every webhook against Stripe before believing it.
-- **Update:** re-run `sudo bash setup-vps.sh`. It pulls, reinstalls and
-  restarts, and keeps the keys and photos. Logs: `journalctl -u holobooth -f`.
+- **Update:** re-run `sudo bash setup-vps.sh`. It pulls the same branch,
+  reinstalls and restarts, and keeps the keys and photos. Do it whenever the
+  booth PC gets new prices. Logs: `journalctl -u holobooth -f`.
 - **Trade-off:** the upload now crosses the venue's internet before the
   download QR appears. On weak Wi-Fi, that's a few seconds on the reveal
   screen.

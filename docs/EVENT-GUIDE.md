@@ -104,7 +104,7 @@ deleted automatically.
 
 | Setup | Works for | How |
 |---|---|---|
-| **Cloud server** (recommended) | **Every guest**, on Wi-Fi or mobile data, and the links keep working after you pack up | A ~$6/month server. One-time setup: see **README → Cloud server**. Then the booth PC needs only `config/booth.config.local.json` with the server's address and key. |
+| **Cloud server** (recommended) | **Every guest**, on Wi-Fi or mobile data, and the links keep working after you pack up | A ~$6/month server. One-time setup: see **README → Cloud server**. Then on the booth PC, `npm run connect-server -- <address> <key>` (the setup prints the exact line). |
 | **Booth PC only** | Guests on the **same Wi-Fi** as the booth PC, while the booth is running | Run `npm run server` in a second window. The QR points at the PC's Wi-Fi address. Many venue Wi-Fis block this, and it stops working when the PC is off. |
 | **Print only** | Events where nobody needs a digital copy | Set `"uploadEnabled": false` under `delivery` in the config. No QR is shown. |
 

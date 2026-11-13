@@ -10,6 +10,7 @@
     "dev": "cross-env HOLOBOOTH_DEV=1 electron .",
     "dev:live": "cross-env HOLOBOOTH_DEV=1 HOLOBOOTH_PAYMENTS=live electron .",
     "server": "node server/index.js",
+    "connect-server": "node tools/connect-server.mjs",
     "stripe:sync": "node tools/stripe-sync-catalog.mjs",
     "reader:register": "node tools/register-reader.mjs",
     "render": "node tools/render-all.mjs",
