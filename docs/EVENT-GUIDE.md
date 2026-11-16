@@ -170,7 +170,8 @@ Packages and prices live in `config/booth.config.json` under
 Every package includes the digital download.
 
 **After changing a price:** if you use the cloud server, update it too.
-SSH in and re-run `sudo BRANCH=claude/serene-pascal-e0365q bash setup-vps.sh`.
+Push the change to GitHub (`main`), then SSH in and re-run
+`sudo bash setup-vps.sh`.
 The server sets the price the reader charges, and it refuses a sale whose
 price doesn't match the booth screen. Optionally run `npm run stripe:sync`
 so Stripe's receipts and reports show the new prices.
