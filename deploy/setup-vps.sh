@@ -8,13 +8,14 @@
 # the booth PC is packed away.
 #
 #   ssh root@YOUR.SERVER.IP
-#   curl -fsSL https://raw.githubusercontent.com/a-ch3n/holobooth/BRANCH/deploy/setup-vps.sh -o setup-vps.sh
-#   sudo BRANCH=BRANCH bash setup-vps.sh                          # https://<ip-with-dashes>.sslip.io
-#   sudo BRANCH=BRANCH DOMAIN=photos.example.com bash setup-vps.sh # your own domain (A record → this IP first)
+#   curl -fsSL https://raw.githubusercontent.com/a-ch3n/holobooth/main/deploy/setup-vps.sh -o setup-vps.sh
+#   sudo bash setup-vps.sh                          # https://<ip-with-dashes>.sslip.io
+#   sudo DOMAIN=photos.example.com bash setup-vps.sh # your own domain (A record → this IP first)
 #
-# BRANCH: the branch the booth PC runs, so the server has the same prices
-# (default: the branch already installed, else main). Optional:
-# STRIPE_SECRET_KEY=sk_... (else it asks; not needed for free events).
+# Installs main, like the booth PC. BRANCH=some-branch if the booth PC runs
+# another one, so the server has the same prices (default: the branch
+# already installed, else main). Optional: STRIPE_SECRET_KEY=sk_... (else it
+# asks; not needed for free events).
 # Safe to run again — that's how you update: it pulls the latest code on the
 # same branch, reinstalls and restarts, and keeps the existing keys and photos.
 #

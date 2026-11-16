@@ -651,16 +651,17 @@ Run locally, the download QR points at the booth PC, which only phones on
 the same Wi-Fi can reach, and it dies when the booth PC is packed away.
 Put `server/index.js` on a ~$5/month VPS instead (DigitalOcean, Hetzner,
 Vultr, Lightsail: Ubuntu 24.04, 1 GB RAM). One script sets up Node, HTTPS
-(Caddy + Let's Encrypt), a systemd service and the keys. Use the branch
-the booth PC runs (`git branch --show-current` on the booth PC), so the
-server has the same prices:
+(Caddy + Let's Encrypt), a systemd service and the keys. It installs
+`main`, the same code as the booth PC, so both have the same prices:
 
 ```bash
 ssh root@YOUR.SERVER.IP
-B=claude/serene-pascal-e0365q    # the booth PC's branch
-curl -fsSL https://raw.githubusercontent.com/a-ch3n/holobooth/$B/deploy/setup-vps.sh -o setup-vps.sh
-sudo BRANCH=$B bash setup-vps.sh
+curl -fsSL https://raw.githubusercontent.com/a-ch3n/holobooth/main/deploy/setup-vps.sh -o setup-vps.sh
+sudo bash setup-vps.sh
 ```
+
+(If the booth PC runs a different branch, `git branch --show-current` on
+it, install that one instead: `sudo BRANCH=that-branch bash setup-vps.sh`.)
 
 With no domain it uses `https://<ip-with-dashes>.sslip.io`. With a domain,
 point an A record at the server and add `DOMAIN=photos.example.com` before
