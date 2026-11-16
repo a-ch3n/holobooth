@@ -37,6 +37,8 @@ createServer(async (req, res) => {
   // Contain every request inside the project root.
   const file = join(ROOT, normalize(p).replace(/^(\.\.[/\\])+/, ''));
   if (!file.startsWith(ROOT)) { res.writeHead(403).end('forbidden'); return; }
+  // Holds the cloud server's kiosk key — never hand it to a browser.
+  if (file.endsWith('booth.config.local.json')) { res.writeHead(403).end('forbidden'); return; }
 
   try {
     const s = await stat(file);

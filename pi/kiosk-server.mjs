@@ -24,13 +24,20 @@ import { join, extname, normalize, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hostname, arch, platform as osPlatform, loadavg, totalmem, freemem } from 'node:os';
 import { printImage, listPrinters } from './print.mjs';
+import { createRequire } from 'node:module';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CONFIG_PATH = join(ROOT, 'config', 'booth.config.json');
+const LOCAL_CONFIG_PATH = join(ROOT, 'config', 'booth.config.local.json');
+const { readLocal, applyLocal, stripLocal, writeLocalPatch } = createRequire(import.meta.url)('../electron/local-config.js');
+const { choosePrinter } = createRequire(import.meta.url)('../electron/printers.js');
+const readBase = () => JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
+const { createStills } = createRequire(import.meta.url)('../electron/stills.js');
+const loadConfig = () => applyLocal(readBase(), readLocal(LOCAL_CONFIG_PATH));
 const PORT = Number(process.env.PORT || 4180);
 const DATA_DIR = process.env.HOLOBOOTH_DATA || join(ROOT, 'data');
 
-let config = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
+let config = loadConfig();
 await mkdir(DATA_DIR, { recursive: true });
 
 /* ============================================================== ledgers */
@@ -55,25 +62,69 @@ function readLedger(name) {
   } catch { return []; }
 }
 
+/* ============================================================== stills */
+
+let stills = null, stillsKey = '';
+async function stillsCall(fn) {
+  try {
+    const cfg = config.camera?.stills || {};
+    if (!stills || JSON.stringify(cfg) !== stillsKey) {
+      stills = createStills(cfg, { dir: join(DATA_DIR, 'stills', new Date().toISOString().slice(0, 10)) });
+      stillsKey = JSON.stringify(cfg);
+    }
+    return { ok: true, ...(await fn(stills)) };
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+
 /* ================================================================= RPC */
 
 const METHODS = {
   'config.get': () => config,
   'config.save': async next => {
     config = next;
-    await writeFile(CONFIG_PATH, JSON.stringify(next, null, 2));
+    await writeFile(CONFIG_PATH, JSON.stringify(stripLocal(next, readBase(), readLocal(LOCAL_CONFIG_PATH)), null, 2));
     return true;
   },
-  'config.reload': () => (config = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'))),
+  'config.reload': () => (config = loadConfig()),
 
   'printers.list': () => listPrinters(),
-  'printers.print': args => {
+  // Same job shape as Electron (electron/main.js printImage), the back end
+  // of the kiosk's sendToPrinter(): the DS40's native 1844x1240 PNG, saved
+  // to disk before it's sent.
+  'printers.print': async ({ dataUrl, kind = '4x6', copies = 1, label = '' } = {}) => {
     if (config.printing?.enabled === false) return { ok: false, reason: 'Printing is disabled in booth.config.json' };
-    return printImage({
-      ...args,
-      lpOptions: config.printing?.lpOptions || [],
-      dryRun: !!config.printing?.dryRun,
+    const pc = { queue4x6: null, queueStrip: null, finish: 'glossy', copies: 1, lpOptions: [], ...(config.printer || {}) };
+    kind = kind === 'strip' ? 'strip' : '4x6';
+    const png = Buffer.from(String(dataUrl).split(',')[1] || '', 'base64');
+    const sharp = (await import('sharp')).default;
+    const { width, height } = await sharp(png).metadata();
+    // Only the printer-native page (toPrinterNative in src/js/layout.mjs).
+    if (width !== 1844 || height !== 1240) {
+      return { ok: false, reason: `The page is ${width}x${height} px; the printer is only sent its native 1844x1240 page` };
+    }
+    const now = new Date();
+    const dir = join(DATA_DIR, 'media', now.toISOString().slice(0, 10), 'prints');
+    await mkdir(dir, { recursive: true });
+    const file = join(dir, `${now.toTimeString().slice(0, 8).replace(/:/g, '')}${String(now.getMilliseconds()).padStart(3, '0')}-${kind}${label ? `-${String(label).replace(/[^\w-]+/g, '_').slice(0, 40)}` : ''}.png`);
+    await writeFile(file, png);
+    const queue = kind === 'strip' ? (pc.queueStrip || pc.queue4x6) : pc.queue4x6;
+    const auto = queue ? { name: queue } : choosePrinter(await listPrinters(), null);
+    if (auto.error) return { ok: false, reason: auto.error, file };
+    const jpeg = await sharp(png).flatten({ background: '#ffffff' }).jpeg({ quality: 100, chromaSubsampling: '4:4:4' }).toBuffer();
+    const r = await printImage({
+      jpeg, kind, printerName: auto.name,
+      copies: Math.max(1, Math.min(Math.round(copies * (pc.copies || 1)), config.printing?.copiesMax || 10)),
+      finish: pc.finish, lpOptions: pc.lpOptions,
     });
+    console.log('[print]', JSON.stringify(r));
+    return { ...r, file, notes: r.problems || [], paper: `${r.command || ''}${r.options?.length ? ` (${r.options.join(', ')})` : ''}` };
+  },
+
+  'cameras.remember': async ({ role, deviceId, label } = {}) => {
+    if (!['standard', 'wide'].includes(role) || typeof deviceId !== 'string' || typeof label !== 'string') return { ok: false };
+    writeLocalPatch(LOCAL_CONFIG_PATH, { cameras: { [role]: { deviceId, deviceLabel: label } } });
+    config = loadConfig();
+    return { ok: true };
   },
 
   'cards.nextMint': ({ seasonId, frameId }) =>
@@ -101,6 +152,11 @@ const METHODS = {
       byProduct: rows.reduce((m, r) => ((m[r.productId] = (m[r.productId] || 0) + 1), m), {}),
     };
   },
+
+  // Tethered camera (camera.stills) — gphoto2 on the Pi. Same { ok, … } shape as Electron.
+  'stills.status': () => stillsCall(async st => { const r = await st.status(); if (!r.ok) throw new Error(r.message); return r; }),
+  'stills.liveview': () => stillsCall(async st => ({ jpeg: await st.liveview() })),
+  'stills.capture': () => stillsCall(st => st.capture()),
 
   'media.save': async ({ name, dataUrl }) => {
     const dir = join(DATA_DIR, 'media', new Date().toISOString().slice(0, 10));
@@ -224,6 +280,8 @@ createServer(async (req, res) => {
     let p = path === '/' ? '/src/index.html' : path;
     const file = join(ROOT, normalize(p).replace(/^(\.\.[/\\])+/, ''));
     if (!file.startsWith(ROOT)) { res.writeHead(403).end('forbidden'); return; }
+    // Holds the cloud server's kiosk key — never hand it to a browser.
+    if (file.endsWith('booth.config.local.json')) { res.writeHead(403).end('forbidden'); return; }
     const s = await stat(file);
     if (s.isDirectory()) { res.writeHead(404).end('not found'); return; }
     res.writeHead(200, {
@@ -241,7 +299,7 @@ createServer(async (req, res) => {
   console.log(`  model    ${piModel()}`);
   console.log(`  ui       http://localhost:${PORT}/src/index.html`);
   console.log(`  data     ${DATA_DIR}`);
-  console.log(`  printing ${config.printing?.enabled === false ? 'disabled' : (config.printing?.dryRun ? 'DRY RUN' : 'enabled')}\n`);
+  console.log(`  printing ${config.printing?.enabled === false ? 'disabled' : 'enabled'}\n`);
 });
 
 process.on('SIGTERM', () => process.exit(0));

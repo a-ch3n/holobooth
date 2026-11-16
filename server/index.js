@@ -22,10 +22,33 @@ const cors = require('cors');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 const QRCode = require('qrcode');
 
-const CONFIG = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'config', 'booth.config.json'), 'utf8'));
+// booth.config.local.json (gitignored) lets a cloud server go live — reader
+// id, simulated: false — without committing any of it to the public repo.
+const { readLocal, applyLocal } = require('../electron/local-config');
+const CONFIG = applyLocal(
+  JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'config', 'booth.config.json'), 'utf8')),
+  readLocal(path.join(__dirname, '..', 'config', 'booth.config.local.json')),
+);
 const PORT = Number(process.env.PORT || 4242);
+// On the VPS: 127.0.0.1, so only Caddy (TLS) reaches it. Locally: all
+// interfaces, because the M2's phone connects over the LAN.
+const HOST = process.env.HOST || '0.0.0.0';
+/** e.g. https://203-0-113-5.sslip.io — set when this runs somewhere public. Download links are built from it. */
+const PUBLIC_URL = (process.env.PUBLIC_URL || '').replace(/\/+$/, '') || null;
+/**
+ * Shared secret the kiosk sends as x-kiosk-key. Everything that creates,
+ * cancels or refunds a sale, uploads files or spends API quota needs it.
+ * Optional for local dev; required (see the boot check) once PUBLIC_URL is
+ * set, because an open /terminal/refund on the internet is not an option.
+ */
+const KIOSK_KEY = process.env.KIOSK_KEY || null;
+if (PUBLIC_URL && !KIOSK_KEY) {
+  console.error('PUBLIC_URL is set but KIOSK_KEY is not — refusing to start with open payment and upload endpoints.');
+  process.exit(1);
+}
 const MEDIA_DIR = process.env.MEDIA_DIR || path.join(__dirname, '..', 'out', 'media');
 const RETENTION_DAYS = CONFIG.delivery?.retentionDays || 30;
 const PRODUCTS_BY_ID = new Map((CONFIG.pricing?.products || []).map(p => [p.id, p]));
@@ -37,6 +60,47 @@ const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || null;
 /** Shared secret the companion phone app sends on every request. Per-booth
  *  in a real multi-booth deployment; one value is enough to start. */
 const APP_KEY = process.env.COMPANION_APP_KEY || null;
+
+/**
+ * Smart reader mode (WisePOS E / S700): the reader has its own internet
+ * connection, so this server drives it directly — no phone, no companion
+ * app. Registered once with `npm run reader:register`; the env var wins over
+ * the config so a second booth can share one config file.
+ */
+const SMART_READER = CONFIG.payments?.provider === 'stripe-smart-reader';
+const SIMULATED = SMART_READER && !!CONFIG.payments?.stripe?.simulated;
+// `let`: in simulated mode ensureSimulatedReader() fills this in at boot.
+let READER_ID = process.env.STRIPE_READER_ID || CONFIG.payments?.reader?.id || null;
+
+/**
+ * payments.stripe.simulated + a test key: find or create a simulated
+ * WisePOS E at boot, so testing needs no registration step at all. Test and
+ * live mode don't share objects, so a live Location id from the config
+ * doesn't exist here — fall back to a dedicated test Location instead.
+ */
+async function ensureSimulatedReader() {
+  if (!SIMULATED || !stripe || READER_ID) return;
+  if (!process.env.STRIPE_SECRET_KEY.startsWith('sk_test_')) {
+    throw new Error('payments.stripe.simulated is on, but STRIPE_SECRET_KEY is a live key — simulated readers only exist in test mode.');
+  }
+  let location = CONFIG.payments?.stripe?.locationId || null;
+  if (location) {
+    try { await stripe.terminal.locations.retrieve(location); } catch { location = null; }
+  }
+  if (!location) {
+    const TEST_LOCATION = 'HoloBooth (test)';
+    const { data } = await stripe.terminal.locations.list({ limit: 100 });
+    location = data.find(l => l.display_name === TEST_LOCATION)?.id || (await stripe.terminal.locations.create({
+      display_name: TEST_LOCATION,
+      address: { line1: '1 Test Street', city: 'San Francisco', state: 'CA', postal_code: '94103', country: 'US' },
+    })).id;
+  }
+  const { data: readers } = await stripe.terminal.readers.list({ location, device_type: 'simulated_wisepos_e', limit: 1 });
+  const reader = readers[0] || await stripe.terminal.readers.create({
+    registration_code: 'simulated-wpe', label: 'HoloBooth simulated reader', location,
+  });
+  READER_ID = reader.id;
+}
 
 /**
  * M2 reader sessions. The phone (not this server) drives the reader over
@@ -68,6 +132,14 @@ function requireProduct(req, res) {
     res.status(400).json({ error: `Unknown productId: ${req.body?.productId}` });
     return null;
   }
+  // The kiosk and a cloud server each read their own copy of the config. If a
+  // price was changed on one and not the other, stop before the reader shows
+  // the customer a different number than the screen did.
+  const shown = req.body?.expectedAmount;
+  if (shown != null && Number(shown) !== product.amount) {
+    res.status(409).json({ error: `Price mismatch: the kiosk shows ${shown} but the server charges ${product.amount} for ${product.id} — update config/booth.config.json on the server.` });
+    return null;
+  }
   return product;
 }
 
@@ -83,7 +155,7 @@ app.use(cors());
  * Stripe webhooks need the raw request body to verify the signature, so this
  * has to be mounted before the app-wide express.json() below swallows it.
  */
-app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), (req, res) => {
+app.post('/webhooks/stripe', express.raw({ type: 'application/json', limit: '1mb' }), async (req, res) => {
   if (!stripe) return res.status(503).end();
   let event;
   try {
@@ -95,12 +167,22 @@ app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), (req, re
     return res.status(400).send(`Webhook Error: ${e.message}`);
   }
 
-  const pi = event.data?.object;
-  const boothSession = pi && terminalSessions.get(pi.id);
+  let pi = event.data?.object;
+  const boothSession = pi?.id && terminalSessions.get(pi.id);
+  if (boothSession && !STRIPE_WEBHOOK_SECRET) {
+    // Unsigned, so anyone who can reach this URL could post "succeeded" for
+    // a pending sale and get a free print. Believe Stripe, not the body.
+    try { pi = await stripe.paymentIntents.retrieve(pi.id, { expand: ['latest_charge'] }); } catch { return res.status(400).end(); }
+    const real = { succeeded: 'payment_intent.succeeded', canceled: 'payment_intent.canceled' }[pi.status];
+    if (event.type !== real && !(event.type === 'payment_intent.payment_failed' && pi.status === 'requires_payment_method' && pi.last_payment_error)) {
+      return res.json({ received: true, ignored: 'does not match Stripe' });
+    }
+  }
   if (boothSession) {
     if (event.type === 'payment_intent.succeeded') {
       boothSession.status = 'paid';
-      const card = pi.charges?.data?.[0]?.payment_method_details?.card_present;
+      const charge = pi.charges?.data?.[0] || (typeof pi.latest_charge === 'object' ? pi.latest_charge : null);
+      const card = charge?.payment_method_details?.card_present;
       if (card) { boothSession.brand = card.brand; boothSession.last4 = card.last4; }
       if (pendingByBooth.get(boothSession.boothId) === pi.id) pendingByBooth.delete(boothSession.boothId);
     } else if (event.type === 'payment_intent.payment_failed' || event.type === 'payment_intent.canceled') {
@@ -112,7 +194,11 @@ app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), (req, re
   res.json({ received: true });
 });
 
-app.use(express.json({ limit: '40mb' }));
+// 40 MB is for the kiosk's photo upload only, and only after its key checks
+// out (see POST /media) — nobody else gets to make this server parse that much.
+const jsonMedia = express.json({ limit: '40mb' });
+const jsonSmall = express.json({ limit: '1mb' });
+app.use((req, res, next) => (req.path === '/media' ? next() : jsonSmall(req, res, next)));
 
 /* =============================================================== health */
 
@@ -122,6 +208,7 @@ app.get('/health', (_req, res) => res.json({
   stripeCatalogSynced: Object.keys(STRIPE_CATALOG).length,
   ai: !!GEMINI_API_KEY,
   provider: CONFIG.payments?.provider,
+  reader: SMART_READER ? READER_ID : undefined,
   season: CONFIG.collection?.seasonId,
   uptime: process.uptime(),
 }));
@@ -135,7 +222,7 @@ app.get('/health', (_req, res) => res.json({
  * this only makes the result more varied when a key is configured and the
  * venue's connection answers in time. Never required for the booth to work.
  */
-app.post('/ai/name', async (req, res) => {
+app.post('/ai/name', requireKioskKey, async (req, res) => {
   if (!GEMINI_API_KEY) {
     return res.status(503).json({ error: 'GEMINI_API_KEY is not set on the server.' });
   }
@@ -197,6 +284,17 @@ function requireStripe(res) {
   return true;
 }
 
+/** The kiosk sends this on every call it makes; see KIOSK_KEY. */
+function requireKioskKey(req, res, next) {
+  if (!KIOSK_KEY) return next();
+  const given = Buffer.from(String(req.get('x-kiosk-key') || ''));
+  const want = Buffer.from(KIOSK_KEY);
+  if (given.length !== want.length || !crypto.timingSafeEqual(given, want)) {
+    return res.status(401).json({ error: 'bad or missing x-kiosk-key' });
+  }
+  next();
+}
+
 /** The companion app sends this on every call; keeps randoms from polling client secrets off your booth. */
 function requireAppKey(req, res, next) {
   if (!APP_KEY) return next(); // no key configured — fine for local dev, set COMPANION_APP_KEY for a real event
@@ -214,29 +312,48 @@ app.post('/terminal/connection_token', requireAppKey, async (_req, res) => {
 });
 
 /** HoloBooth creates the sale here — a productId and a boothId, never an amount. */
-app.post('/sessions', async (req, res) => {
+app.post('/sessions', requireKioskKey, async (req, res) => {
   if (!requireStripe(res)) return;
   const product = requireProduct(req, res);
   if (!product) return;
   const { boothId, metadata = {} } = req.body;
   if (!boothId) return res.status(400).json({ error: 'boothId is required' });
+  if (SMART_READER && !READER_ID) {
+    return res.status(503).json({ error: 'No smart reader registered — run `npm run reader:register` and set payments.reader.id.' });
+  }
   const currency = CONFIG.booth?.currency || 'usd';
+  let pi;
   try {
-    const pi = await stripe.paymentIntents.create({
+    pi = await stripe.paymentIntents.create({
       amount: product.amount,
       currency,
       description: `${product.name} — HoloBooth`,
       metadata: { productId: product.id, boothId, ...metadata },
       payment_method_types: ['card_present'],
-      capture_method: 'manual', // capture only once the phone confirms the tap succeeded
+      // M2: capture only once the phone confirms the tap. A smart reader has
+      // no phone step in between, so let Stripe capture the moment it's approved.
+      capture_method: SMART_READER ? 'automatic' : 'manual',
     });
     terminalSessions.set(pi.id, {
       boothId, productId: product.id, amount: product.amount, currency,
       status: 'pending', createdAt: Date.now(),
     });
     pendingByBooth.set(boothId, pi.id);
+
+    // Puts the amount on the reader's own screen and waits for a tap there.
+    if (SMART_READER) await stripe.terminal.readers.processPaymentIntent(READER_ID, { payment_intent: pi.id });
+
     res.json({ sessionId: pi.id, amount: product.amount });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    // Reader offline or busy with a previous sale: don't leave an orphaned
+    // PaymentIntent sitting in pendingByBooth for the next customer.
+    if (pi) {
+      stripe.paymentIntents.cancel(pi.id).catch(() => {});
+      terminalSessions.delete(pi.id);
+      if (pendingByBooth.get(boothId) === pi.id) pendingByBooth.delete(boothId);
+    }
+    res.status(500).json({ error: e.message });
+  }
 });
 
 /** The companion app polls this to find the sale it should collect on the M2. */
@@ -256,19 +373,31 @@ app.get('/booths/:boothId/pending', requireAppKey, async (req, res) => {
 });
 
 /** HoloBooth polls this — same shape as the QR flow's session poll — until status flips to "paid". */
-app.get('/sessions/:id', async (req, res) => {
+app.get('/sessions/:id', requireKioskKey, async (req, res) => {
   if (!requireStripe(res)) return;
   const cached = terminalSessions.get(req.params.id);
   try {
     const pi = await stripe.paymentIntents.retrieve(req.params.id);
     const card = pi.charges?.data?.[0]?.payment_method_details?.card_present;
+    let status = cached?.status === 'paid' || pi.status === 'succeeded' ? 'paid'
+      : cached?.status === 'failed' || pi.status === 'canceled' ? 'failed'
+      : 'pending';
+    let error = cached?.error || pi.last_payment_error?.message || null;
+
+    // A decline on a smart reader leaves the PaymentIntent reusable
+    // (requires_payment_method), not failed — the reader's action is what
+    // actually reports it, so this works with or without webhooks set up.
+    if (SMART_READER && status === 'pending') {
+      const reader = await stripe.terminal.readers.retrieve(READER_ID);
+      const action = reader.action;
+      if (action?.process_payment_intent?.payment_intent === pi.id && action.status === 'failed') {
+        status = 'failed';
+        error = action.failure_message || 'Card declined';
+      }
+    }
+
     res.json({
-      id: pi.id,
-      status: cached?.status === 'paid' || pi.status === 'succeeded' ? 'paid'
-        : cached?.status === 'failed' || pi.status === 'canceled' ? 'failed'
-        : 'pending',
-      amount: pi.amount,
-      error: cached?.error || pi.last_payment_error?.message || null,
+      id: pi.id, status, amount: pi.amount, error,
       brand: cached?.brand || card?.brand || null,
       last4: cached?.last4 || card?.last4 || null,
     });
@@ -297,12 +426,39 @@ app.post('/sessions/:id/capture', requireAppKey, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+/**
+ * Takes an abandoned sale off the smart reader's screen — only if the reader
+ * is still showing *that* sale. A late cancel (or the stale sweep below)
+ * must never wipe the next customer's amount mid-tap. No-op in M2 mode.
+ */
+async function clearReader(piId) {
+  if (!SMART_READER || !READER_ID) return;
+  try {
+    const reader = await stripe.terminal.readers.retrieve(READER_ID);
+    if (reader.action?.process_payment_intent?.payment_intent !== piId) return;
+    await stripe.terminal.readers.cancelAction(READER_ID);
+  } catch { /* already idle, or reader offline — nothing to clear */ }
+}
+
 /** Customer walked away, or HoloBooth timed out waiting — free up the booth for the next one. */
-app.post('/sessions/:id/cancel', async (req, res) => {
+app.post('/sessions/:id/cancel', requireKioskKey, async (req, res) => {
   if (!requireStripe(res)) return;
   const session = terminalSessions.get(req.params.id);
   try {
-    await stripe.paymentIntents.cancel(req.params.id).catch(() => {}); // already captured/canceled is fine
+    await clearReader(req.params.id);
+    const canceled = await stripe.paymentIntents.cancel(req.params.id).catch(() => null);
+    // Cancel loses the race against a card that was just approved: then the
+    // sale went through and must be reported as paid, not as cancelled.
+    const pi = canceled || await stripe.paymentIntents.retrieve(req.params.id, { expand: ['latest_charge'] }).catch(() => null);
+    if (pi?.status === 'succeeded') {
+      if (session) {
+        session.status = 'paid';
+        const card = pi.latest_charge?.payment_method_details?.card_present;
+        if (card) { session.brand = card.brand; session.last4 = card.last4; }
+        if (pendingByBooth.get(session.boothId) === req.params.id) pendingByBooth.delete(session.boothId);
+      }
+      return res.json({ ok: true, paid: true, brand: session?.brand || null, last4: session?.last4 || null });
+    }
     if (session) {
       session.status = 'failed';
       session.error = 'cancelled';
@@ -317,6 +473,7 @@ setInterval(() => {
   const cutoff = Date.now() - STALE_SESSION_MS;
   for (const [id, session] of terminalSessions) {
     if (session.status === 'pending' && session.createdAt < cutoff) {
+      if (stripe) clearReader(id);
       stripe?.paymentIntents.cancel(id).catch(() => {});
       session.status = 'failed';
       session.error = 'timed out';
@@ -326,7 +483,7 @@ setInterval(() => {
 }, 30000).unref();
 
 /** Refund the last sale — the operator panel's "print jammed, give it back" button. */
-app.post('/terminal/refund', async (req, res) => {
+app.post('/terminal/refund', requireKioskKey, async (req, res) => {
   if (!requireStripe(res)) return;
   try {
     const refund = await stripe.refunds.create({ payment_intent: req.body.paymentIntentId });
@@ -334,11 +491,31 @@ app.post('/terminal/refund', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+/**
+ * Test mode only: "tap" a card on a simulated smart reader (one registered
+ * with registration code `simulated-wpe`), so the whole kiosk flow can be
+ * run before the hardware arrives. Pass { card: '4000000000000002' } to
+ * simulate a decline instead. Refuses outright with a live key.
+ */
+app.post('/terminal/simulate-tap', requireKioskKey, async (req, res) => {
+  if (!requireStripe(res)) return;
+  if (!process.env.STRIPE_SECRET_KEY.startsWith('sk_test_')) {
+    return res.status(403).json({ error: 'simulate-tap only works with a test-mode key.' });
+  }
+  if (!READER_ID) return res.status(400).json({ error: 'No reader id configured.' });
+  try {
+    const cardNumber = req.body?.card;
+    const reader = await stripe.testHelpers.terminal.readers.presentPaymentMethod(
+      READER_ID, cardNumber ? { card_present: { number: cardNumber } } : {});
+    res.json({ action: reader.action?.status || null });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 /* ================================================== qr checkout (phone) */
 
 const sessions = new Map();
 
-app.post('/checkout/session', async (req, res) => {
+app.post('/checkout/session', requireKioskKey, async (req, res) => {
   if (!requireStripe(res)) return;
   const product = requireProduct(req, res);
   if (!product) return;
@@ -361,19 +538,36 @@ app.post('/checkout/session', async (req, res) => {
             quantity: 1,
           }],
       metadata: { productId: product.id, ...meta },
-      success_url: `${req.protocol}://${req.get('host')}/checkout/done`,
-      cancel_url: `${req.protocol}://${req.get('host')}/checkout/done`,
+      // The customer's phone lands here after paying, so it has to be a
+      // public address when there is one (a local 127.0.0.1 page won't load
+      // on their phone — the payment still completes either way).
+      success_url: `${PUBLIC_URL || `${req.protocol}://${req.get('host')}`}/checkout/done`,
+      cancel_url: `${PUBLIC_URL || `${req.protocol}://${req.get('host')}`}/checkout/done`,
     });
     sessions.set(s.id, { paid: false, createdAt: Date.now() });
     res.json({ sessionId: s.id, url: s.url });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.get('/checkout/session/:id', async (req, res) => {
+app.get('/checkout/session/:id', requireKioskKey, async (req, res) => {
   if (!requireStripe(res)) return;
   try {
     const s = await stripe.checkout.sessions.retrieve(req.params.id);
-    res.json({ paid: s.payment_status === 'paid', expired: s.status === 'expired' });
+    res.json({ paid: s.payment_status === 'paid', expired: s.status === 'expired', paymentIntentId: s.payment_intent || null });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+/**
+ * Kills a QR checkout link (customer paid on the reader instead, or walked
+ * away) so it can't be paid afterwards. If it was paid in the meantime, the
+ * expire fails and this says so — the kiosk then refunds the duplicate.
+ */
+app.post('/checkout/session/:id/expire', requireKioskKey, async (req, res) => {
+  if (!requireStripe(res)) return;
+  await stripe.checkout.sessions.expire(req.params.id).catch(() => {});
+  try {
+    const s = await stripe.checkout.sessions.retrieve(req.params.id);
+    res.json({ paid: s.payment_status === 'paid', expired: s.status === 'expired', paymentIntentId: s.payment_intent || null });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -382,16 +576,32 @@ app.get('/checkout/done', (_req, res) =>
 
 /* ================================================================ media */
 
+/**
+ * The download link's id is the only thing standing between a stranger and
+ * someone's photos (often kids, at a party booth), so it's 128 random bits
+ * — not guessable by scanning. Older 8-character ids still resolve. Anything
+ * else is rejected before it gets near a filesystem path: an id is spliced
+ * into one, and `../` in it would otherwise read files outside MEDIA_DIR.
+ */
+const MEDIA_ID = /^[a-f0-9]{8,32}$/;
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
+
+function readMeta(id) {
+  if (!MEDIA_ID.test(id)) return null;
+  try { return JSON.parse(fs.readFileSync(path.join(MEDIA_DIR, id, 'meta.json'), 'utf8')); } catch { return null; }
+}
+
 /** Kiosk uploads the finished card / strip / GIF and gets back a short link. */
-app.post('/media', (req, res) => {
+app.post('/media', requireKioskKey, jsonMedia, (req, res) => {
   const { files = [], collectorId = null, card = null } = req.body;
-  const id = crypto.randomBytes(4).toString('hex');
+  const id = crypto.randomBytes(16).toString('hex');
   const dir = path.join(MEDIA_DIR, id);
   fs.mkdirSync(dir, { recursive: true });
 
   const saved = [];
   for (const f of files) {
     const safe = String(f.name).replace(/[^a-z0-9._-]/gi, '_');
+    if (safe === 'meta.json' || safe.startsWith('.')) continue;
     const b64 = String(f.dataUrl).split(',')[1] || '';
     fs.writeFileSync(path.join(dir, safe), Buffer.from(b64, 'base64'));
     saved.push(safe);
@@ -399,14 +609,38 @@ app.post('/media', (req, res) => {
   fs.writeFileSync(path.join(dir, 'meta.json'),
     JSON.stringify({ id, collectorId, card, files: saved, at: new Date().toISOString() }, null, 2));
 
-  const base = CONFIG.delivery?.downloadBaseUrl || `${req.protocol}://${req.get('host')}/d`;
-  res.json({ id, url: `${base}/${id}`, files: saved });
+  res.json({ id, url: `${downloadBase(req)}/${id}`, files: saved });
 });
 
+/**
+ * Where a customer's phone can fetch their photos. The cloud server's public
+ * URL when there is one. Otherwise never 127.0.0.1 — on a phone that means
+ * the phone itself — but this PC's Wi-Fi/LAN address, which works for phones
+ * on the same network as the booth.
+ */
+const isLoopback = u => /\/\/(127\.|localhost\b|\[::1\])/i.test(u || '');
+function lanAddress() {
+  const virtual = /vEthernet|WSL|Hyper-V|VirtualBox|VMware|docker|Loopback|utun|tailscale|zerotier/i;
+  const found = [];
+  for (const [name, list] of Object.entries(os.networkInterfaces())) {
+    if (virtual.test(name)) continue;
+    for (const a of list || []) if ((a.family === 'IPv4' || a.family === 4) && !a.internal) found.push(a.address);
+  }
+  return found.find(a => a.startsWith('192.168.')) || found.find(a => a.startsWith('10.'))
+    || found.find(a => /^172\.(1[6-9]|2\d|3[01])\./.test(a)) || found[0] || null;
+}
+function downloadBase(req) {
+  if (PUBLIC_URL) return `${PUBLIC_URL}/d`;
+  const configured = CONFIG.delivery?.downloadBaseUrl;
+  if (configured && !isLoopback(configured)) return configured.replace(/\/+$/, '');
+  const lan = lanAddress();
+  return lan ? `http://${lan}:${PORT}/d` : `${req.protocol}://${req.get('host')}/d`;
+}
+
+
 app.get('/d/:id', (req, res) => {
-  const dir = path.join(MEDIA_DIR, req.params.id);
-  if (!fs.existsSync(dir)) return res.status(404).send('This link has expired.');
-  const meta = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8'));
+  const meta = readMeta(req.params.id);
+  if (!meta) return res.status(404).send('This link has expired.');
   const items = meta.files.map(f =>
     `<a class="tile" href="/d/${meta.id}/${f}" download>
        ${/\.(png|jpg|gif)$/i.test(f) ? `<img src="/d/${meta.id}/${f}" alt="">` : ''}
@@ -425,14 +659,16 @@ app.get('/d/:id', (req, res) => {
   </style>
   <h1>Your pull is ready</h1>
   <p>Tap any image to save it. Links expire after ${RETENTION_DAYS} days.</p>
-  ${meta.card ? `<div class="card">${meta.card.rarityLabel} · <b>${meta.card.serial}</b><br>${meta.card.seasonId}</div>` : ''}
+  ${meta.card ? `<div class="card">${esc(meta.card.rarityLabel)} · <b>${esc(meta.card.serial)}</b><br>${esc(meta.card.seasonId)}</div>` : ''}
   <div class="grid">${items}</div>`);
 });
 
 app.get('/d/:id/:file', (req, res) => {
-  const f = path.join(MEDIA_DIR, req.params.id, path.basename(req.params.file));
-  if (!fs.existsSync(f)) return res.sendStatus(404);
-  res.sendFile(f);
+  const meta = readMeta(req.params.id);
+  // Only files the kiosk actually uploaded — never meta.json, which holds
+  // collector ids, and never anything a crafted name might point at.
+  if (!meta || !meta.files.includes(req.params.file)) return res.sendStatus(404);
+  res.sendFile(path.join(MEDIA_DIR, req.params.id, req.params.file));
 });
 
 app.get('/qr', async (req, res) => {
@@ -445,7 +681,7 @@ app.get('/qr', async (req, res) => {
 /* ================================================================== dex */
 
 /** "Collect them all" — what this collector has pulled this season. */
-app.get('/dex', (req, res) => {
+app.get('/dex', requireKioskKey, (req, res) => {
   const who = req.query.id;
   const rows = [];
   for (const id of fs.readdirSync(MEDIA_DIR)) {
@@ -469,9 +705,16 @@ setInterval(() => {
   }
 }, 6 * 3600e3).unref();
 
-app.listen(PORT, () => {
-  console.log(`HoloBooth server on http://127.0.0.1:${PORT}`);
-  console.log(`  stripe:  ${stripe ? 'configured' : 'NOT configured (set STRIPE_SECRET_KEY)'}`);
-  console.log(`  catalog: ${Object.keys(STRIPE_CATALOG).length ? `${Object.keys(STRIPE_CATALOG).length} products synced` : 'not synced — run `npm run stripe:sync`'}`);
-  console.log(`  media:   ${MEDIA_DIR}`);
-});
+ensureSimulatedReader()
+  .catch(e => console.error(`  reader:  simulated setup failed — ${e.message}`))
+  .finally(() => app.listen(PORT, HOST, () => {
+    console.log(`HoloBooth server on http://127.0.0.1:${PORT}${HOST === '127.0.0.1' ? ' (local only — behind Caddy)' : ''}`);
+    console.log(`  public:  ${PUBLIC_URL || `none — download QR codes use http://${lanAddress() || '127.0.0.1'}:${PORT} (phones on this Wi-Fi only)`}`);
+    console.log(`  kiosk:   ${KIOSK_KEY ? 'x-kiosk-key required' : 'open (no KIOSK_KEY set)'}`);
+    console.log(`  stripe:  ${stripe ? 'configured' : 'NOT configured (set STRIPE_SECRET_KEY)'}`);
+    if (SMART_READER) {
+      console.log(`  reader:  ${READER_ID ? `${READER_ID}${SIMULATED ? ' (simulated — press T/D on the pay screen)' : ''}` : 'NOT registered — run `npm run reader:register`'}`);
+    }
+    console.log(`  catalog: ${Object.keys(STRIPE_CATALOG).length ? `${Object.keys(STRIPE_CATALOG).length} products synced` : 'not synced — run `npm run stripe:sync`'}`);
+    console.log(`  media:   ${MEDIA_DIR}`);
+  }));

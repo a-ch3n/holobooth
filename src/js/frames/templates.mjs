@@ -9,6 +9,7 @@
  * thumbnail and a 750x1050 300dpi print master.
  */
 
+import { styledStrip } from './strips.mjs';
 import {
   roundRect, notchRect, scallopRect, heartPath, confetti,
   linGrad, radGrad, shade, alpha, bevel, inset,
@@ -1138,7 +1139,11 @@ export function strip(ctx, o) {
 
   const ink = dark ? '#ffffff' : e.ink;
   const pad = W * 0.070;
-  const headerH = c.name === false ? 0 : H * 0.052;
+  // No fallback to a preset name — the header only exists at all once the
+  // customer has actually typed one, so an un-personalised strip prints
+  // clean instead of carrying the theme's own name. content.name:false still
+  // forces it off even when a name was typed, for a frame that wants none.
+  const headerH = (c.name === false || !p.provided) ? 0 : H * 0.052;
   const footerH = H * 0.098;
   const gap = W * 0.040;
   const cellW = W - pad * 2;
@@ -1149,8 +1154,7 @@ export function strip(ctx, o) {
     ctx.save();
     ctx.fillStyle = alpha(ink, 0.95);
     ctx.textAlign = 'center';
-    fitText(ctx, p.provided ? p.name : (c.header || frame.name),
-      W / 2, pad * 0.55 + headerH * 0.62, cellW * 0.92, headerH * 0.62, 800, t.fontDisplay, 'center');
+    fitText(ctx, p.name, W / 2, pad * 0.55 + headerH * 0.62, cellW * 0.92, headerH * 0.62, 800, t.fontDisplay, 'center');
     ctx.restore();
   }
 
@@ -1159,6 +1163,8 @@ export function strip(ctx, o) {
   const colY = pad * 0.7 + headerH;
   const colH = n * cellH + (n - 1) * gap;
   meta.artWindow = { x: pad, y: colY, w: cellW, h: colH, r: W * 0.012 };
+  // One photo's window: what the capture screen's crop guide shows.
+  meta.cell = { w: cellW, h: cellH };
 
   for (let i = 0; i < n; i++) {
     const y = colY + i * (cellH + gap);
@@ -1184,6 +1190,21 @@ export function strip(ctx, o) {
   fitText(ctx, `${meta.dateLabel}  ·  ${meta.serial}`,
     W / 2, fy + footerH * 0.72, cellW * 0.92, W * 0.036, 600, t.fontBody, 'center');
   ctx.restore();
+
+  // Everything that mustn't be cut off, for the safe-area check
+  // (test/layout.test.mjs): the photos and each line of text.
+  const textBox = (cy, w, h) => ({ x: W / 2 - w / 2, y: cy - h / 2, w, h });
+  meta.contentRects = [
+    { ...meta.artWindow },
+    ...(headerH ? [textBox(pad * 0.55 + headerH * 0.62, cellW * 0.92, headerH * 0.62)] : []),
+    textBox(fy + footerH * 0.40, cellW * 0.86, W * 0.082),
+    textBox(fy + footerH * 0.72, cellW * 0.92, W * 0.036),
+  ];
 }
 
-export const TEMPLATES = { creature, creatureMax, creatureFullArt, party, kawaii, assetPack, strip };
+// A strip frame with a style is one of the Photo Strip Collection designs (strips.mjs).
+export const TEMPLATES = {
+  creature, creatureMax, creatureFullArt, party, kawaii, assetPack,
+  strip: (ctx, args) => (args.frame.style ? styledStrip(ctx, args) : strip(ctx, args)),
+  jumbo: styledStrip,
+};

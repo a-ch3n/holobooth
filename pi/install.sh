@@ -68,7 +68,7 @@ usermod -aG lpadmin "$RUN_USER" || true
 systemctl enable --now cups
 if lpstat -e >/dev/null 2>&1 && [[ -n "$(lpstat -e 2>/dev/null)" ]]; then
   echo "  printers found: $(lpstat -e | tr '\n' ' ')"
-  echo "  set printing.cardPrinterName in config/booth.config.json to one of these"
+  echo "  set printer.queue4x6 in config/booth.config.json to one of these"
 else
   warn "No printer configured yet. Plug in the dye-sub and run:  lpadmin -p CARD -E -v usb://... -m gutenprint..."
   echo "  or open the CUPS web UI at http://$(hostname -I | awk '{print $1}'):631"
@@ -135,8 +135,8 @@ cat <<EOF
   Data            $DATA_DIR   (cards.jsonl, sales.jsonl — back these up)
 
   Next:
-    1. Set printing.cardPrinterName in $APP_DIR/config/booth.config.json
-    2. Add part of your capture card's name to camera.preferredLabels
+    1. Set printer.queue4x6 in $APP_DIR/config/booth.config.json
+    2. Check cameras.standard / cameras.wide labelMatch contain part of each camera's name
     3. Reboot, or: systemctl start holobooth-chromium
 
 EOF

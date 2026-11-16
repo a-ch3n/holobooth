@@ -1,0 +1,6 @@
+{
+  "server": {
+    "url": "https://203-0-113-5.sslip.io",
+    "kioskKey": "paste the KIOSK_KEY that deploy/setup-vps.sh printed"
+  }
+}
