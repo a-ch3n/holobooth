@@ -32,6 +32,20 @@ DATA_DIR=/var/lib/holobooth
 ENV_FILE=/etc/holobooth.env
 PORT=4242
 
+# This runs ON the rented server, never on the booth PC or your own Mac/PC.
+if [ "$(uname -s)" != Linux ] || [ ! -f /etc/os-release ] || ! command -v apt-get >/dev/null; then
+  cat <<'MSG'
+This script sets up the rented server (Ubuntu 24.04). It looks like you ran it
+on your own computer instead, so it stopped without changing anything.
+
+  1. Rent an Ubuntu 24.04 server (DigitalOcean, Hetzner, Vultr, Lightsail).
+  2. On this computer:   ssh root@YOUR.SERVER.IP
+  3. Then, on the server (the prompt changes to root@...):
+       curl -fsSL https://raw.githubusercontent.com/a-ch3n/holobooth/main/deploy/setup-vps.sh -o setup-vps.sh
+       sudo bash setup-vps.sh
+MSG
+  exit 1
+fi
 [ "$(id -u)" -eq 0 ] || { echo "Run as root: sudo bash $0"; exit 1; }
 . /etc/os-release
 [ "${ID:-}" = ubuntu ] || echo "warning: written for Ubuntu 24.04, this is ${PRETTY_NAME:-unknown} — continuing"
